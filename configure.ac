@@ -16,7 +16,7 @@
 #
 m4_define([bind_VERSION_MAJOR], 9)dnl
 m4_define([bind_VERSION_MINOR], 19)dnl
-m4_define([bind_VERSION_PATCH], 13)dnl
+m4_define([bind_VERSION_PATCH], 14)dnl
 m4_define([bind_VERSION_EXTRA], -dev)dnl
 m4_define([bind_DESCRIPTION], [(Development Release)])dnl
 m4_define([bind_SRCID], [m4_esyscmd_s([git rev-parse --short HEAD | cut -b1-7])])dnl
@@ -200,6 +200,43 @@ AS_IF([test "$enable_warn_error" = "yes"],
 PKG_PROG_PKG_CONFIG
 AS_IF([test -z "$PKG_CONFIG"],
       [AC_MSG_ERROR([The pkg-config script could not be found or is too old.])])
+
+#
+# Pick Userspace-RCU flavor (developer only option)
+#
+# [pairwise: --with-liburcu=membarrier, --with-liburcu=qsbr, --with-liburcu=mb, --with-liburcu=signal, --with-liburcu=bp]
+AC_ARG_WITH([liburcu],
+	    [AS_HELP_STRING([--with-liburcu=FLAVOR],
+			     [Build with Userspace-RCU variant (membarrier|qsbr|mb|signal|bp) [default=membarrier]]))],
+	    [], [with_liburcu=membarrier])
+
+AC_MSG_CHECKING([liburcu flavor])
+AS_CASE([$with_liburcu],
+	[membarrier],
+	[RCU_FLAVOR="liburcu"
+	 AC_DEFINE([RCU_MEMBARRIER], [1], [Build with membarrier Userspace-RCU flavor])],
+	[qsbr],
+	[RCU_FLAVOR="liburcu-qsbr"
+	 AC_DEFINE([RCU_QSBR], [1], [Build with QSBR Userspace-RCU flavor])],
+	[mb],
+	[RCU_FLAVOR="liburcu-mb"
+	 AC_DEFINE([RCU_MB], [1], [Build with mb Userspace-RCU flavor])],
+	[signal],
+	[RCU_FLAVOR="liburcu-signal"
+	 AC_DEFINE([RCU_SIGNAL], [1], [Build with signal Userspace-RCU flavor])],
+	[bp],
+	[RCU_FLAVOR="liburcu-bp"
+	 AC_DEFINE([RCU_BP], [1], [Build with bulletproof Userspace-RCU flavor])],
+	[AC_MSG_ERROR([Invalid Userspace-RCU flavor picked])])
+
+AC_MSG_RESULT([$RCU_FLAVOR])
+
+PKG_CHECK_MODULES([LIBURCU], [$RCU_FLAVOR liburcu-cds])
+
+AC_DEFINE_UNQUOTED([RCU_FLAVOR], ["$RCU_FLAVOR"], [Chosen Userspace-RCU flavor])
+
+PKG_CHECK_VERSION([RCU_VERSION], [$RCU_FLAVOR])
+AC_DEFINE_UNQUOTED([RCU_VERSION], ["$RCU_VERSION"], [Compile-time Userspace-RCU version])
 
 # Fuzzing is not included in pairwise testing as fuzzing tools are
 # not present in the relevant Docker image.
@@ -553,7 +590,7 @@ LIBS="$PTHREAD_LIBS $LIBS"
 CFLAGS="$CFLAGS $PTHREAD_CFLAGS"
 CC="$PTHREAD_CC"
 
-AC_CHECK_FUNCS([pthread_attr_getstacksize pthread_attr_setstacksize pthread_barrier_init])
+AC_CHECK_FUNCS([pthread_attr_getstacksize pthread_attr_setstacksize pthread_barrier_init pthread_spin_init])
 
 # [pairwise: --with-locktype=adaptive, --with-locktype=standard]
 AC_ARG_WITH([locktype],
@@ -619,9 +656,6 @@ AC_COMPILE_IFELSE([AC_LANG_PROGRAM([#include <sys/socket.h>],
 AC_CHECK_DECLS([UV_UDP_LINUX_RECVERR], [], [], [[#include <uv.h>]])
 
 AX_RESTORE_FLAGS([libuv])
-
-# userspace-rcu (QSBR variant)
-PKG_CHECK_MODULES([LIBURCU], [liburcu-qsbr liburcu-cds])
 
 # [pairwise: --enable-doh --with-libnghttp2=auto, --enable-doh --with-libnghttp2=yes, --disable-doh]
 AC_ARG_ENABLE([doh],
@@ -1213,8 +1247,10 @@ AC_LINK_IFELSE(
 AC_MSG_CHECKING([compiler support for __builtin_mul_overflow()])
 AC_LINK_IFELSE(
   [AC_LANG_PROGRAM(
-     [[#include <limits.h>]],
-     [[return (__builtin_mul_overflow(UINT64_C(UINT64_MAX), UINT64_C(UINT64_MAX), &(uint64_t){ 0 }));]]
+     [[#include <limits.h>
+       #include <stdint.h>
+     ]],
+     [[return (__builtin_mul_overflow(UINT64_MAX, UINT64_MAX, &(uint64_t){ 0 }));]]
    )],
   [AC_MSG_RESULT([yes])
    AC_DEFINE([HAVE_BUILTIN_MUL_OVERFLOW], [1], [define if the compiler supports __builtin_mul_overflow().])

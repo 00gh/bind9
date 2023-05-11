@@ -133,6 +133,9 @@ static bool nonearest = false;
 static bool nosoa = false;
 static bool notcp = false;
 static bool sigvalinsecs = false;
+static bool transferinsecs = false;
+static bool transferslowly = false;
+static bool transferstuck = false;
 
 /*
  * -4 and -6
@@ -588,6 +591,7 @@ printversion(bool verbose) {
 	printf("compiled with libuv version: %d.%d.%d\n", UV_VERSION_MAJOR,
 	       UV_VERSION_MINOR, UV_VERSION_PATCH);
 	printf("linked to libuv version: %s\n", uv_version_string());
+	printf("compiled with %s version: %s\n", RCU_FLAVOR, RCU_VERSION);
 #if HAVE_LIBNGHTTP2
 	nghttp2_info *nginfo = NULL;
 	printf("compiled with libnghttp2 version: %s\n", NGHTTP2_VERSION);
@@ -765,6 +769,12 @@ parse_T_opt(char *option) {
 		}
 	} else if (!strcmp(option, "sigvalinsecs")) {
 		sigvalinsecs = true;
+	} else if (!strcmp(option, "transferinsecs")) {
+		transferinsecs = true;
+	} else if (!strcmp(option, "transferslowly")) {
+		transferslowly = true;
+	} else if (!strcmp(option, "transferstuck")) {
+		transferstuck = true;
 	} else if (!strncmp(option, "tat=", 4)) {
 		named_g_tat_interval = atoi(option + 4);
 	} else {
@@ -1310,6 +1320,15 @@ setup(void) {
 	}
 	if (sigvalinsecs) {
 		ns_server_setoption(sctx, NS_SERVER_SIGVALINSECS, true);
+	}
+	if (transferinsecs) {
+		ns_server_setoption(sctx, NS_SERVER_TRANSFERINSECS, true);
+	}
+	if (transferslowly) {
+		ns_server_setoption(sctx, NS_SERVER_TRANSFERSLOWLY, true);
+	}
+	if (transferstuck) {
+		ns_server_setoption(sctx, NS_SERVER_TRANSFERSTUCK, true);
 	}
 }
 

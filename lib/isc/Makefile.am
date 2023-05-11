@@ -80,6 +80,7 @@ libisc_la_HEADERS =			\
 	include/isc/signal.h		\
 	include/isc/siphash.h		\
 	include/isc/sockaddr.h		\
+	include/isc/spinlock.h		\
 	include/isc/stack.h		\
 	include/isc/stats.h		\
 	include/isc/stdio.h		\
@@ -95,6 +96,7 @@ libisc_la_HEADERS =			\
 	include/isc/tls.h		\
 	include/isc/tm.h		\
 	include/isc/types.h		\
+	include/isc/urcu.h		\
 	include/isc/url.h		\
 	include/isc/utf8.h		\
 	include/isc/util.h		\
@@ -175,7 +177,6 @@ libisc_la_SOURCES =		\
 	qsbr.c			\
 	radix.c			\
 	random.c		\
-	random_p.h		\
 	ratelimiter.c		\
 	regex.c			\
 	region.c		\

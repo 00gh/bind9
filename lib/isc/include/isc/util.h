@@ -116,6 +116,21 @@
 
 #include <isc/result.h> /* Contractual promise. */
 
+#define SPINLOCK(sp)                                                           \
+	{                                                                      \
+		ISC_UTIL_TRACE(fprintf(stderr, "SPINLOCKING %p %s %d\n", (sp), \
+				       __FILE__, __LINE__));                   \
+		isc_spinlock_lock((sp));                                       \
+		ISC_UTIL_TRACE(fprintf(stderr, "SPINLOCKED %p %s %d\n", (sp),  \
+				       __FILE__, __LINE__));                   \
+	}
+#define SPINUNLOCK(sp)                                                    \
+	{                                                                 \
+		isc_spinlock_unlock((sp));                                \
+		ISC_UTIL_TRACE(fprintf(stderr, "SPINUNLOCKED %p %s %d\n", \
+				       (sp), __FILE__, __LINE__));        \
+	}
+
 #define LOCK(lp)                                                           \
 	{                                                                  \
 		ISC_UTIL_TRACE(fprintf(stderr, "LOCKING %p %s %d\n", (lp), \
@@ -227,14 +242,30 @@
 #define __SANITIZE_ADDRESS__ 1
 #endif /* if __has_feature(address_sanitizer) */
 
+#if __SANITIZE_ADDRESS__
+#define ISC_NO_SANITIZE_ADDRESS __attribute__((no_sanitize("address")))
+#else /* if __SANITIZE_ADDRESS__ */
+#define ISC_NO_SANITIZE_ADDRESS
+#endif /* if __SANITIZE_ADDRESS__ */
+
 #if __has_feature(thread_sanitizer)
 #define __SANITIZE_THREAD__ 1
 #endif /* if __has_feature(thread_sanitizer) */
 
 #if __SANITIZE_THREAD__
+/*
+ * We should rather be including <sanitizer/tsan_interface.h>, but GCC 10
+ * header is broken, so we just make the declarations by hand.
+ */
+void
+__tsan_acquire(void *addr);
+void
+__tsan_release(void *addr);
 #define ISC_NO_SANITIZE_THREAD __attribute__((no_sanitize("thread")))
 #else /* if __SANITIZE_THREAD__ */
 #define ISC_NO_SANITIZE_THREAD
+#define __tsan_acquire(addr)
+#define __tsan_release(addr)
 #endif /* if __SANITIZE_THREAD__ */
 
 #if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR >= 6)

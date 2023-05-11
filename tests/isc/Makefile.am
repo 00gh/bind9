@@ -2,11 +2,13 @@ include $(top_srcdir)/Makefile.top
 
 AM_CPPFLAGS +=			\
 	$(LIBISC_CFLAGS)	\
+	$(LIBURCU_CFLAGS)	\
 	$(LIBUV_CFLAGS)		\
 	-I$(top_srcdir)/lib/isc
 
 LDADD +=			\
 	$(LIBISC_LIBS)		\
+	$(LIBURCU_LIBS)		\
 	$(LIBUV_LIBS)
 
 check_PROGRAMS =	\
@@ -30,6 +32,7 @@ check_PROGRAMS =	\
 	loop_test	\
 	md_test		\
 	mem_test	\
+	mutex_test	\
 	netaddr_test	\
 	parse_test	\
 	quota_test	\
@@ -41,6 +44,7 @@ check_PROGRAMS =	\
 	safe_test	\
 	siphash_test	\
 	sockaddr_test	\
+	spinlock_test	\
 	stats_test	\
 	symtab_test	\
 	tcp_test	\
@@ -113,6 +117,7 @@ tcp_test_SOURCES =	\
 	tcp_test.c	\
 	netmgr_common.h \
 	netmgr_common.c \
+	stream_shutdown.c \
 	uv_wrap.h
 
 tcpdns_test_CPPFLAGS =	\
@@ -141,6 +146,7 @@ tls_test_SOURCES =	\
 	tls_test.c	\
 	netmgr_common.h \
 	netmgr_common.c \
+	stream_shutdown.c \
 	uv_wrap.h
 
 tlsdns_test_CPPFLAGS =	\

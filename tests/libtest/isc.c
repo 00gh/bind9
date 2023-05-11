@@ -37,7 +37,7 @@ isc_log_t *lctx = NULL;
 isc_loop_t *mainloop = NULL;
 isc_loopmgr_t *loopmgr = NULL;
 isc_nm_t *netmgr = NULL;
-unsigned int workers = -1;
+unsigned int workers = 0;
 
 static void
 adjustnofile(void) {
@@ -49,6 +49,24 @@ adjustnofile(void) {
 			setrlimit(RLIMIT_NOFILE, &rl);
 		}
 	}
+}
+
+int
+setup_workers(void **state ISC_ATTR_UNUSED) {
+	char *env_workers = getenv("ISC_TASK_WORKERS");
+	if (env_workers != NULL) {
+		workers = atoi(env_workers);
+	} else {
+		workers = isc_os_ncpus();
+
+		/* We always need at least two loops for some of the tests */
+		if (workers < 2) {
+			workers = 2;
+		}
+	}
+	INSIST(workers != 0);
+
+	return (0);
 }
 
 int
@@ -68,18 +86,9 @@ teardown_mctx(void **state ISC_ATTR_UNUSED) {
 
 int
 setup_loopmgr(void **state ISC_ATTR_UNUSED) {
-	char *env_workers = NULL;
-
 	REQUIRE(mctx != NULL);
 
-	env_workers = getenv("ISC_TASK_WORKERS");
-	if (env_workers != NULL) {
-		workers = atoi(env_workers);
-	}
-	if (workers < 2 || workers > 1000) {
-		/* We always need at least two loops for some of the tests */
-		workers = isc_os_ncpus() + 1;
-	}
+	setup_workers(state);
 
 	isc_loopmgr_create(mctx, workers, &loopmgr);
 	mainloop = isc_loop_main(loopmgr);
