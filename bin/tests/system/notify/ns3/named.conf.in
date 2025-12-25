@@ -11,21 +11,27 @@
  * information regarding copyright ownership.
  */
 
+include "named-tls.conf";
+
 options {
 	query-source address 10.53.0.3;
 	notify-source 10.53.0.3;
 	transfer-source 10.53.0.3;
 	port @PORT@;
+	include "options-tls.conf";
 	pid-file "named.pid";
 	listen-on { 10.53.0.3; };
-	listen-on-v6 { none; };
+	listen-on-v6 { fd92:7065:b8e:ffff::3; };
 	recursion yes;
 	notify yes;
+	dnssec-validation no;
+
+	tcp-initial-timeout 150; # 15 seconds
 };
 
 zone "." {
 	type hint;
-	file "../../common/root.hint";
+	file "../../_common/root.hint";
 };
 
 zone "example" {
@@ -39,5 +45,5 @@ zone "example" {
 zone "notify-source-port-test" {
 	type primary;
 	file "notify-source-port-test.db";
-	notify-source 10.53.0.3 port @EXTRAPORT2@;
+	notify-source 10.53.0.3;
 };

@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -28,6 +29,7 @@
 #include <cmocka.h>
 
 #include <isc/commandline.h>
+#include <isc/lib.h>
 #include <isc/regex.h>
 #include <isc/util.h>
 

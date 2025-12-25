@@ -15,11 +15,7 @@
 
 #include <stdbool.h>
 
-#include <isc/lang.h>
-
 #include <dns/types.h>
-
-ISC_LANG_BEGINDECLS
 
 /*
  * dns_dns64_create() flags.
@@ -42,7 +38,7 @@ ISC_LANG_BEGINDECLS
 #define DNS_DNS64_RECURSIVE 0x01 /* Recursive query. */
 #define DNS_DNS64_DNSSEC    0x02 /* DNSSEC sensitive query. */
 
-isc_result_t
+void
 dns_dns64_create(isc_mem_t *mctx, const isc_netaddr_t *prefix,
 		 unsigned int prefixlen, const isc_netaddr_t *suffix,
 		 dns_acl_t *client, dns_acl_t *mapped, dns_acl_t *excluded,
@@ -83,18 +79,12 @@ dns_dns64_create(isc_mem_t *mctx, const isc_netaddr_t *prefix,
  *	'client'	to be NULL or a valid acl.
  *	'mapped'	to be NULL or a valid acl.
  *	'excluded'	to be NULL or a valid acl.
- *
- * Returns:
- *	ISC_R_SUCCESS
- *	ISC_R_NOMEMORY
  */
 
 void
-dns_dns64_destroy(dns_dns64_t **dns64p);
+dns_dns64_destroy(dns_dns64list_t *list, dns_dns64_t **dns64p);
 /*
- * Destroys a dns64 record.
- *
- * Requires the record to not be linked.
+ * Unlinks a dns64 record from list, then destroys it.
  */
 
 isc_result_t
@@ -107,6 +97,8 @@ dns_dns64_aaaafroma(const dns_dns64_t *dns64, const isc_netaddr_t *reqaddr,
  * 'flags' and 'aaaa'.  If synthesis is performed then the result is
  * written to '*aaaa'.
  *
+ * If 'reqaddr' is NULL the 'client' acl is ignored.
+ *
  * The synthesised address will be of the form:
  *
  *	 <prefix bits><a bits><suffix bits>
@@ -116,7 +108,7 @@ dns_dns64_aaaafroma(const dns_dns64_t *dns64, const isc_netaddr_t *reqaddr,
  *
  * Requires:
  *	'dns64'		to be valid.
- *	'reqaddr'	to be valid.
+ *	'reqaddr'	to be NULL or valid
  *	'reqsigner'	to be NULL or valid.
  *	'env'		to be valid.
  *	'a'		to point to a IPv4 address in network order.
@@ -127,22 +119,10 @@ dns_dns64_aaaafroma(const dns_dns64_t *dns64, const isc_netaddr_t *reqaddr,
  *	DNS_R_DISALLOWED	if there is no match.
  */
 
-dns_dns64_t *
-dns_dns64_next(dns_dns64_t *dns64);
-/*
- * Return the next dns64 record in the list.
- */
-
 void
 dns_dns64_append(dns_dns64list_t *list, dns_dns64_t *dns64);
 /*
  * Append the dns64 record to the list.
- */
-
-void
-dns_dns64_unlink(dns_dns64list_t *list, dns_dns64_t *dns64);
-/*
- * Unlink the dns64 record from the list.
  */
 
 bool
@@ -189,4 +169,18 @@ dns_dns64_findprefix(dns_rdataset_t *rdataset, isc_netprefix_t *prefix,
  *	ISC_R_NOTFOUND	no prefixes where found.
  */
 
-ISC_LANG_ENDDECLS
+isc_result_t
+dns_dns64_apply(isc_mem_t *mctx, dns_dns64list_t dns64s, unsigned int count,
+		dns_message_t *message, dns_aclenv_t *env, isc_sockaddr_t *peer,
+		dns_name_t *reqsigner, unsigned int flags, dns_rdataset_t *a,
+		dns_rdataset_t **aaaap);
+/*
+ * Apply a list of 'count' dns64 prefixes in the list 'dns64s'
+ * to an 'a' rdataset, based 'peer', 'reqsigner', 'env', and 'flags'.
+ * If synthesis is performed then return an AAAA rdataset in '*aaaap'.
+ *
+ * Returns:
+ * 	ISC_R_SUCCESS
+ * 	ISC_R_NOMORE	The list was fully iterated and no
+ * 			dns64 conversions were applied
+ */

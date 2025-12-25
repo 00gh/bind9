@@ -71,9 +71,11 @@ enum {
 	dns_resstatscounter_badcookie = 40,
 	dns_resstatscounter_zonequota = 41,
 	dns_resstatscounter_serverquota = 42,
-	dns_resstatscounter_nextitem = 43,
-	dns_resstatscounter_priming = 44,
-	dns_resstatscounter_max = 45,
+	dns_resstatscounter_clientquota = 43,
+	dns_resstatscounter_nextitem = 44,
+	dns_resstatscounter_priming = 45,
+	dns_resstatscounter_forwardonlyfail = 46,
+	dns_resstatscounter_max = 47,
 
 	/*
 	 * DNSSEC stats.
@@ -233,7 +235,7 @@ enum {
 /*%<
  * Conversion macros among dns_rdatatype_t, attributes and isc_statscounter_t.
  */
-#define DNS_RDATASTATSTYPE_BASE(type)  ((dns_rdatatype_t)((type)&0xFFFF))
+#define DNS_RDATASTATSTYPE_BASE(type)  ((dns_rdatatype_t)((type) & 0xFFFF))
 #define DNS_RDATASTATSTYPE_ATTR(type)  ((type) >> 16)
 #define DNS_RDATASTATSTYPE_VALUE(b, a) (((a) << 16) | (b))
 
@@ -255,9 +257,7 @@ typedef void (*dns_dnssecsignstats_dumper_t)(uint32_t, uint64_t, void *);
 typedef void (*dns_opcodestats_dumper_t)(dns_opcode_t, uint64_t, void *);
 typedef void (*dns_rcodestats_dumper_t)(dns_rcode_t, uint64_t, void *);
 
-ISC_LANG_BEGINDECLS
-
-isc_result_t
+void
 dns_generalstats_create(isc_mem_t *mctx, dns_stats_t **statsp, int ncounters);
 /*%<
  * Create a statistics counter structure of general type.  It counts a general
@@ -269,14 +269,9 @@ dns_generalstats_create(isc_mem_t *mctx, dns_stats_t **statsp, int ncounters);
  *\li	'mctx' must be a valid memory context.
  *
  *\li	'statsp' != NULL && '*statsp' == NULL.
- *
- * Returns:
- *\li	ISC_R_SUCCESS	-- all ok
- *
- *\li	anything else	-- failure
  */
 
-isc_result_t
+void
 dns_rdatatypestats_create(isc_mem_t *mctx, dns_stats_t **statsp);
 /*%<
  * Create a statistics counter structure per rdatatype.
@@ -285,14 +280,9 @@ dns_rdatatypestats_create(isc_mem_t *mctx, dns_stats_t **statsp);
  *\li	'mctx' must be a valid memory context.
  *
  *\li	'statsp' != NULL && '*statsp' == NULL.
- *
- * Returns:
- *\li	ISC_R_SUCCESS	-- all ok
- *
- *\li	anything else	-- failure
  */
 
-isc_result_t
+void
 dns_rdatasetstats_create(isc_mem_t *mctx, dns_stats_t **statsp);
 /*%<
  * Create a statistics counter structure per RRset.
@@ -301,14 +291,9 @@ dns_rdatasetstats_create(isc_mem_t *mctx, dns_stats_t **statsp);
  *\li	'mctx' must be a valid memory context.
  *
  *\li	'statsp' != NULL && '*statsp' == NULL.
- *
- * Returns:
- *\li	ISC_R_SUCCESS	-- all ok
- *
- *\li	anything else	-- failure
  */
 
-isc_result_t
+void
 dns_opcodestats_create(isc_mem_t *mctx, dns_stats_t **statsp);
 /*%<
  * Create a statistics counter structure per opcode.
@@ -317,14 +302,9 @@ dns_opcodestats_create(isc_mem_t *mctx, dns_stats_t **statsp);
  *\li	'mctx' must be a valid memory context.
  *
  *\li	'statsp' != NULL && '*statsp' == NULL.
- *
- * Returns:
- *\li	ISC_R_SUCCESS	-- all ok
- *
- *\li	anything else	-- failure
  */
 
-isc_result_t
+void
 dns_rcodestats_create(isc_mem_t *mctx, dns_stats_t **statsp);
 /*%<
  * Create a statistics counter structure per assigned rcode.
@@ -333,14 +313,9 @@ dns_rcodestats_create(isc_mem_t *mctx, dns_stats_t **statsp);
  *\li	'mctx' must be a valid memory context.
  *
  *\li	'statsp' != NULL && '*statsp' == NULL.
- *
- * Returns:
- *\li	ISC_R_SUCCESS	-- all ok
- *
- *\li	anything else	-- failure
  */
 
-isc_result_t
+void
 dns_dnssecsignstats_create(isc_mem_t *mctx, dns_stats_t **statsp);
 /*%<
  * Create a statistics counter structure per assigned DNSKEY id.
@@ -349,11 +324,6 @@ dns_dnssecsignstats_create(isc_mem_t *mctx, dns_stats_t **statsp);
  *\li	'mctx' must be a valid memory context.
  *
  *\li	'statsp' != NULL && '*statsp' == NULL.
- *
- * Returns:
- *\li	ISC_R_SUCCESS	-- all ok
- *
- *\li	anything else	-- failure
  */
 
 void
@@ -429,7 +399,7 @@ dns_opcodestats_increment(dns_stats_t *stats, dns_opcode_t code);
  */
 
 void
-dns_rcodestats_increment(dns_stats_t *stats, dns_opcode_t code);
+dns_rcodestats_increment(dns_stats_t *stats, dns_rcode_t code);
 /*%<
  * Increment the statistics counter for 'code'.
  *
@@ -543,5 +513,3 @@ dns_rcodestats_dump(dns_stats_t *stats, dns_rcodestats_dumper_t dump_fn,
  * Requires:
  *\li	'stats' is a valid dns_stats_t created by dns_generalstats_create().
  */
-
-ISC_LANG_ENDDECLS

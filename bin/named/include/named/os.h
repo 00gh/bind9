@@ -18,6 +18,7 @@
 #include <pwd.h>
 #include <stdbool.h>
 
+#include <isc/formatcheck.h>
 #include <isc/types.h>
 
 void
@@ -39,10 +40,13 @@ void
 named_os_inituserinfo(const char *username);
 
 void
-named_os_changeuser(void);
+named_os_changeuser(bool permanent);
+
+void
+named_os_restoreuser(void);
 
 uid_t
-ns_os_uid(void);
+named_os_uid(void);
 
 void
 named_os_adjustnofile(void);
@@ -55,9 +59,6 @@ named_os_openfile(const char *filename, mode_t mode, bool switch_user);
 
 void
 named_os_writepidfile(const char *filename, bool first_time);
-
-bool
-named_os_issingleton(const char *filename);
 
 void
 named_os_shutdown(void);
@@ -73,3 +74,15 @@ named_os_started(void);
 
 const char *
 named_os_uname(void);
+
+#ifdef __linux__
+void
+named_os_notify_systemd(const char *restrict format, ...)
+	ISC_FORMAT_PRINTF(1, 2);
+
+void
+named_os_notify_close(void);
+#else /* __linux__ */
+#define named_os_notify_systemd(...)
+#define named_os_notify_close(...)
+#endif /* __linux__ */

@@ -81,14 +81,14 @@ parse_params(isc_mem_t *mctx, int argc, char **argv, dns_name_t *z1,
 		result = ISC_R_FAILURE;
 		goto cleanup;
 	}
-	result = dns_name_fromstring2(z1, argv[0], dns_rootname, 0, mctx);
+	result = dns_name_fromstring(z1, argv[0], dns_rootname, 0, mctx);
 	if (result != ISC_R_SUCCESS) {
 		log_write(ISC_LOG_ERROR,
 			  "parse_params: dns_name_fromstring2 -> %s",
 			  isc_result_totext(result));
 		goto cleanup;
 	}
-	result = dns_name_fromstring2(z2, argv[1], dns_rootname, 0, mctx);
+	result = dns_name_fromstring(z2, argv[1], dns_rootname, 0, mctx);
 	if (result != ISC_R_SUCCESS) {
 		log_write(ISC_LOG_ERROR,
 			  "parse_params: dns_name_fromstring2 -> %s",
@@ -99,7 +99,7 @@ parse_params(isc_mem_t *mctx, int argc, char **argv, dns_name_t *z1,
 	result = ISC_R_SUCCESS;
 
 cleanup:
-	return (result);
+	return result;
 }
 
 /*
@@ -111,16 +111,15 @@ new_sample_instance(isc_mem_t *mctx, const char *db_name, int argc, char **argv,
 		    const dns_dyndbctx_t *dctx,
 		    sample_instance_t **sample_instp) {
 	isc_result_t result;
-	sample_instance_t *inst = NULL;
 
 	REQUIRE(sample_instp != NULL && *sample_instp == NULL);
 
-	CHECKED_MEM_GET_PTR(mctx, inst);
-	ZERO_PTR(inst);
+	sample_instance_t *inst = isc_mem_get(mctx, sizeof(*inst));
+	*inst = (sample_instance_t){ 0 };
+
 	isc_mem_attach(mctx, &inst->mctx);
 
 	inst->db_name = isc_mem_strdup(mctx, db_name);
-
 	inst->zone1_name = dns_fixedname_initname(&inst->zone1_fn);
 	inst->zone2_name = dns_fixedname_initname(&inst->zone2_fn);
 
@@ -135,7 +134,6 @@ new_sample_instance(isc_mem_t *mctx, const char *db_name, int argc, char **argv,
 
 	dns_view_attach(dctx->view, &inst->view);
 	dns_zonemgr_attach(dctx->zmgr, &inst->zmgr);
-	inst->loopmgr = dctx->loopmgr;
 
 	/* Register new DNS DB implementation. */
 	result = dns_db_register(db_name, create_db, inst, mctx, &inst->db_imp);
@@ -153,7 +151,7 @@ cleanup:
 	if (result != ISC_R_SUCCESS) {
 		destroy_sample_instance(&inst);
 	}
-	return (result);
+	return result;
 }
 
 /*
@@ -195,7 +193,7 @@ load_sample_instance_zones(sample_instance_t *inst) {
 	}
 
 cleanup:
-	return (result);
+	return result;
 }
 
 void
@@ -225,5 +223,5 @@ destroy_sample_instance(sample_instance_t **instp) {
 	dns_view_detach(&inst->view);
 	dns_zonemgr_detach(&inst->zmgr);
 
-	MEM_PUT_AND_DETACH(inst);
+	isc_mem_putanddetach(&inst->mctx, inst, sizeof(*inst));
 }

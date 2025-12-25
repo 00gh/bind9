@@ -13,6 +13,7 @@
 
 /* ! \file */
 
+#include <inttypes.h>
 #include <math.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
@@ -25,6 +26,7 @@
 #include <cmocka.h>
 
 #include <isc/histo.h>
+#include <isc/lib.h>
 #include <isc/result.h>
 #include <isc/time.h>
 
@@ -46,7 +48,7 @@
 static double
 millis_since(isc_nanosecs_t start) {
 	isc_nanosecs_t end = isc_time_monotonic();
-	return ((double)(end - start) / NS_PER_MS);
+	return (double)(end - start) / NS_PER_MS;
 }
 
 #else
@@ -67,7 +69,7 @@ ISC_RUN_TEST_IMPL(basics) {
 		isc_nanosecs_t start = isc_time_monotonic();
 
 		isc_histo_t *hg = NULL;
-		isc_histo_create(mctx, bits, &hg);
+		isc_histo_create(isc_g_mctx, bits, &hg);
 
 		isc_histo_inc(hg, 0);
 
@@ -152,7 +154,7 @@ ISC_RUN_TEST_IMPL(quantiles) {
 		isc_nanosecs_t start = isc_time_monotonic();
 
 		isc_histo_t *hg = NULL;
-		isc_histo_create(mctx, bits, &hg);
+		isc_histo_create(isc_g_mctx, bits, &hg);
 
 		/* ensure empty histogram does not divide by zero */
 		isc_histo_moments(hg, &pop, &mean, &sd);
@@ -246,7 +248,7 @@ ISC_RUN_TEST_IMPL(sigfigs) {
 
 	for (uint bits = ISC_HISTO_MINBITS; bits <= ISC_HISTO_MAXBITS; bits++) {
 		isc_histo_t *hg = NULL;
-		isc_histo_create(mctx, bits, &hg);
+		isc_histo_create(isc_g_mctx, bits, &hg);
 
 		uint digits = isc_histo_bits_to_digits(bits);
 		assert_true(bits >= isc_histo_digits_to_bits(digits));
@@ -287,7 +289,7 @@ ISC_RUN_TEST_IMPL(subrange) {
 		isc_nanosecs_t start = isc_time_monotonic();
 
 		isc_histo_t *hg = NULL;
-		isc_histo_create(mctx, bits, &hg);
+		isc_histo_create(isc_g_mctx, bits, &hg);
 
 		uint64_t value[SUBRANGE + 1];
 		double frac[SUBRANGE + 1];
@@ -332,7 +334,7 @@ ISC_RUN_TEST_IMPL(subrange) {
 			assert_int_equal(value[0], max);
 
 			isc_histo_destroy(&hg);
-			isc_histo_create(mctx, bits, &hg);
+			isc_histo_create(isc_g_mctx, bits, &hg);
 
 			/* these tests can be slow */
 			if (isc_time_monotonic() > start + TIME_LIMIT) {

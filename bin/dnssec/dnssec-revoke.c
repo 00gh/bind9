@@ -23,30 +23,28 @@
 #include <isc/commandline.h>
 #include <isc/file.h>
 #include <isc/hash.h>
+#include <isc/lib.h>
 #include <isc/mem.h>
 #include <isc/result.h>
 #include <isc/string.h>
 #include <isc/util.h>
 
 #include <dns/keyvalues.h>
+#include <dns/lib.h>
 
 #include <dst/dst.h>
 
 #include "dnssectool.h"
 
-const char *program = "dnssec-revoke";
-
-static isc_mem_t *mctx = NULL;
-
-noreturn static void
+ISC_NORETURN static void
 usage(void);
 
 static void
 usage(void) {
 	fprintf(stderr, "Usage:\n");
-	fprintf(stderr, "    %s [options] keyfile\n\n", program);
+	fprintf(stderr, "    %s [options] keyfile\n\n",
+		isc_commandline_progname);
 	fprintf(stderr, "Version: %s\n", PACKAGE_VERSION);
-	fprintf(stderr, "    -E engine:    specify OpenSSL engine\n");
 	fprintf(stderr, "    -f:           force overwrite\n");
 	fprintf(stderr, "    -h:           help\n");
 	fprintf(stderr, "    -K directory: use directory for key files\n");
@@ -58,13 +56,12 @@ usage(void) {
 	fprintf(stderr, "     K<name>+<alg>+<new id>.key, "
 			"K<name>+<alg>+<new id>.private\n");
 
-	exit(-1);
+	exit(EXIT_FAILURE);
 }
 
 int
 main(int argc, char **argv) {
 	isc_result_t result;
-	const char *engine = NULL;
 	char const *filename = NULL;
 	char *dir = NULL;
 	char newname[1024], oldname[1024];
@@ -78,18 +75,18 @@ main(int argc, char **argv) {
 	bool removefile = false;
 	bool id = false;
 
+	isc_commandline_init(argc, argv);
+
 	if (argc == 1) {
 		usage();
 	}
-
-	isc_mem_create(&mctx);
 
 	isc_commandline_errprint = false;
 
 	while ((ch = isc_commandline_parse(argc, argv, "E:fK:rRhv:V")) != -1) {
 		switch (ch) {
 		case 'E':
-			engine = isc_commandline_argument;
+			fatal("%s", isc_result_totext(DST_R_NOENGINE));
 			break;
 		case 'f':
 			force = true;
@@ -99,7 +96,8 @@ main(int argc, char **argv) {
 			 * We don't have to copy it here, but do it to
 			 * simplify cleanup later
 			 */
-			dir = isc_mem_strdup(mctx, isc_commandline_argument);
+			dir = isc_mem_strdup(isc_g_mctx,
+					     isc_commandline_argument);
 			break;
 		case 'r':
 			removefile = true;
@@ -116,7 +114,8 @@ main(int argc, char **argv) {
 		case '?':
 			if (isc_commandline_option != '?') {
 				fprintf(stderr, "%s: invalid argument -%c\n",
-					program, isc_commandline_option);
+					isc_commandline_progname,
+					isc_commandline_option);
 			}
 			FALLTHROUGH;
 		case 'h':
@@ -125,12 +124,13 @@ main(int argc, char **argv) {
 
 		case 'V':
 			/* Does not return. */
-			version(program);
+			version(isc_commandline_progname);
 
 		default:
-			fprintf(stderr, "%s: unhandled option -%c\n", program,
+			fprintf(stderr, "%s: unhandled option -%c\n",
+				isc_commandline_progname,
 				isc_commandline_option);
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 	}
 
@@ -146,27 +146,22 @@ main(int argc, char **argv) {
 	if (dir != NULL) {
 		filename = argv[isc_commandline_index];
 	} else {
-		result = isc_file_splitpath(mctx, argv[isc_commandline_index],
-					    &dir, &filename);
+		result = isc_file_splitpath(isc_g_mctx,
+					    argv[isc_commandline_index], &dir,
+					    &filename);
 		if (result != ISC_R_SUCCESS) {
 			fatal("cannot process filename %s: %s",
 			      argv[isc_commandline_index],
 			      isc_result_totext(result));
 		}
 		if (strcmp(dir, ".") == 0) {
-			isc_mem_free(mctx, dir);
-			dir = NULL;
+			isc_mem_free(isc_g_mctx, dir);
 		}
 	}
 
-	result = dst_lib_init(mctx, engine);
-	if (result != ISC_R_SUCCESS) {
-		fatal("Could not initialize dst: %s",
-		      isc_result_totext(result));
-	}
-
-	result = dst_key_fromnamedfile(
-		filename, dir, DST_TYPE_PUBLIC | DST_TYPE_PRIVATE, mctx, &key);
+	result = dst_key_fromnamedfile(filename, dir,
+				       DST_TYPE_PUBLIC | DST_TYPE_PRIVATE,
+				       isc_g_mctx, &key);
 	if (result != ISC_R_SUCCESS) {
 		fatal("Invalid keyfile name %s: %s", filename,
 		      isc_result_totext(result));
@@ -179,7 +174,7 @@ main(int argc, char **argv) {
 	dst_key_format(key, keystr, sizeof(keystr));
 
 	if (verbose > 2) {
-		fprintf(stderr, "%s: %s\n", program, keystr);
+		fprintf(stderr, "%s: %s\n", isc_commandline_progname, keystr);
 	}
 
 	if (force) {
@@ -197,7 +192,7 @@ main(int argc, char **argv) {
 				"%s: warning: Key is not flagged "
 				"as a KSK. Revoking a ZSK is "
 				"legal, but undefined.\n",
-				program);
+				isc_commandline_progname);
 		}
 
 		dst_key_settime(key, DST_TIME_REVOKE, now);
@@ -248,14 +243,12 @@ main(int argc, char **argv) {
 
 cleanup:
 	dst_key_free(&key);
-	dst_lib_destroy();
 	if (verbose > 10) {
-		isc_mem_stats(mctx, stdout);
+		isc_mem_stats(isc_g_mctx, stdout);
 	}
 	if (dir != NULL) {
-		isc_mem_free(mctx, dir);
+		isc_mem_free(isc_g_mctx, dir);
 	}
-	isc_mem_destroy(&mctx);
 
-	return (0);
+	return 0;
 }

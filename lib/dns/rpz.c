@@ -20,11 +20,13 @@
 
 #include <isc/async.h>
 #include <isc/buffer.h>
+#include <isc/log.h>
 #include <isc/loop.h>
 #include <isc/magic.h>
 #include <isc/mem.h>
 #include <isc/net.h>
 #include <isc/netaddr.h>
+#include <isc/refcount.h>
 #include <isc/result.h>
 #include <isc/rwlock.h>
 #include <isc/string.h>
@@ -33,10 +35,8 @@
 
 #include <dns/db.h>
 #include <dns/dbiterator.h>
-#include <dns/dnsrps.h>
 #include <dns/fixedname.h>
-#include <dns/log.h>
-#include <dns/rbt.h>
+#include <dns/qp.h>
 #include <dns/rdata.h>
 #include <dns/rdataset.h>
 #include <dns/rdatasetiter.h>
@@ -166,39 +166,74 @@ struct dns_rpz_nm_zbits {
 };
 
 /*
- * The data in a RBT node has two pairs of bits for policy zones.
- * One pair is for the corresponding name of the node such as example.com
- * and the other pair is for a wildcard child such as *.example.com.
+ * The data for a name in the summary database. This has two pairs of bits
+ * for policy zones: one pair is for the exact name of the node, such as
+ * example.com, and the other pair is for a wildcard child such as
+ * *.example.com.
  */
-typedef struct dns_rpz_nm_data dns_rpz_nm_data_t;
-struct dns_rpz_nm_data {
+typedef struct nmdata nmdata_t;
+struct nmdata {
+	dns_name_t name;
+	isc_mem_t *mctx;
+	isc_refcount_t references;
 	dns_rpz_nm_zbits_t set;
 	dns_rpz_nm_zbits_t wild;
 };
+
+#ifdef DNS_RPZ_TRACE
+#define nmdata_ref(ptr)	  nmdata__ref(ptr, __func__, __FILE__, __LINE__)
+#define nmdata_unref(ptr) nmdata__unref(ptr, __func__, __FILE__, __LINE__)
+#define nmdata_attach(ptr, ptrp) \
+	nmdata__attach(ptr, ptrp, __func__, __FILE__, __LINE__)
+#define nmdata_detach(ptrp) nmdata__detach(ptrp, __func__, __FILE__, __LINE__)
+ISC_REFCOUNT_TRACE_DECL(nmdata);
+#else
+ISC_REFCOUNT_DECL(nmdata);
+#endif
 
 static isc_result_t
 rpz_add(dns_rpz_zone_t *rpz, const dns_name_t *src_name);
 static void
 rpz_del(dns_rpz_zone_t *rpz, const dns_name_t *src_name);
 
+static nmdata_t *
+new_nmdata(isc_mem_t *mctx, const dns_name_t *name, const nmdata_t *data);
+
+/* QP trie methods */
+static void
+qp_attach(void *uctx, void *pval, uint32_t ival);
+static void
+qp_detach(void *uctx, void *pval, uint32_t ival);
+static size_t
+qp_makekey(dns_qpkey_t key, void *uctx, void *pval, uint32_t ival);
+static void
+qp_triename(void *uctx, char *buf, size_t size);
+
+static dns_qpmethods_t qpmethods = {
+	qp_attach,
+	qp_detach,
+	qp_makekey,
+	qp_triename,
+};
+
 const char *
 dns_rpz_type2str(dns_rpz_type_t type) {
 	switch (type) {
 	case DNS_RPZ_TYPE_CLIENT_IP:
-		return ("CLIENT-IP");
+		return "CLIENT-IP";
 	case DNS_RPZ_TYPE_QNAME:
-		return ("QNAME");
+		return "QNAME";
 	case DNS_RPZ_TYPE_IP:
-		return ("IP");
+		return "IP";
 	case DNS_RPZ_TYPE_NSIP:
-		return ("NSIP");
+		return "NSIP";
 	case DNS_RPZ_TYPE_NSDNAME:
-		return ("NSDNAME");
+		return "NSDNAME";
 	case DNS_RPZ_TYPE_BAD:
 		break;
 	}
 	FATAL_ERROR("impossible rpz type %d", type);
-	return ("impossible");
+	return "impossible";
 }
 
 dns_rpz_policy_t
@@ -220,14 +255,14 @@ dns_rpz_str2policy(const char *str) {
 	unsigned int n;
 
 	if (str == NULL) {
-		return (DNS_RPZ_POLICY_ERROR);
+		return DNS_RPZ_POLICY_ERROR;
 	}
 	for (n = 0; n < sizeof(tbl) / sizeof(tbl[0]); ++n) {
 		if (!strcasecmp(tbl[n].str, str)) {
-			return (tbl[n].policy);
+			return tbl[n].policy;
 		}
 	}
-	return (DNS_RPZ_POLICY_ERROR);
+	return DNS_RPZ_POLICY_ERROR;
 }
 
 const char *
@@ -269,7 +304,7 @@ dns_rpz_policy2str(dns_rpz_policy_t policy) {
 	default:
 		UNREACHABLE();
 	}
-	return (str);
+	return str;
 }
 
 uint16_t
@@ -288,14 +323,14 @@ dns_rpz_str2ede(const char *str) {
 	unsigned int n;
 
 	if (str == NULL) {
-		return (UINT16_MAX);
+		return UINT16_MAX;
 	}
 	for (n = 0; n < sizeof(tbl) / sizeof(tbl[0]); ++n) {
 		if (!strcasecmp(tbl[n].str, str)) {
-			return (tbl[n].ede);
+			return tbl[n].ede;
 		}
 	}
-	return (UINT16_MAX);
+	return UINT16_MAX;
 }
 
 /*
@@ -331,7 +366,7 @@ zbit_to_num(dns_rpz_zbits_t zbit) {
 	if ((zbit & 2) != 0) {
 		++rpz_num;
 	}
-	return (rpz_num);
+	return rpz_num;
 }
 
 /*
@@ -574,7 +609,7 @@ fix_qname_skip_recurse(dns_rpz_zones_t *rpzs) {
 	}
 
 set:
-	isc_log_write(dns_lctx, DNS_LOGCATEGORY_RPZ, DNS_LOGMODULE_RBTDB,
+	isc_log_write(DNS_LOGCATEGORY_RPZ, DNS_LOGMODULE_RPZ,
 		      DNS_RPZ_DEBUG_QUIET,
 		      "computed RPZ qname_skip_recurse mask=0x%" PRIx64,
 		      (uint64_t)mask);
@@ -675,7 +710,7 @@ new_node(dns_rpz_zones_t *rpzs, const dns_rpz_cidr_key_t *ip,
 		node->ip.w[i++] = 0;
 	}
 
-	return (node);
+	return node;
 }
 
 static void
@@ -683,11 +718,10 @@ badname(int level, const dns_name_t *name, const char *str1, const char *str2) {
 	/*
 	 * bin/tests/system/rpz/tests.sh looks for "invalid rpz".
 	 */
-	if (level < DNS_RPZ_DEBUG_QUIET && isc_log_wouldlog(dns_lctx, level)) {
+	if (level < DNS_RPZ_DEBUG_QUIET && isc_log_wouldlog(level)) {
 		char namebuf[DNS_NAME_FORMATSIZE];
 		dns_name_format(name, namebuf, sizeof(namebuf));
-		isc_log_write(dns_lctx, DNS_LOGCATEGORY_RPZ,
-			      DNS_LOGMODULE_RBTDB, level,
+		isc_log_write(DNS_LOGCATEGORY_RPZ, DNS_LOGMODULE_RPZ, level,
 			      "invalid rpz IP address \"%s\"%s%s", namebuf,
 			      str1, str2);
 	}
@@ -722,7 +756,7 @@ ip2name(const dns_rpz_cidr_key_t *tgt_ip, dns_rpz_prefix_t tgt_prefix,
 			       (tgt_ip->w[3] >> 16) & 0xffU,
 			       (tgt_ip->w[3] >> 24) & 0xffU);
 		if (len < 0 || (size_t)len >= sizeof(str)) {
-			return (ISC_R_FAILURE);
+			return ISC_R_FAILURE;
 		}
 	} else {
 		int w[DNS_RPZ_CIDR_WORDS * 2];
@@ -730,7 +764,7 @@ ip2name(const dns_rpz_cidr_key_t *tgt_ip, dns_rpz_prefix_t tgt_prefix,
 
 		len = snprintf(str, sizeof(str), "%d", tgt_prefix);
 		if (len < 0 || (size_t)len >= sizeof(str)) {
-			return (ISC_R_FAILURE);
+			return ISC_R_FAILURE;
 		}
 
 		for (int n = 0; n < DNS_RPZ_CIDR_WORDS; n++) {
@@ -776,7 +810,7 @@ ip2name(const dns_rpz_cidr_key_t *tgt_ip, dns_rpz_prefix_t tgt_prefix,
 					     ".%x", w[n]);
 			}
 			if (i < 0 || (size_t)i >= (size_t)(sizeof(str) - len)) {
-				return (ISC_R_FAILURE);
+				return ISC_R_FAILURE;
 			}
 			len += i;
 		}
@@ -784,8 +818,8 @@ ip2name(const dns_rpz_cidr_key_t *tgt_ip, dns_rpz_prefix_t tgt_prefix,
 
 	isc_buffer_init(&buffer, str, sizeof(str));
 	isc_buffer_add(&buffer, len);
-	result = dns_name_fromtext(ip_name, &buffer, base_name, 0, NULL);
-	return (result);
+	result = dns_name_fromtext(ip_name, &buffer, base_name, 0);
+	return result;
 }
 
 /*
@@ -795,26 +829,26 @@ static dns_rpz_type_t
 type_from_name(const dns_rpz_zones_t *rpzs, dns_rpz_zone_t *rpz,
 	       const dns_name_t *name) {
 	if (dns_name_issubdomain(name, &rpz->ip)) {
-		return (DNS_RPZ_TYPE_IP);
+		return DNS_RPZ_TYPE_IP;
 	}
 
 	if (dns_name_issubdomain(name, &rpz->client_ip)) {
-		return (DNS_RPZ_TYPE_CLIENT_IP);
+		return DNS_RPZ_TYPE_CLIENT_IP;
 	}
 
 	if ((rpzs->p.nsip_on & DNS_RPZ_ZBIT(rpz->num)) != 0 &&
 	    dns_name_issubdomain(name, &rpz->nsip))
 	{
-		return (DNS_RPZ_TYPE_NSIP);
+		return DNS_RPZ_TYPE_NSIP;
 	}
 
 	if ((rpzs->p.nsdname_on & DNS_RPZ_ZBIT(rpz->num)) != 0 &&
 	    dns_name_issubdomain(name, &rpz->nsdname))
 	{
-		return (DNS_RPZ_TYPE_NSDNAME);
+		return DNS_RPZ_TYPE_NSDNAME;
 	}
 
-	return (DNS_RPZ_TYPE_QNAME);
+	return DNS_RPZ_TYPE_QNAME;
 }
 
 /*
@@ -827,7 +861,6 @@ name2ipkey(int log_level, dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 	   const dns_name_t *src_name, dns_rpz_cidr_key_t *tgt_ip,
 	   dns_rpz_prefix_t *tgt_prefix, dns_rpz_addr_zbits_t *new_set) {
 	char ip_str[DNS_NAME_FORMATSIZE];
-	dns_offsets_t ip_name_offsets;
 	dns_fixedname_t ip_name2f;
 	dns_name_t ip_name;
 	const char *prefix_str = NULL, *cp = NULL, *end = NULL;
@@ -851,9 +884,9 @@ name2ipkey(int log_level, dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 	}
 	if (ip_labels < 2) {
 		badname(log_level, src_name, "; too short", "");
-		return (ISC_R_FAILURE);
+		return ISC_R_FAILURE;
 	}
-	dns_name_init(&ip_name, ip_name_offsets);
+	dns_name_init(&ip_name);
 	dns_name_getlabelsequence(src_name, 0, ip_labels, &ip_name);
 
 	/*
@@ -867,7 +900,7 @@ name2ipkey(int log_level, dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 	if (*cp2 != '.') {
 		badname(log_level, src_name, "; invalid leading prefix length",
 			"");
-		return (ISC_R_FAILURE);
+		return ISC_R_FAILURE;
 	}
 	/*
 	 * Patch in trailing nul character to print just the length
@@ -877,7 +910,7 @@ name2ipkey(int log_level, dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 	if (prefix_num < 1U || prefix_num > 128U) {
 		badname(log_level, src_name, "; invalid prefix length of ",
 			prefix_str);
-		return (ISC_R_FAILURE);
+		return ISC_R_FAILURE;
 	}
 	cp = cp2 + 1;
 
@@ -889,7 +922,7 @@ name2ipkey(int log_level, dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 		if (prefix_num > 32U) {
 			badname(log_level, src_name,
 				"; invalid IPv4 prefix length of ", prefix_str);
-			return (ISC_R_FAILURE);
+			return ISC_R_FAILURE;
 		}
 		prefix_num += 96;
 		*tgt_prefix = (dns_rpz_prefix_t)prefix_num;
@@ -905,7 +938,7 @@ name2ipkey(int log_level, dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 				}
 				badname(log_level, src_name,
 					"; invalid IPv4 octet ", cp);
-				return (ISC_R_FAILURE);
+				return ISC_R_FAILURE;
 			}
 			tgt_ip->w[3] |= l << i;
 			cp = cp2 + 1;
@@ -938,7 +971,7 @@ name2ipkey(int log_level, dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 					}
 					badname(log_level, src_name,
 						"; invalid IPv6 word ", cp);
-					return (ISC_R_FAILURE);
+					return ISC_R_FAILURE;
 				}
 				if ((i & 1) == 0) {
 					tgt_ip->w[3 - i / 2] = l;
@@ -952,7 +985,7 @@ name2ipkey(int log_level, dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 	}
 	if (cp != end) {
 		badname(log_level, src_name, "", "");
-		return (ISC_R_FAILURE);
+		return ISC_R_FAILURE;
 	}
 
 	/*
@@ -967,7 +1000,7 @@ name2ipkey(int log_level, dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 		if ((aword & ~DNS_RPZ_WORD_MASK(i)) != 0) {
 			badname(log_level, src_name,
 				"; too small prefix length of ", prefix_str);
-			return (ISC_R_FAILURE);
+			return ISC_R_FAILURE;
 		}
 		prefix -= i;
 		prefix += DNS_RPZ_CIDR_WORD_BITS;
@@ -976,9 +1009,7 @@ name2ipkey(int log_level, dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 	/*
 	 * Complain about bad names but be generous and accept them.
 	 */
-	if (log_level < DNS_RPZ_DEBUG_QUIET &&
-	    isc_log_wouldlog(dns_lctx, log_level))
-	{
+	if (log_level < DNS_RPZ_DEBUG_QUIET && isc_log_wouldlog(log_level)) {
 		/*
 		 * Convert the address back to a canonical domain name
 		 * to ensure that the original name is in canonical form.
@@ -991,15 +1022,15 @@ name2ipkey(int log_level, dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 		{
 			char ip2_str[DNS_NAME_FORMATSIZE];
 			dns_name_format(ip_name2, ip2_str, sizeof(ip2_str));
-			isc_log_write(dns_lctx, DNS_LOGCATEGORY_RPZ,
-				      DNS_LOGMODULE_RBTDB, log_level,
+			isc_log_write(DNS_LOGCATEGORY_RPZ, DNS_LOGMODULE_RPZ,
+				      log_level,
 				      "rpz IP address \"%s\""
 				      " is not the canonical \"%s\"",
 				      ip_str, ip2_str);
 		}
 	}
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 /*
@@ -1009,8 +1040,7 @@ name2ipkey(int log_level, dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 static void
 name2data(dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 	  const dns_name_t *src_name, dns_name_t *trig_name,
-	  dns_rpz_nm_data_t *new_data) {
-	dns_offsets_t tmp_name_offsets;
+	  nmdata_t *new_data) {
 	dns_name_t tmp_name;
 	unsigned int prefix_len, n;
 
@@ -1019,7 +1049,7 @@ name2data(dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 
 	/*
 	 * Handle wildcards by putting only the parent into the
-	 * summary RBT.  The summary database only causes a check of the
+	 * summary database.  The database only causes a check of the
 	 * real policy zone where wildcards will be handled.
 	 */
 	if (dns_name_iswildcard(src_name)) {
@@ -1032,7 +1062,7 @@ name2data(dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 		memset(&new_data->wild, 0, sizeof(new_data->wild));
 	}
 
-	dns_name_init(&tmp_name, tmp_name_offsets);
+	dns_name_init(&tmp_name);
 	n = dns_name_countlabels(src_name);
 	n -= prefix_len;
 	if (rpz_type == DNS_RPZ_TYPE_QNAME) {
@@ -1041,7 +1071,7 @@ name2data(dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 		n -= dns_name_countlabels(&rpz->nsdname);
 	}
 	dns_name_getlabelsequence(src_name, prefix_len, n, &tmp_name);
-	(void)dns_name_concatenate(&tmp_name, dns_rootname, trig_name, NULL);
+	(void)dns_name_concatenate(&tmp_name, dns_rootname, trig_name);
 }
 
 #ifndef HAVE_BUILTIN_CLZ
@@ -1079,7 +1109,7 @@ clz(dns_rpz_cidr_word_t w) {
 		--bit;
 	}
 
-	return (bit);
+	return bit;
 }
 #endif /* ifndef HAVE_BUILTIN_CLZ */
 
@@ -1110,7 +1140,7 @@ diff_keys(const dns_rpz_cidr_key_t *key1, dns_rpz_prefix_t prefix1,
 			break;
 		}
 	}
-	return (ISC_MIN(bit, maxbit));
+	return ISC_MIN(bit, maxbit);
 }
 
 /*
@@ -1129,7 +1159,7 @@ trim_zbits(dns_rpz_zbits_t zbits, dns_rpz_zbits_t found) {
 	x &= (~x + 1);
 	x = (x << 1) - 1;
 	zbits &= x;
-	return (zbits);
+	return zbits;
 }
 
 /*
@@ -1138,24 +1168,20 @@ trim_zbits(dns_rpz_zbits_t zbits, dns_rpz_zbits_t found) {
  *
  * Return ISC_R_SUCCESS, DNS_R_PARTIALMATCH, ISC_R_NOTFOUND,
  *	    and *found=longest match node
- *	or with create==true, ISC_R_EXISTS or ISC_R_NOMEMORY
+ *	or with create==true, ISC_R_EXISTS
  */
 static isc_result_t
 search(dns_rpz_zones_t *rpzs, const dns_rpz_cidr_key_t *tgt_ip,
        dns_rpz_prefix_t tgt_prefix, const dns_rpz_addr_zbits_t *tgt_set,
        bool create, dns_rpz_cidr_node_t **found) {
-	dns_rpz_cidr_node_t *cur = NULL, *parent = NULL, *child = NULL;
+	dns_rpz_cidr_node_t *cur = rpzs->cidr;
+	dns_rpz_cidr_node_t *parent = NULL, *child = NULL;
 	dns_rpz_cidr_node_t *new_parent = NULL, *sibling = NULL;
-	dns_rpz_addr_zbits_t set;
-	int cur_num, child_num;
-	isc_result_t find_result;
+	dns_rpz_addr_zbits_t set = *tgt_set;
+	int cur_num = 0, child_num;
+	isc_result_t find_result = ISC_R_NOTFOUND;
 
-	set = *tgt_set;
-	find_result = ISC_R_NOTFOUND;
 	*found = NULL;
-	cur = rpzs->cidr;
-	parent = NULL;
-	cur_num = 0;
 	for (;;) {
 		dns_rpz_prefix_t dbit;
 		if (cur == NULL) {
@@ -1165,12 +1191,9 @@ search(dns_rpz_zones_t *rpzs, const dns_rpz_cidr_key_t *tgt_ip,
 			 * or add the target as a child of the current parent.
 			 */
 			if (!create) {
-				return (find_result);
+				return find_result;
 			}
 			child = new_node(rpzs, tgt_ip, tgt_prefix, NULL);
-			if (child == NULL) {
-				return (ISC_R_NOMEMORY);
-			}
 			if (parent == NULL) {
 				rpzs->cidr = child;
 			} else {
@@ -1182,7 +1205,7 @@ search(dns_rpz_zones_t *rpzs, const dns_rpz_cidr_key_t *tgt_ip,
 			child->set.nsip |= tgt_set->nsip;
 			set_sum_pair(child);
 			*found = child;
-			return (ISC_R_SUCCESS);
+			return ISC_R_SUCCESS;
 		}
 
 		if ((cur->sum.client_ip & set.client_ip) == 0 &&
@@ -1198,7 +1221,7 @@ search(dns_rpz_zones_t *rpzs, const dns_rpz_cidr_key_t *tgt_ip,
 			 * a node and mark/put this node in the correct tree.
 			 */
 			if (!create) {
-				return (find_result);
+				return find_result;
 			}
 		}
 
@@ -1238,7 +1261,7 @@ search(dns_rpz_zones_t *rpzs, const dns_rpz_cidr_key_t *tgt_ip,
 					*found = cur;
 					find_result = ISC_R_SUCCESS;
 				}
-				return (find_result);
+				return find_result;
 			}
 
 			/*
@@ -1247,13 +1270,10 @@ search(dns_rpz_zones_t *rpzs, const dns_rpz_cidr_key_t *tgt_ip,
 			 * Add the target as the current node's parent.
 			 */
 			if (!create) {
-				return (find_result);
+				return find_result;
 			}
 
 			new_parent = new_node(rpzs, tgt_ip, tgt_prefix, cur);
-			if (new_parent == NULL) {
-				return (ISC_R_NOMEMORY);
-			}
 			new_parent->parent = parent;
 			if (parent == NULL) {
 				rpzs->cidr = new_parent;
@@ -1266,7 +1286,7 @@ search(dns_rpz_zones_t *rpzs, const dns_rpz_cidr_key_t *tgt_ip,
 			new_parent->set = *tgt_set;
 			set_sum_pair(new_parent);
 			*found = new_parent;
-			return (ISC_R_SUCCESS);
+			return ISC_R_SUCCESS;
 		}
 
 		if (dbit == cur->prefix) {
@@ -1300,18 +1320,11 @@ search(dns_rpz_zones_t *rpzs, const dns_rpz_cidr_key_t *tgt_ip,
 		 * add the target as a sibling of the current node
 		 */
 		if (!create) {
-			return (find_result);
+			return find_result;
 		}
 
 		sibling = new_node(rpzs, tgt_ip, tgt_prefix, NULL);
-		if (sibling == NULL) {
-			return (ISC_R_NOMEMORY);
-		}
 		new_parent = new_node(rpzs, tgt_ip, dbit, cur);
-		if (new_parent == NULL) {
-			isc_mem_put(rpzs->mctx, sibling, sizeof(*sibling));
-			return (ISC_R_NOMEMORY);
-		}
 		new_parent->parent = parent;
 		if (parent == NULL) {
 			rpzs->cidr = new_parent;
@@ -1326,7 +1339,7 @@ search(dns_rpz_zones_t *rpzs, const dns_rpz_cidr_key_t *tgt_ip,
 		sibling->set = *tgt_set;
 		set_sum_pair(sibling);
 		*found = sibling;
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 }
 
@@ -1348,9 +1361,10 @@ add_cidr(dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 	 * Log complaints about bad owner names but let the zone load.
 	 */
 	if (result != ISC_R_SUCCESS) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
+	RWLOCK(&rpz->rpzs->search_lock, isc_rwlocktype_write);
 	result = search(rpz->rpzs, &tgt_ip, tgt_prefix, &set, true, &found);
 	if (result != ISC_R_SUCCESS) {
 		char namebuf[DNS_NAME_FORMATSIZE];
@@ -1360,70 +1374,92 @@ add_cidr(dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 		 * because diff_apply() likes to add nodes before deleting.
 		 */
 		if (result == ISC_R_EXISTS) {
-			return (ISC_R_SUCCESS);
+			result = ISC_R_SUCCESS;
+			goto done;
 		}
 
 		/*
 		 * bin/tests/system/rpz/tests.sh looks for "rpz.*failed".
 		 */
 		dns_name_format(src_name, namebuf, sizeof(namebuf));
-		isc_log_write(dns_lctx, DNS_LOGCATEGORY_RPZ,
-			      DNS_LOGMODULE_RBTDB, DNS_RPZ_ERROR_LEVEL,
+		isc_log_write(DNS_LOGCATEGORY_RPZ, DNS_LOGMODULE_RPZ,
+			      DNS_RPZ_ERROR_LEVEL,
 			      "rpz add_cidr(%s) failed: %s", namebuf,
 			      isc_result_totext(result));
-		return (result);
+		goto done;
 	}
 
 	adj_trigger_cnt(rpz, rpz_type, &tgt_ip, tgt_prefix, true);
-	return (result);
+done:
+	RWUNLOCK(&rpz->rpzs->search_lock, isc_rwlocktype_write);
+	return result;
+}
+
+static nmdata_t *
+new_nmdata(isc_mem_t *mctx, const dns_name_t *name, const nmdata_t *data) {
+	nmdata_t *newdata = isc_mem_get(mctx, sizeof(*newdata));
+	*newdata = (nmdata_t){
+		.set = data->set,
+		.wild = data->wild,
+		.name = DNS_NAME_INITEMPTY,
+		.references = ISC_REFCOUNT_INITIALIZER(1),
+	};
+	dns_name_dup(name, mctx, &newdata->name);
+	isc_mem_attach(mctx, &newdata->mctx);
+
+#ifdef DNS_RPZ_TRACE
+	fprintf(stderr, "new_nmdata:%s:%s:%d:%p->references = 1\n", __func__,
+		__FILE__, __LINE__ + 1, name);
+#endif
+
+	return newdata;
 }
 
 static isc_result_t
-add_nm(dns_rpz_zones_t *rpzs, dns_name_t *trig_name,
-       const dns_rpz_nm_data_t *new_data) {
-	dns_rbtnode_t *nmnode = NULL;
-	dns_rpz_nm_data_t *nm_data = NULL;
+add_nm(dns_rpz_zones_t *rpzs, dns_name_t *trig_name, const nmdata_t *new_data) {
 	isc_result_t result;
+	nmdata_t *data = NULL;
+	dns_qp_t *qp = NULL;
 
-	nmnode = NULL;
-	result = dns_rbt_addnode(rpzs->rbt, trig_name, &nmnode);
-	switch (result) {
-	case ISC_R_SUCCESS:
-	case ISC_R_EXISTS:
-		nm_data = nmnode->data;
-		if (nm_data == NULL) {
-			nm_data = isc_mem_get(rpzs->mctx, sizeof(*nm_data));
-			*nm_data = *new_data;
-			nmnode->data = nm_data;
-			return (ISC_R_SUCCESS);
-		}
-		break;
-	default:
-		return (result);
+	dns_qpmulti_write(rpzs->table, &qp);
+	result = dns_qp_getname(qp, trig_name, DNS_DBNAMESPACE_NORMAL,
+				(void **)&data, NULL);
+	if (result != ISC_R_SUCCESS) {
+		INSIST(data == NULL);
+		data = new_nmdata(rpzs->mctx, trig_name, new_data);
+		result = dns_qp_insert(qp, data, 0);
+		nmdata_detach(&data);
+		goto done;
 	}
 
 	/*
 	 * Do not count bits that are already present
 	 */
-	if ((nm_data->set.qname & new_data->set.qname) != 0 ||
-	    (nm_data->set.ns & new_data->set.ns) != 0 ||
-	    (nm_data->wild.qname & new_data->wild.qname) != 0 ||
-	    (nm_data->wild.ns & new_data->wild.ns) != 0)
+	if ((data->set.qname & new_data->set.qname) != 0 ||
+	    (data->set.ns & new_data->set.ns) != 0 ||
+	    (data->wild.qname & new_data->wild.qname) != 0 ||
+	    (data->wild.ns & new_data->wild.ns) != 0)
 	{
-		return (ISC_R_EXISTS);
+		result = ISC_R_EXISTS;
 	}
 
-	nm_data->set.qname |= new_data->set.qname;
-	nm_data->set.ns |= new_data->set.ns;
-	nm_data->wild.qname |= new_data->wild.qname;
-	nm_data->wild.ns |= new_data->wild.ns;
-	return (ISC_R_SUCCESS);
+	/* copy in the bits from the new data */
+	data->set.qname |= new_data->set.qname;
+	data->set.ns |= new_data->set.ns;
+	data->wild.qname |= new_data->wild.qname;
+	data->wild.ns |= new_data->wild.ns;
+
+done:
+	dns_qp_compact(qp, DNS_QPGC_MAYBE);
+	dns_qpmulti_commit(rpzs->table, &qp);
+
+	return result;
 }
 
 static isc_result_t
 add_name(dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 	 const dns_name_t *src_name) {
-	dns_rpz_nm_data_t new_data;
+	nmdata_t new_data;
 	dns_fixedname_t trig_namef;
 	dns_name_t *trig_name = NULL;
 	isc_result_t result;
@@ -1443,38 +1479,31 @@ add_name(dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 	 * because diff_apply() likes to add nodes before deleting.
 	 */
 	if (result == ISC_R_EXISTS) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	if (result == ISC_R_SUCCESS) {
+		RWLOCK(&rpz->rpzs->search_lock, isc_rwlocktype_write);
 		adj_trigger_cnt(rpz, rpz_type, NULL, 0, true);
+		RWUNLOCK(&rpz->rpzs->search_lock, isc_rwlocktype_write);
 	}
-	return (result);
-}
-
-/*
- * Callback to free the data for a node in the summary RBT database.
- */
-static void
-rpz_node_deleter(void *nm_data, void *mctx) {
-	isc_mem_put(mctx, nm_data, sizeof(dns_rpz_nm_data_t));
+	return result;
 }
 
 /*
  * Get ready for a new set of policy zones for a view.
  */
 isc_result_t
-dns_rpz_new_zones(isc_mem_t *mctx, isc_loopmgr_t *loopmgr, char *rps_cstr,
-		  size_t rps_cstr_size, dns_rpz_zones_t **rpzsp) {
+dns_rpz_new_zones(dns_view_t *view, dns_rpz_zones_t **rpzsp) {
 	dns_rpz_zones_t *rpzs = NULL;
-	isc_result_t result = ISC_R_SUCCESS;
+	isc_mem_t *mctx = NULL;
 
 	REQUIRE(rpzsp != NULL && *rpzsp == NULL);
+	REQUIRE(view != NULL);
+
+	mctx = view->mctx;
 
 	rpzs = isc_mem_get(mctx, sizeof(*rpzs));
 	*rpzs = (dns_rpz_zones_t){
-		.rps_cstr = rps_cstr,
-		.rps_cstr_size = rps_cstr_size,
-		.loopmgr = loopmgr,
 		.magic = DNS_RPZ_ZONES_MAGIC,
 	};
 
@@ -1482,38 +1511,12 @@ dns_rpz_new_zones(isc_mem_t *mctx, isc_loopmgr_t *loopmgr, char *rps_cstr,
 	isc_mutex_init(&rpzs->maint_lock);
 	isc_refcount_init(&rpzs->references, 1);
 
-#ifdef USE_DNSRPS
-	if (rps_cstr != NULL) {
-		result = dns_dnsrps_view_init(rpzs, rps_cstr);
-		if (result != ISC_R_SUCCESS) {
-			goto cleanup_rbt;
-		}
-	}
-#else  /* ifdef USE_DNSRPS */
-	INSIST(!rpzs->p.dnsrps_enabled);
-#endif /* ifdef USE_DNSRPS */
-	if (!rpzs->p.dnsrps_enabled) {
-		result = dns_rbt_create(mctx, rpz_node_deleter, mctx,
-					&rpzs->rbt);
-	}
-
-	if (result != ISC_R_SUCCESS) {
-		goto cleanup_rbt;
-	}
+	dns_qpmulti_create(mctx, &qpmethods, view, &rpzs->table);
 
 	isc_mem_attach(mctx, &rpzs->mctx);
 
 	*rpzsp = rpzs;
-	return (ISC_R_SUCCESS);
-
-cleanup_rbt:
-	isc_refcount_decrementz(&rpzs->references);
-	isc_refcount_destroy(&rpzs->references);
-	isc_mutex_destroy(&rpzs->maint_lock);
-	isc_rwlock_destroy(&rpzs->search_lock);
-	isc_mem_put(mctx, rpzs, sizeof(*rpzs));
-
-	return (result);
+	return ISC_R_SUCCESS;
 }
 
 isc_result_t
@@ -1525,12 +1528,12 @@ dns_rpz_new_zone(dns_rpz_zones_t *rpzs, dns_rpz_zone_t **rpzp) {
 	REQUIRE(rpzp != NULL && *rpzp == NULL);
 
 	if (rpzs->p.num_zones >= DNS_RPZ_MAX_ZONES) {
-		return (ISC_R_NOSPACE);
+		return ISC_R_NOSPACE;
 	}
 
 	result = dns__rpz_shuttingdown(rpzs);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	rpz = isc_mem_get(rpzs->mctx, sizeof(*rpz));
@@ -1547,15 +1550,15 @@ dns_rpz_new_zone(dns_rpz_zones_t *rpzs, dns_rpz_zone_t **rpzp) {
 
 	isc_ht_init(&rpz->nodes, rpzs->mctx, 1, ISC_HT_CASE_SENSITIVE);
 
-	dns_name_init(&rpz->origin, NULL);
-	dns_name_init(&rpz->client_ip, NULL);
-	dns_name_init(&rpz->ip, NULL);
-	dns_name_init(&rpz->nsdname, NULL);
-	dns_name_init(&rpz->nsip, NULL);
-	dns_name_init(&rpz->passthru, NULL);
-	dns_name_init(&rpz->drop, NULL);
-	dns_name_init(&rpz->tcp_only, NULL);
-	dns_name_init(&rpz->cname, NULL);
+	dns_name_init(&rpz->origin);
+	dns_name_init(&rpz->client_ip);
+	dns_name_init(&rpz->ip);
+	dns_name_init(&rpz->nsdname);
+	dns_name_init(&rpz->nsip);
+	dns_name_init(&rpz->passthru);
+	dns_name_init(&rpz->drop);
+	dns_name_init(&rpz->tcp_only);
+	dns_name_init(&rpz->cname);
 
 	isc_time_settoepoch(&rpz->lastupdated);
 
@@ -1564,7 +1567,7 @@ dns_rpz_new_zone(dns_rpz_zones_t *rpzs, dns_rpz_zone_t **rpzp) {
 
 	*rpzp = rpz;
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 isc_result_t
@@ -1608,8 +1611,8 @@ dns_rpz_dbupdate_callback(dns_db_t *db, void *fn_arg) {
 		rpz->updatepending = true;
 
 		dns_name_format(&rpz->origin, dname, DNS_NAME_FORMATSIZE);
-		isc_log_write(dns_lctx, DNS_LOGCATEGORY_GENERAL,
-			      DNS_LOGMODULE_MASTER, ISC_LOG_DEBUG(3),
+		isc_log_write(DNS_LOGCATEGORY_GENERAL, DNS_LOGMODULE_RPZ,
+			      ISC_LOG_DEBUG(3),
 			      "rpz: %s: update already queued or running",
 			      dname);
 		if (rpz->dbversion != NULL) {
@@ -1621,9 +1624,24 @@ dns_rpz_dbupdate_callback(dns_db_t *db, void *fn_arg) {
 unlock:
 	UNLOCK(&rpz->rpzs->maint_lock);
 
-	return (result);
+	return result;
 }
 
+void
+dns_rpz_dbupdate_unregister(dns_db_t *db, dns_rpz_zone_t *rpz) {
+	REQUIRE(DNS_DB_VALID(db));
+	REQUIRE(DNS_RPZ_ZONE_VALID(rpz));
+
+	dns_db_updatenotify_unregister(db, dns_rpz_dbupdate_callback, rpz);
+}
+
+void
+dns_rpz_dbupdate_register(dns_db_t *db, dns_rpz_zone_t *rpz) {
+	REQUIRE(DNS_DB_VALID(db));
+	REQUIRE(DNS_RPZ_ZONE_VALID(rpz));
+
+	dns_db_updatenotify_register(db, dns_rpz_dbupdate_callback, rpz);
+}
 static void
 dns__rpz_timer_start(dns_rpz_zone_t *rpz) {
 	uint64_t tdiff;
@@ -1639,8 +1657,8 @@ dns__rpz_timer_start(dns_rpz_zone_t *rpz) {
 		char dname[DNS_NAME_FORMATSIZE];
 
 		dns_name_format(&rpz->origin, dname, DNS_NAME_FORMATSIZE);
-		isc_log_write(dns_lctx, DNS_LOGCATEGORY_GENERAL,
-			      DNS_LOGMODULE_MASTER, ISC_LOG_INFO,
+		isc_log_write(DNS_LOGCATEGORY_GENERAL, DNS_LOGMODULE_RPZ,
+			      ISC_LOG_INFO,
 			      "rpz: %s: new zone version came "
 			      "too soon, deferring update for "
 			      "%" PRIu64 " seconds",
@@ -1650,7 +1668,7 @@ dns__rpz_timer_start(dns_rpz_zone_t *rpz) {
 		isc_interval_set(&interval, 0, 0);
 	}
 
-	rpz->loop = isc_loop_current(rpz->rpzs->loopmgr);
+	rpz->loop = isc_loop();
 
 	isc_timer_create(rpz->loop, dns__rpz_timer_cb, rpz, &rpz->updatetimer);
 	isc_timer_start(rpz->updatetimer, isc_timertype_once, &interval);
@@ -1665,7 +1683,7 @@ dns__rpz_timer_stop(void *arg) {
 	isc_timer_destroy(&rpz->updatetimer);
 	rpz->loop = NULL;
 
-	dns_rpz_unref_rpzs(rpz->rpzs);
+	dns_rpz_zones_unref(rpz->rpzs);
 }
 
 static void
@@ -1690,11 +1708,11 @@ update_rpz_done_cb(void *data) {
 
 	UNLOCK(&rpz->rpzs->maint_lock);
 
-	isc_log_write(dns_lctx, DNS_LOGCATEGORY_GENERAL, DNS_LOGMODULE_MASTER,
-		      ISC_LOG_INFO, "rpz: %s: reload done: %s", dname,
+	isc_log_write(DNS_LOGCATEGORY_GENERAL, DNS_LOGMODULE_RPZ, ISC_LOG_INFO,
+		      "rpz: %s: reload done: %s", dname,
 		      isc_result_totext(rpz->updateresult));
 
-	dns_rpz_unref_rpzs(rpz->rpzs);
+	dns_rpz_zones_unref(rpz->rpzs);
 }
 
 static isc_result_t
@@ -1711,17 +1729,17 @@ update_nodes(dns_rpz_zone_t *rpz, isc_ht_t *newnodes) {
 
 	result = dns_db_createiterator(rpz->updb, DNS_DB_NONSEC3, &updbit);
 	if (result != ISC_R_SUCCESS) {
-		isc_log_write(dns_lctx, DNS_LOGCATEGORY_GENERAL,
-			      DNS_LOGMODULE_MASTER, ISC_LOG_ERROR,
+		isc_log_write(DNS_LOGCATEGORY_GENERAL, DNS_LOGMODULE_RPZ,
+			      ISC_LOG_ERROR,
 			      "rpz: %s: failed to create DB iterator - %s",
 			      domain, isc_result_totext(result));
-		return (result);
+		return result;
 	}
 
 	result = dns_dbiterator_first(updbit);
 	if (result != ISC_R_SUCCESS && result != ISC_R_NOMORE) {
-		isc_log_write(dns_lctx, DNS_LOGCATEGORY_GENERAL,
-			      DNS_LOGMODULE_MASTER, ISC_LOG_ERROR,
+		isc_log_write(DNS_LOGCATEGORY_GENERAL, DNS_LOGMODULE_RPZ,
+			      ISC_LOG_ERROR,
 			      "rpz: %s: failed to get db iterator - %s", domain,
 			      isc_result_totext(result));
 		goto cleanup;
@@ -1739,8 +1757,8 @@ update_nodes(dns_rpz_zone_t *rpz, isc_ht_t *newnodes) {
 
 		result = dns_dbiterator_current(updbit, &node, name);
 		if (result != ISC_R_SUCCESS) {
-			isc_log_write(dns_lctx, DNS_LOGCATEGORY_GENERAL,
-				      DNS_LOGMODULE_MASTER, ISC_LOG_ERROR,
+			isc_log_write(DNS_LOGCATEGORY_GENERAL,
+				      DNS_LOGMODULE_RPZ, ISC_LOG_ERROR,
 				      "rpz: %s: failed to get dbiterator - %s",
 				      domain, isc_result_totext(result));
 			goto cleanup;
@@ -1752,8 +1770,8 @@ update_nodes(dns_rpz_zone_t *rpz, isc_ht_t *newnodes) {
 		result = dns_db_allrdatasets(rpz->updb, node, rpz->updbversion,
 					     0, 0, &rdsiter);
 		if (result != ISC_R_SUCCESS) {
-			isc_log_write(dns_lctx, DNS_LOGCATEGORY_GENERAL,
-				      DNS_LOGMODULE_MASTER, ISC_LOG_ERROR,
+			isc_log_write(DNS_LOGCATEGORY_GENERAL,
+				      DNS_LOGMODULE_RPZ, ISC_LOG_ERROR,
 				      "rpz: %s: failed to fetch "
 				      "rrdatasets - %s",
 				      domain, isc_result_totext(result));
@@ -1769,8 +1787,8 @@ update_nodes(dns_rpz_zone_t *rpz, isc_ht_t *newnodes) {
 		if (result != ISC_R_SUCCESS) { /* skip empty non-terminal */
 			if (result != ISC_R_NOMORE) {
 				isc_log_write(
-					dns_lctx, DNS_LOGCATEGORY_GENERAL,
-					DNS_LOGMODULE_MASTER, ISC_LOG_ERROR,
+					DNS_LOGCATEGORY_GENERAL,
+					DNS_LOGMODULE_RPZ, ISC_LOG_ERROR,
 					"rpz: %s: error %s while creating "
 					"rdatasetiter",
 					domain, isc_result_totext(result));
@@ -1778,14 +1796,14 @@ update_nodes(dns_rpz_zone_t *rpz, isc_ht_t *newnodes) {
 			goto next;
 		}
 
-		dns_name_downcase(name, name, NULL);
+		dns_name_downcase(name, name);
 
 		/* Add entry to the new nodes table */
 		result = isc_ht_add(newnodes, name->ndata, name->length, rpz);
 		if (result != ISC_R_SUCCESS) {
 			dns_name_format(name, namebuf, sizeof(namebuf));
-			isc_log_write(dns_lctx, DNS_LOGCATEGORY_GENERAL,
-				      DNS_LOGMODULE_MASTER, ISC_LOG_ERROR,
+			isc_log_write(DNS_LOGCATEGORY_GENERAL,
+				      DNS_LOGMODULE_RPZ, ISC_LOG_ERROR,
 				      "rpz: %s, adding node %s to HT error %s",
 				      domain, namebuf,
 				      isc_result_totext(result));
@@ -1811,16 +1829,16 @@ update_nodes(dns_rpz_zone_t *rpz, isc_ht_t *newnodes) {
 
 		if (result != ISC_R_SUCCESS) {
 			dns_name_format(name, namebuf, sizeof(namebuf));
-			isc_log_write(dns_lctx, DNS_LOGCATEGORY_GENERAL,
-				      DNS_LOGMODULE_MASTER, ISC_LOG_ERROR,
+			isc_log_write(DNS_LOGCATEGORY_GENERAL,
+				      DNS_LOGMODULE_RPZ, ISC_LOG_ERROR,
 				      "rpz: %s: adding node %s "
 				      "to RPZ error %s",
 				      domain, namebuf,
 				      isc_result_totext(result));
-		} else if (isc_log_wouldlog(dns_lctx, ISC_LOG_DEBUG(3))) {
+		} else if (isc_log_wouldlog(ISC_LOG_DEBUG(3))) {
 			dns_name_format(name, namebuf, sizeof(namebuf));
-			isc_log_write(dns_lctx, DNS_LOGCATEGORY_GENERAL,
-				      DNS_LOGMODULE_MASTER, ISC_LOG_DEBUG(3),
+			isc_log_write(DNS_LOGCATEGORY_GENERAL,
+				      DNS_LOGMODULE_RPZ, ISC_LOG_DEBUG(3),
 				      "rpz: %s: adding node %s", domain,
 				      namebuf);
 		}
@@ -1836,7 +1854,7 @@ update_nodes(dns_rpz_zone_t *rpz, isc_ht_t *newnodes) {
 cleanup:
 	dns_dbiterator_destroy(&updbit);
 
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -1878,7 +1896,7 @@ cleanup_nodes(dns_rpz_zone_t *rpz) {
 
 	isc_ht_iter_destroy(&iter);
 
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -1890,10 +1908,10 @@ dns__rpz_shuttingdown(dns_rpz_zones_t *rpzs) {
 	UNLOCK(&rpzs->maint_lock);
 
 	if (shuttingdown) {
-		return (ISC_R_SHUTTINGDOWN);
+		return ISC_R_SHUTTINGDOWN;
 	}
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static void
@@ -1957,10 +1975,10 @@ dns__rpz_timer_cb(void *arg) {
 	rpz->dbversion = NULL;
 
 	dns_name_format(&rpz->origin, domain, DNS_NAME_FORMATSIZE);
-	isc_log_write(dns_lctx, DNS_LOGCATEGORY_GENERAL, DNS_LOGMODULE_MASTER,
-		      ISC_LOG_INFO, "rpz: %s: reload start", domain);
+	isc_log_write(DNS_LOGCATEGORY_GENERAL, DNS_LOGMODULE_RPZ, ISC_LOG_INFO,
+		      "rpz: %s: reload start", domain);
 
-	dns_rpz_ref_rpzs(rpz->rpzs);
+	dns_rpz_zones_ref(rpz->rpzs);
 	isc_work_enqueue(rpz->loop, update_rpz_cb, update_rpz_done_cb, rpz);
 
 	isc_timer_destroy(&rpz->updatetimer);
@@ -2011,7 +2029,7 @@ dns__rpz_shutdown(dns_rpz_zone_t *rpz) {
 		/* Don't wait for timer to trigger for shutdown */
 		INSIST(rpz->loop != NULL);
 
-		dns_rpz_ref_rpzs(rpz->rpzs);
+		dns_rpz_zones_ref(rpz->rpzs);
 		isc_async_run(rpz->loop, dns__rpz_timer_stop, rpz);
 	}
 }
@@ -2073,8 +2091,6 @@ static void
 dns__rpz_zones_destroy(dns_rpz_zones_t *rpzs) {
 	REQUIRE(rpzs->shuttingdown);
 
-	isc_refcount_destroy(&rpzs->references);
-
 	for (dns_rpz_num_t rpz_num = 0; rpz_num < DNS_RPZ_MAX_ZONES; ++rpz_num)
 	{
 		if (rpzs->zones[rpz_num] == NULL) {
@@ -2084,17 +2100,11 @@ dns__rpz_zones_destroy(dns_rpz_zones_t *rpzs) {
 		dns_rpz_zone_destroy(&rpzs->zones[rpz_num]);
 	}
 
-	if (rpzs->rps_cstr_size != 0) {
-#ifdef USE_DNSRPS
-		librpz->client_detach(&rpzs->rps_client);
-#endif /* ifdef USE_DNSRPS */
-		isc_mem_put(rpzs->mctx, rpzs->rps_cstr, rpzs->rps_cstr_size);
+	cidr_free(rpzs);
+	if (rpzs->table != NULL) {
+		dns_qpmulti_destroy(&rpzs->table);
 	}
 
-	cidr_free(rpzs);
-	if (rpzs->rbt != NULL) {
-		dns_rbt_destroy(&rpzs->rbt);
-	}
 	isc_mutex_destroy(&rpzs->maint_lock);
 	isc_rwlock_destroy(&rpzs->search_lock);
 	isc_mem_putanddetach(&rpzs->mctx, rpzs, sizeof(*rpzs));
@@ -2149,10 +2159,7 @@ rpz_add(dns_rpz_zone_t *rpz, const dns_name_t *src_name) {
 
 	REQUIRE(rpzs != NULL && rpz_num < rpzs->p.num_zones);
 
-	RWLOCK(&rpzs->search_lock, isc_rwlocktype_write);
-
 	rpz_type = type_from_name(rpzs, rpz, src_name);
-
 	switch (rpz_type) {
 	case DNS_RPZ_TYPE_QNAME:
 	case DNS_RPZ_TYPE_NSDNAME:
@@ -2166,9 +2173,8 @@ rpz_add(dns_rpz_zone_t *rpz, const dns_name_t *src_name) {
 	case DNS_RPZ_TYPE_BAD:
 		break;
 	}
-	RWUNLOCK(&rpzs->search_lock, isc_rwlocktype_write);
 
-	return (result);
+	return result;
 }
 
 /*
@@ -2186,7 +2192,7 @@ del_cidr(dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 	/*
 	 * Do not worry about invalid rpz IP address names.  If we
 	 * are here, then something relevant was added and so was
-	 * valid.  Invalid names here are usually internal RBTDB nodes.
+	 * valid.
 	 */
 	result = name2ipkey(DNS_RPZ_DEBUG_QUIET, rpz, rpz_type, src_name,
 			    &tgt_ip, &tgt_prefix, &tgt_set);
@@ -2194,22 +2200,14 @@ del_cidr(dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 		return;
 	}
 
+	RWLOCK(&rpz->rpzs->search_lock, isc_rwlocktype_write);
 	result = search(rpz->rpzs, &tgt_ip, tgt_prefix, &tgt_set, false, &tgt);
 	if (result != ISC_R_SUCCESS) {
-		INSIST(result == ISC_R_NOTFOUND ||
-		       result == DNS_R_PARTIALMATCH);
-		/*
-		 * Do not worry about missing summary RBT nodes that probably
-		 * correspond to RBTDB nodes that were implicit RBT nodes
-		 * that were later added for (often empty) wildcards
-		 * and then to the RBTDB deferred cleanup list.
-		 */
-		return;
+		goto done;
 	}
 
 	/*
 	 * Mark the node and its parents to reflect the deleted IP address.
-	 * Do not count bits that are already clear for internal RBTDB nodes.
 	 */
 	tgt_set.client_ip &= tgt->set.client_ip;
 	tgt_set.ip &= tgt->set.ip;
@@ -2264,19 +2262,25 @@ del_cidr(dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 
 		tgt = parent;
 	} while (tgt != NULL);
+
+done:
+	RWUNLOCK(&rpz->rpzs->search_lock, isc_rwlocktype_write);
 }
 
 static void
 del_name(dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 	 const dns_name_t *src_name) {
+	isc_result_t result;
 	char namebuf[DNS_NAME_FORMATSIZE];
 	dns_fixedname_t trig_namef;
 	dns_name_t *trig_name = NULL;
-	dns_rbtnode_t *nmnode = NULL;
-	dns_rpz_nm_data_t *nm_data = NULL;
-	dns_rpz_nm_data_t del_data;
-	isc_result_t result;
+	dns_rpz_zones_t *rpzs = rpz->rpzs;
+	nmdata_t *data = NULL;
+	nmdata_t del_data;
+	dns_qp_t *qp = NULL;
 	bool exists;
+
+	dns_qpmulti_write(rpzs->table, &qp);
 
 	/*
 	 * We need a summary database of names even with 1 policy zone,
@@ -2286,59 +2290,40 @@ del_name(dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 	trig_name = dns_fixedname_initname(&trig_namef);
 	name2data(rpz, rpz_type, src_name, trig_name, &del_data);
 
-	nmnode = NULL;
-	result = dns_rbt_findnode(rpz->rpzs->rbt, trig_name, NULL, &nmnode,
-				  NULL, 0, NULL, NULL);
+	result = dns_qp_getname(qp, trig_name, DNS_DBNAMESPACE_NORMAL,
+				(void **)&data, NULL);
 	if (result != ISC_R_SUCCESS) {
-		/*
-		 * Do not worry about missing summary RBT nodes that probably
-		 * correspond to RBTDB nodes that were implicit RBT nodes
-		 * that were later added for (often empty) wildcards
-		 * and then to the RBTDB deferred cleanup list.
-		 */
-		if (result == ISC_R_NOTFOUND || result == DNS_R_PARTIALMATCH) {
-			return;
-		}
-		dns_name_format(src_name, namebuf, sizeof(namebuf));
-		isc_log_write(dns_lctx, DNS_LOGCATEGORY_RPZ,
-			      DNS_LOGMODULE_RBTDB, DNS_RPZ_ERROR_LEVEL,
-			      "rpz del_name(%s) node search failed: %s",
-			      namebuf, isc_result_totext(result));
 		return;
 	}
 
-	nm_data = nmnode->data;
-	INSIST(nm_data != NULL);
+	INSIST(data != NULL);
 
-	/*
-	 * Do not count bits that next existed for RBT nodes that would we
-	 * would not have found in a summary for a single RBTDB tree.
-	 */
-	del_data.set.qname &= nm_data->set.qname;
-	del_data.set.ns &= nm_data->set.ns;
-	del_data.wild.qname &= nm_data->wild.qname;
-	del_data.wild.ns &= nm_data->wild.ns;
+	del_data.set.qname &= data->set.qname;
+	del_data.set.ns &= data->set.ns;
+	del_data.wild.qname &= data->wild.qname;
+	del_data.wild.ns &= data->wild.ns;
 
 	exists = (del_data.set.qname != 0 || del_data.set.ns != 0 ||
 		  del_data.wild.qname != 0 || del_data.wild.ns != 0);
 
-	nm_data->set.qname &= ~del_data.set.qname;
-	nm_data->set.ns &= ~del_data.set.ns;
-	nm_data->wild.qname &= ~del_data.wild.qname;
-	nm_data->wild.ns &= ~del_data.wild.ns;
+	data->set.qname &= ~del_data.set.qname;
+	data->set.ns &= ~del_data.set.ns;
+	data->wild.qname &= ~del_data.wild.qname;
+	data->wild.ns &= ~del_data.wild.ns;
 
-	if (nm_data->set.qname == 0 && nm_data->set.ns == 0 &&
-	    nm_data->wild.qname == 0 && nm_data->wild.ns == 0)
+	if (data->set.qname == 0 && data->set.ns == 0 &&
+	    data->wild.qname == 0 && data->wild.ns == 0)
 	{
-		result = dns_rbt_deletenode(rpz->rpzs->rbt, nmnode, false);
+		result = dns_qp_deletename(qp, trig_name,
+					   DNS_DBNAMESPACE_NORMAL, NULL, NULL);
 		if (result != ISC_R_SUCCESS) {
 			/*
 			 * bin/tests/system/rpz/tests.sh looks for
 			 * "rpz.*failed".
 			 */
 			dns_name_format(src_name, namebuf, sizeof(namebuf));
-			isc_log_write(dns_lctx, DNS_LOGCATEGORY_RPZ,
-				      DNS_LOGMODULE_RBTDB, DNS_RPZ_ERROR_LEVEL,
+			isc_log_write(DNS_LOGCATEGORY_RPZ, DNS_LOGMODULE_RPZ,
+				      DNS_RPZ_ERROR_LEVEL,
 				      "rpz del_name(%s) node delete "
 				      "failed: %s",
 				      namebuf, isc_result_totext(result));
@@ -2346,8 +2331,13 @@ del_name(dns_rpz_zone_t *rpz, dns_rpz_type_t rpz_type,
 	}
 
 	if (exists) {
+		RWLOCK(&rpz->rpzs->search_lock, isc_rwlocktype_write);
 		adj_trigger_cnt(rpz, rpz_type, NULL, 0, false);
+		RWUNLOCK(&rpz->rpzs->search_lock, isc_rwlocktype_write);
 	}
+
+	dns_qp_compact(qp, DNS_QPGC_MAYBE);
+	dns_qpmulti_commit(rpzs->table, &qp);
 }
 
 /*
@@ -2366,10 +2356,7 @@ rpz_del(dns_rpz_zone_t *rpz, const dns_name_t *src_name) {
 
 	REQUIRE(rpzs != NULL && rpz_num < rpzs->p.num_zones);
 
-	RWLOCK(&rpzs->search_lock, isc_rwlocktype_write);
-
 	rpz_type = type_from_name(rpzs, rpz, src_name);
-
 	switch (rpz_type) {
 	case DNS_RPZ_TYPE_QNAME:
 	case DNS_RPZ_TYPE_NSDNAME:
@@ -2383,8 +2370,6 @@ rpz_del(dns_rpz_zone_t *rpz, const dns_name_t *src_name) {
 	case DNS_RPZ_TYPE_BAD:
 		break;
 	}
-
-	RWUNLOCK(&rpzs->search_lock, isc_rwlocktype_write);
 }
 
 /*
@@ -2460,11 +2445,11 @@ dns_rpz_find_ip(dns_rpz_zones_t *rpzs, dns_rpz_type_t rpz_type,
 			break;
 		}
 	} else {
-		return (DNS_RPZ_INVALID_NUM);
+		return DNS_RPZ_INVALID_NUM;
 	}
 
 	if (zbits == 0) {
-		return (DNS_RPZ_INVALID_NUM);
+		return DNS_RPZ_INVALID_NUM;
 	}
 	make_addr_set(&tgt_set, zbits, rpz_type);
 
@@ -2475,7 +2460,7 @@ dns_rpz_find_ip(dns_rpz_zones_t *rpzs, dns_rpz_type_t rpz_type,
 		 * There are no eligible zones for this IP address.
 		 */
 		RWUNLOCK(&rpzs->search_lock, isc_rwlocktype_read);
-		return (DNS_RPZ_INVALID_NUM);
+		return DNS_RPZ_INVALID_NUM;
 	}
 
 	/*
@@ -2502,13 +2487,12 @@ dns_rpz_find_ip(dns_rpz_zones_t *rpzs, dns_rpz_type_t rpz_type,
 		/*
 		 * bin/tests/system/rpz/tests.sh looks for "rpz.*failed".
 		 */
-		isc_log_write(dns_lctx, DNS_LOGCATEGORY_RPZ,
-			      DNS_LOGMODULE_RBTDB, DNS_RPZ_ERROR_LEVEL,
-			      "rpz ip2name() failed: %s",
+		isc_log_write(DNS_LOGCATEGORY_RPZ, DNS_LOGMODULE_RPZ,
+			      DNS_RPZ_ERROR_LEVEL, "rpz ip2name() failed: %s",
 			      isc_result_totext(result));
-		return (DNS_RPZ_INVALID_NUM);
+		return DNS_RPZ_INVALID_NUM;
 	}
-	return (rpz_num);
+	return rpz_num;
 }
 
 /*
@@ -2518,92 +2502,42 @@ dns_rpz_find_ip(dns_rpz_zones_t *rpzs, dns_rpz_type_t rpz_type,
 dns_rpz_zbits_t
 dns_rpz_find_name(dns_rpz_zones_t *rpzs, dns_rpz_type_t rpz_type,
 		  dns_rpz_zbits_t zbits, dns_name_t *trig_name) {
-	char namebuf[DNS_NAME_FORMATSIZE];
-	dns_rbtnode_t *nmnode = NULL;
-	const dns_rpz_nm_data_t *nm_data = NULL;
-	dns_rpz_zbits_t found_zbits;
-	dns_rbtnodechain_t chain;
 	isc_result_t result;
+	char namebuf[DNS_NAME_FORMATSIZE];
+	nmdata_t *data = NULL;
+	dns_rpz_zbits_t found_zbits = 0;
+	dns_qpchain_t chain;
+	dns_qpread_t qpr;
 	int i;
 
 	if (zbits == 0) {
-		return (0);
+		return 0;
 	}
 
-	found_zbits = 0;
+	dns_qpmulti_query(rpzs->table, &qpr);
+	dns_qpchain_init(&qpr, &chain);
 
-	dns_rbtnodechain_init(&chain);
-
-	RWLOCK(&rpzs->search_lock, isc_rwlocktype_read);
-
-	nmnode = NULL;
-	result = dns_rbt_findnode(rpzs->rbt, trig_name, NULL, &nmnode, &chain,
-				  DNS_RBTFIND_EMPTYDATA, NULL, NULL);
-
+	result = dns_qp_lookup(&qpr, trig_name, DNS_DBNAMESPACE_NORMAL, NULL,
+			       NULL, &chain, (void **)&data, NULL);
 	switch (result) {
 	case ISC_R_SUCCESS:
-		nm_data = nmnode->data;
-		if (nm_data != NULL) {
-			if (rpz_type == DNS_RPZ_TYPE_QNAME) {
-				found_zbits = nm_data->set.qname;
-			} else {
-				found_zbits = nm_data->set.ns;
-			}
+		INSIST(data != NULL);
+		if (rpz_type == DNS_RPZ_TYPE_QNAME) {
+			found_zbits = data->set.qname;
+		} else {
+			found_zbits = data->set.ns;
 		}
 		FALLTHROUGH;
 
 	case DNS_R_PARTIALMATCH:
-		i = chain.level_matches;
-		nmnode = chain.levels[chain.level_matches];
-
-		/*
-		 * Whenever an exact match is found by dns_rbt_findnode(),
-		 * the highest level node in the chain will not be put into
-		 * chain->levels[] array, but instead the chain->end
-		 * pointer will be adjusted to point to that node.
-		 *
-		 * Suppose we have the following entries in a rpz zone:
-		 *   example.com     CNAME rpz-passthru.
-		 *   *.example.com   CNAME rpz-passthru.
-		 *
-		 * A query for www.example.com would result in the
-		 * following chain object returned by dns_rbt_findnode():
-		 *   chain->level_count = 2
-		 *   chain->level_matches = 2
-		 *   chain->levels[0] = .
-		 *   chain->levels[1] = example.com
-		 *   chain->levels[2] = NULL
-		 *   chain->end = www
-		 *
-		 * Since exact matches only care for testing rpz set bits,
-		 * we need to test for rpz wild bits through iterating the
-		 * nodechain, and that includes testing the rpz wild bits
-		 * in the highest level node found. In the case of an exact
-		 * match, chain->levels[chain->level_matches] will be NULL,
-		 * to address that we must use chain->end as the start
-		 * point, then iterate over the remaining levels in the
-		 * chain.
-		 */
-		if (nmnode == NULL) {
-			--i;
-			nmnode = chain.end;
-		}
-
-		while (nmnode != NULL) {
-			nm_data = nmnode->data;
-			if (nm_data != NULL) {
-				if (rpz_type == DNS_RPZ_TYPE_QNAME) {
-					found_zbits |= nm_data->wild.qname;
-				} else {
-					found_zbits |= nm_data->wild.ns;
-				}
-			}
-
-			if (i >= 0) {
-				nmnode = chain.levels[i];
-				--i;
+		i = dns_qpchain_length(&chain);
+		while (i-- > 0) {
+			dns_qpchain_node(&chain, i, NULL, (void **)&data, NULL);
+			INSIST(data != NULL);
+			if (rpz_type == DNS_RPZ_TYPE_QNAME) {
+				found_zbits |= data->wild.qname;
 			} else {
-				break;
+				found_zbits |= data->wild.ns;
 			}
 		}
 		break;
@@ -2616,18 +2550,15 @@ dns_rpz_find_name(dns_rpz_zones_t *rpzs, dns_rpz_type_t rpz_type,
 		 * bin/tests/system/rpz/tests.sh looks for "rpz.*failed".
 		 */
 		dns_name_format(trig_name, namebuf, sizeof(namebuf));
-		isc_log_write(dns_lctx, DNS_LOGCATEGORY_RPZ,
-			      DNS_LOGMODULE_RBTDB, DNS_RPZ_ERROR_LEVEL,
+		isc_log_write(DNS_LOGCATEGORY_RPZ, DNS_LOGMODULE_RPZ,
+			      DNS_RPZ_ERROR_LEVEL,
 			      "dns_rpz_find_name(%s) failed: %s", namebuf,
 			      isc_result_totext(result));
 		break;
 	}
 
-	RWUNLOCK(&rpzs->search_lock, isc_rwlocktype_read);
-
-	dns_rbtnodechain_invalidate(&chain);
-
-	return (zbits & found_zbits);
+	dns_qpread_destroy(rpzs->table, &qpr);
+	return zbits & found_zbits;
 }
 
 /*
@@ -2651,7 +2582,7 @@ dns_rpz_decode_cname(dns_rpz_zone_t *rpz, dns_rdataset_t *rdataset,
 	 * CNAME . means NXDOMAIN
 	 */
 	if (dns_name_equal(&cname.cname, dns_rootname)) {
-		return (DNS_RPZ_POLICY_NXDOMAIN);
+		return DNS_RPZ_POLICY_NXDOMAIN;
 	}
 
 	if (dns_name_iswildcard(&cname.cname)) {
@@ -2659,7 +2590,7 @@ dns_rpz_decode_cname(dns_rpz_zone_t *rpz, dns_rdataset_t *rdataset,
 		 * CNAME *. means NODATA
 		 */
 		if (dns_name_countlabels(&cname.cname) == 2) {
-			return (DNS_RPZ_POLICY_NODATA);
+			return DNS_RPZ_POLICY_NODATA;
 		}
 
 		/*
@@ -2669,7 +2600,7 @@ dns_rpz_decode_cname(dns_rpz_zone_t *rpz, dns_rdataset_t *rdataset,
 		 *	evil.com    CNAME   evil.com.garden.net
 		 */
 		if (dns_name_countlabels(&cname.cname) > 2) {
-			return (DNS_RPZ_POLICY_WILDCNAME);
+			return DNS_RPZ_POLICY_WILDCNAME;
 		}
 	}
 
@@ -2677,32 +2608,71 @@ dns_rpz_decode_cname(dns_rpz_zone_t *rpz, dns_rdataset_t *rdataset,
 	 * CNAME rpz-tcp-only. means "send truncated UDP responses."
 	 */
 	if (dns_name_equal(&cname.cname, &rpz->tcp_only)) {
-		return (DNS_RPZ_POLICY_TCP_ONLY);
+		return DNS_RPZ_POLICY_TCP_ONLY;
 	}
 
 	/*
 	 * CNAME rpz-drop. means "do not respond."
 	 */
 	if (dns_name_equal(&cname.cname, &rpz->drop)) {
-		return (DNS_RPZ_POLICY_DROP);
+		return DNS_RPZ_POLICY_DROP;
 	}
 
 	/*
 	 * CNAME rpz-passthru. means "do not rewrite."
 	 */
 	if (dns_name_equal(&cname.cname, &rpz->passthru)) {
-		return (DNS_RPZ_POLICY_PASSTHRU);
+		return DNS_RPZ_POLICY_PASSTHRU;
 	}
 
 	/*
 	 * 128.1.0.127.rpz-ip CNAME  128.1.0.0.127. is obsolete PASSTHRU
 	 */
 	if (selfname != NULL && dns_name_equal(&cname.cname, selfname)) {
-		return (DNS_RPZ_POLICY_PASSTHRU);
+		return DNS_RPZ_POLICY_PASSTHRU;
 	}
 
 	/*
 	 * Any other rdata gives a response consisting of the rdata.
 	 */
-	return (DNS_RPZ_POLICY_RECORD);
+	return DNS_RPZ_POLICY_RECORD;
+}
+
+static void
+destroy_nmdata(nmdata_t *data) {
+	dns_name_free(&data->name, data->mctx);
+	isc_mem_putanddetach(&data->mctx, data, sizeof(nmdata_t));
+}
+
+#ifdef DNS_RPZ_TRACE
+ISC_REFCOUNT_TRACE_IMPL(nmdata, destroy_nmdata);
+#else
+ISC_REFCOUNT_IMPL(nmdata, destroy_nmdata);
+#endif
+
+static void
+qp_attach(void *uctx ISC_ATTR_UNUSED, void *pval,
+	  uint32_t ival ISC_ATTR_UNUSED) {
+	nmdata_t *data = pval;
+	nmdata_ref(data);
+}
+
+static void
+qp_detach(void *uctx ISC_ATTR_UNUSED, void *pval,
+	  uint32_t ival ISC_ATTR_UNUSED) {
+	nmdata_t *data = pval;
+	nmdata_detach(&data);
+}
+
+static size_t
+qp_makekey(dns_qpkey_t key, void *uctx ISC_ATTR_UNUSED, void *pval,
+	   uint32_t ival ISC_ATTR_UNUSED) {
+	nmdata_t *data = pval;
+	return dns_qpkey_fromname(key, &data->name, DNS_DBNAMESPACE_NORMAL);
+}
+
+static void
+qp_triename(void *uctx, char *buf, size_t size) {
+	dns_view_t *view = uctx;
+	snprintf(buf, size, "view %s RPZs", view->name);
 }

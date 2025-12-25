@@ -21,7 +21,7 @@ named-checkconf - named configuration file syntax checking tool
 Synopsis
 ~~~~~~~~
 
-:program:`named-checkconf` [**-achjlvz**] [**-p** [**-x** ]] [**-t** directory] {filename}
+:program:`named-checkconf` [**-achjlnvz**] [**-p** [**-x** ]] [**-t** directory] {filename}
 
 Description
 ~~~~~~~~~~~
@@ -70,6 +70,12 @@ Options
 .. option:: -i
 
    This option ignores warnings on deprecated options.
+
+.. option:: -n
+
+   Do not print errors when encountering options that are disabled in
+   this build. This allows checking of configuration files for other
+   builds, in which those options are enabled.
 
 .. option:: -p
 

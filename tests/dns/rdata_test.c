@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -22,19 +23,26 @@
 
 #define UNIT_TESTING
 
-#include <isc/cmocka.h>
+#include <cmocka.h>
+
+#include <openssl/err.h>
+
 #include <isc/commandline.h>
 #include <isc/hex.h>
 #include <isc/lex.h>
+#include <isc/lib.h>
 #include <isc/stdio.h>
 #include <isc/types.h>
 #include <isc/util.h>
 
+#include <dns/lib.h>
 #include <dns/rdata.h>
 
-#include <tests/dns.h>
+#include "../isc/openssl_shim.c"
+#include "../isc/openssl_shim.h"
+#include "openssl_shim.h"
 
-static bool debug = false;
+#include <tests/dns.h>
 
 /*
  * An array of these structures is passed to compare_ok().
@@ -73,42 +81,19 @@ typedef struct wire_ok {
 	unsigned int loop;
 } wire_ok_t;
 
-#define COMPARE(r1, r2, answer)          \
-	{                                \
-		r1, r2, answer, __LINE__ \
-	}
-#define COMPARE_SENTINEL()              \
-	{                               \
-		NULL, NULL, 0, __LINE__ \
-	}
+#define COMPARE(r1, r2, answer) { r1, r2, answer, __LINE__ }
+#define COMPARE_SENTINEL()	{ NULL, NULL, 0, __LINE__ }
 
-#define TEXT_VALID_CHANGED(data_in, data_out) \
-	{                                     \
-		data_in, data_out, 0          \
-	}
-#define TEXT_VALID(data)      \
-	{                     \
-		data, data, 0 \
-	}
-#define TEXT_VALID_LOOP(loop, data) \
-	{                           \
-		data, data, loop    \
-	}
-#define TEXT_VALID_LOOPCHG(loop, data_in, data_out) \
-	{                                           \
-		data_in, data_out, loop             \
-	}
-#define TEXT_INVALID(data)    \
-	{                     \
-		data, NULL, 0 \
-	}
-#define TEXT_SENTINEL() TEXT_INVALID(NULL)
+#define TEXT_VALID_CHANGED(data_in, data_out)	    { data_in, data_out, 0 }
+#define TEXT_VALID(data)			    { data, data, 0 }
+#define TEXT_VALID_LOOP(loop, data)		    { data, data, loop }
+#define TEXT_VALID_LOOPCHG(loop, data_in, data_out) { data_in, data_out, loop }
+#define TEXT_INVALID(data)			    { data, NULL, 0 }
+#define TEXT_SENTINEL()				    TEXT_INVALID(NULL)
 
 #define VARGC(...) (sizeof((unsigned char[]){ __VA_ARGS__ }))
-#define WIRE_TEST(ok, loop, ...)                              \
-	{                                                     \
-		{ __VA_ARGS__ }, VARGC(__VA_ARGS__), ok, loop \
-	}
+#define WIRE_TEST(ok, loop, ...) \
+	{ { __VA_ARGS__ }, VARGC(__VA_ARGS__), ok, loop }
 #define WIRE_VALID(...)		   WIRE_TEST(true, 0, __VA_ARGS__)
 #define WIRE_VALID_LOOP(loop, ...) WIRE_TEST(true, loop, __VA_ARGS__)
 /*
@@ -119,6 +104,23 @@ typedef struct wire_ok {
  */
 #define WIRE_INVALID(FIRST, ...) WIRE_TEST(false, 0, FIRST, __VA_ARGS__)
 #define WIRE_SENTINEL()		 WIRE_TEST(false, 0)
+
+static void
+detect_uncleared_libcrypto_error(void) {
+	const char *file, *func, *data;
+	int line, flags;
+	long err;
+	bool leak = false;
+	while ((err = ERR_get_error_all(&file, &line, &func, &data, &flags)) !=
+	       0L)
+	{
+		fprintf(stderr,
+			"# Uncleared libcrypto error: %s:%d %s %s %ld %x\n",
+			file, line, func, data, err, flags);
+		leak = true;
+	}
+	assert_false(leak);
+}
 
 /*
  * Call dns_rdata_fromwire() for data in 'src', which is 'srclen' octets in
@@ -150,8 +152,9 @@ wire_to_rdata(const unsigned char *src, size_t srclen, dns_rdataclass_t rdclass,
 	 */
 	result = dns_rdata_fromwire(rdata, rdclass, type, &source,
 				    DNS_DECOMPRESS_ALWAYS, &target);
+	detect_uncleared_libcrypto_error();
 
-	return (result);
+	return result;
 }
 
 /*
@@ -172,13 +175,14 @@ rdata_towire(dns_rdata_t *rdata, unsigned char *dst, size_t dstlen,
 	/*
 	 * Try converting input data into uncompressed wire form.
 	 */
-	dns_compress_init(&cctx, mctx, 0);
+	dns_compress_init(&cctx, isc_g_mctx, 0);
 	result = dns_rdata_towire(rdata, &cctx, &target);
+	detect_uncleared_libcrypto_error();
 	dns_compress_invalidate(&cctx);
 
 	*length = isc_buffer_usedlength(&target);
 
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -188,7 +192,7 @@ additionaldata_cb(void *arg, const dns_name_t *name, dns_rdatatype_t qtype,
 	UNUSED(name);
 	UNUSED(qtype);
 	UNUSED(found);
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 /*
@@ -196,8 +200,8 @@ additionaldata_cb(void *arg, const dns_name_t *name, dns_rdatatype_t qtype,
  */
 static isc_result_t
 rdata_additionadata(dns_rdata_t *rdata) {
-	return (dns_rdata_additionaldata(rdata, dns_rootname, additionaldata_cb,
-					 NULL));
+	return dns_rdata_additionaldata(rdata, dns_rootname, additionaldata_cb,
+					NULL);
 }
 
 /*
@@ -222,17 +226,19 @@ rdata_checknames(dns_rdata_t *rdata) {
 	(void)dns_rdata_checknames(rdata, dns_rootname, NULL);
 	(void)dns_rdata_checknames(rdata, dns_rootname, bad);
 
-	result = dns_name_fromstring(name, "example.net", 0, NULL);
+	result = dns_name_fromstring(name, "example.net", dns_rootname, 0,
+				     NULL);
 	assert_int_equal(result, ISC_R_SUCCESS);
 	(void)dns_rdata_checknames(rdata, name, NULL);
 	(void)dns_rdata_checknames(rdata, name, bad);
 
-	result = dns_name_fromstring(name, "in-addr.arpa", 0, NULL);
+	result = dns_name_fromstring(name, "in-addr.arpa", dns_rootname, 0,
+				     NULL);
 	assert_int_equal(result, ISC_R_SUCCESS);
 	(void)dns_rdata_checknames(rdata, name, NULL);
 	(void)dns_rdata_checknames(rdata, name, bad);
 
-	result = dns_name_fromstring(name, "ip6.arpa", 0, NULL);
+	result = dns_name_fromstring(name, "ip6.arpa", dns_rootname, 0, NULL);
 	assert_int_equal(result, ISC_R_SUCCESS);
 	(void)dns_rdata_checknames(rdata, name, NULL);
 	(void)dns_rdata_checknames(rdata, name, bad);
@@ -258,13 +264,14 @@ check_struct_conversions(dns_rdata_t *rdata, size_t structsize,
 	char buf[1024];
 	unsigned int count = 0;
 
-	rdata_struct = isc_mem_allocate(mctx, structsize);
+	rdata_struct = isc_mem_allocate(isc_g_mctx, structsize);
 	assert_non_null(rdata_struct);
 
 	/*
 	 * Convert from uncompressed wire form into type-specific struct.
 	 */
 	result = dns_rdata_tostruct(rdata, rdata_struct, NULL);
+	detect_uncleared_libcrypto_error();
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	/*
@@ -294,7 +301,7 @@ check_struct_conversions(dns_rdata_t *rdata, size_t structsize,
 		     result = dns_rdata_hip_next(hip))
 		{
 			dns_name_t name;
-			dns_name_init(&name, NULL);
+			dns_name_init(&name);
 			dns_rdata_hip_current(hip, &name);
 			assert_int_not_equal(dns_name_countlabels(&name), 0);
 			assert_true(dns_name_isabsolute(&name));
@@ -338,7 +345,7 @@ check_struct_conversions(dns_rdata_t *rdata, size_t structsize,
 	}
 	}
 
-	isc_mem_free(mctx, rdata_struct);
+	isc_mem_free(isc_g_mctx, rdata_struct);
 }
 
 /*
@@ -397,6 +404,7 @@ check_text_ok_single(const text_ok_t *text_ok, dns_rdataclass_t rdclass,
 	 */
 	isc_buffer_init(&target, buf_totext, sizeof(buf_totext));
 	result = dns_rdata_totext(&rdata, NULL, &target);
+	detect_uncleared_libcrypto_error();
 	if (result != ISC_R_SUCCESS && debug) {
 		size_t i;
 		fprintf(stdout, "# dns_rdata_totext -> %s",
@@ -485,6 +493,7 @@ check_text_conversions(dns_rdata_t *rdata) {
 	 */
 	isc_buffer_init(&target, buf_totext, sizeof(buf_totext));
 	result = dns_rdata_totext(rdata, NULL, &target);
+	detect_uncleared_libcrypto_error();
 	assert_int_equal(result, ISC_R_SUCCESS);
 	/*
 	 * Ensure buf_totext is properly NUL terminated as dns_rdata_totext()
@@ -538,6 +547,7 @@ check_multiline_text_conversions(dns_rdata_t *rdata) {
 	flags = dns_master_styleflags(&dns_master_style_default);
 	result = dns_rdata_tofmttext(rdata, dns_rootname, flags, 80 - 32, 4,
 				     "\n", &target);
+	detect_uncleared_libcrypto_error();
 	assert_int_equal(result, ISC_R_SUCCESS);
 	/*
 	 * Ensure buf_totext is properly NUL terminated as
@@ -705,6 +715,7 @@ check_compare_ok_single(const compare_ok_t *compare_ok,
 	}
 
 	answer = dns_rdata_compare(&rdata1, &rdata2);
+	detect_uncleared_libcrypto_error();
 	if (compare_ok->answer == 0 && answer != 0) {
 		fail_msg("# line %d: dns_rdata_compare('%s', '%s'): "
 			 "expected equal, got %s",
@@ -1702,6 +1713,113 @@ ISC_RUN_TEST_IMPL(ds) {
 }
 
 /*
+ * DSYNC tests.
+ *
+ * draft-ietf-dnsop-generalized-notify-09
+ *
+ * 2.1.  Wire Format
+ *
+ *    The DSYNC RDATA wire format is encoded as follows:
+ *
+ *                         1 1 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2 2 3 3
+ *     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+ *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *    | RRtype                        | Scheme        | Port
+ *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *                    | Target ...  /
+ *    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-/
+ *
+ *    RRtype  The type of generalized NOTIFY that this DSYNC RR defines the
+ *       desired target address for (see "Resource Record (RR) TYPEs" IANA
+ *       registry).  For now, only CDS and CSYNC are supported values, with
+ *       the former indicating an updated CDS or CDNSKEY record set.
+ *
+ *    Scheme  The mode used for contacting the desired notification
+ *       address.  This is an 8-bit unsigned integer.  Records with value 0
+ *       (null scheme) are ignored by consumers.  Value 1 is described in
+ *       this document, and values 128-255 are reserved for private use.
+ *       All other values are currently unassigned.
+ *
+ *    Port  The port on the target host of the notification service.  This
+ *       is a 16-bit unsigned integer in network byte order.  Records with
+ *       value 0 are ignored by consumers.
+ *
+ *    Target  The fully-qualified, uncompressed domain name of the target
+ *       host providing the service of listening for generalized
+ *       notifications of the specified type.  This name MUST resolve to
+ *       one or more address records.
+ *
+ * 2.2.  Presentation Format
+ *
+ *    The presentation format of the RDATA portion is as follows:
+ *
+ *    *  The RRtype field is represented as a mnemonic from the "Resource
+ *       Record (RR) TYPEs" registry.
+ *
+ *    *  The Scheme field is represented by its mnemonic if assigned (see
+ *       Section 6.2), otherwise as an unsigned decimal integer.
+ *
+ *    *  The Port field is represented as an unsigned decimal integer.
+ *
+ *    *  The Target field is represented as a <domain-name> ([RFC1035],
+ *       Section 5.1).
+ */
+ISC_RUN_TEST_IMPL(dsync) {
+	text_ok_t text_ok[] = {
+		/*
+		 * Invalid, empty record.
+		 */
+		TEXT_INVALID(""),
+		/*
+		 * Known type and known scheme.
+		 */
+		TEXT_VALID("CDS NOTIFY 0 example.com"),
+		/*
+		 * Known type and unknown scheme.
+		 */
+		TEXT_VALID("CDS 3 0 example.com"),
+		/*
+		 * Unknown type and known scheme.
+		 */
+		TEXT_VALID("TYPE1000 NOTIFY 0 example.com"),
+		/*
+		 * Unknown type and unknown scheme.
+		 */
+		TEXT_VALID("TYPE1000 3 0 example.com"),
+		/*
+		 * Unknown type and unknown scheme, max port.
+		 */
+		TEXT_VALID("TYPE1000 3 65535 example.com"),
+		/*
+		 * Unknown type and max scheme, max port.
+		 */
+		TEXT_VALID("TYPE64000 255 65535 example.com"),
+		/*
+		 * Invalid type and max scheme, max port.
+		 */
+		TEXT_INVALID("INVALID 255 65536 example.com"),
+		/*
+		 * Unknown type and too big scheme, max port.
+		 */
+		TEXT_INVALID("TYPE1000 256 65536 example.com"),
+		/*
+		 * Unknown type and unknown scheme, port too big.
+		 */
+		TEXT_INVALID("TYPE1000 3 65536 example.com"),
+		/*
+		 * Unknown type and bad scheme, max port.
+		 */
+		TEXT_INVALID("TYPE1000 UNKNOWN 65535 example.com"),
+		/*
+		 * Sentinel.
+		 */
+		TEXT_SENTINEL()
+	};
+	check_rdata(text_ok, NULL, NULL, false, dns_rdataclass_in,
+		    dns_rdatatype_dsync, sizeof(dns_rdata_dsync_t));
+}
+
+/*
  * EDNS Client Subnet tests.
  *
  * RFC 7871:
@@ -1829,6 +1947,45 @@ ISC_RUN_TEST_IMPL(edns_client_subnet) {
 		WIRE_INVALID(0x00, 0x08, 0x00, 19, 0x00, 0x02, 128, 0x00, 0x00,
 			     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 			     0x00, 0x00, 0x00, 0x00, 0x00, 0x00),
+		/*
+		 * Sentinel.
+		 */
+		WIRE_SENTINEL()
+	};
+
+	check_rdata(NULL, wire_ok, NULL, true, dns_rdataclass_in,
+		    dns_rdatatype_opt, sizeof(dns_rdata_opt_t));
+}
+
+ISC_RUN_TEST_IMPL(edns_rad) {
+	wire_ok_t wire_ok[] = {
+		/*
+		 * Option code with no content.
+		 */
+		WIRE_INVALID(0x00, 0x12, 0x00, 0x00),
+		/*
+		 * Agent Domain = "."
+		 */
+		WIRE_VALID(0x00, 0x12, 0x00, 0x01, 0x00),
+		/*
+		 * Data after name.
+		 */
+		WIRE_INVALID(0x00, 0x12, 0x00, 0x02, 0x00, 0x00),
+		/*
+		 * Agent Domain = "example.com."
+		 */
+		WIRE_VALID(0x00, 0x12, 0x00, 13, 7, 'e', 'x', 'a', 'm', 'p',
+			   'l', 'e', 3, 'c', 'o', 'm', 0x00),
+		/*
+		 * No root label at end.
+		 */
+		WIRE_INVALID(0x00, 0x12, 0x00, 12, 7, 'e', 'x', 'a', 'm', 'p',
+			     'l', 'e', 3, 'c', 'o', 'm'),
+		/*
+		 * Truncated label.
+		 */
+		WIRE_INVALID(0x00, 0x12, 0x00, 11, 7, 'e', 'x', 'a', 'm', 'p',
+			     'l', 'e', 3, 'c', 'o'),
 		/*
 		 * Sentinel.
 		 */
@@ -2037,9 +2194,9 @@ ISC_RUN_TEST_IMPL(key) {
 		WIRE_INVALID(0xc0, 0x00, 0x00, 0x00, 0x00),
 		WIRE_INVALID(0x00, 0x00, 0x00, 0x00),
 		WIRE_VALID(0x00, 0x00, 0x00, 0x00, 0x00),
-		/* PRIVATEDNS example. */
-		WIRE_INVALID(0x00, 0x00, 0x00, 253, 0x07, 'e', 'x', 'a', 'm',
-			     'p', 'l', 'e', 0x00),
+		/* PRIVATEDNS example. without key data */
+		WIRE_VALID(0x00, 0x00, 0x00, 253, 0x07, 'e', 'x', 'a', 'm', 'p',
+			   'l', 'e', 0x00),
 		/* PRIVATEDNS example. + keydata */
 		WIRE_VALID(0x00, 0x00, 0x00, 253, 0x07, 'e', 'x', 'a', 'm', 'p',
 			   'l', 'e', 0x00, 0x00),
@@ -2047,22 +2204,22 @@ ISC_RUN_TEST_IMPL(key) {
 		WIRE_INVALID(0x00, 0x00, 0x00, 253, 0xc0, 0x00, 0x00),
 		/* PRIVATEOID */
 		WIRE_INVALID(0x00, 0x00, 0x00, 254, 0x00),
-		/* PRIVATEOID 1.3.6.1.4.1.2495 */
-		WIRE_INVALID(0x00, 0x00, 0x00, 254, 0x06, 0x07, 0x2b, 0x06,
-			     0x01, 0x04, 0x01, 0x93, 0x3f),
+		/* PRIVATEOID 1.3.6.1.4.1.2495 without key data */
+		WIRE_VALID(0x00, 0x00, 0x00, 254, 0x09, 0x06, 0x07, 0x2b, 0x06,
+			   0x01, 0x04, 0x01, 0x93, 0x3f),
 		/* PRIVATEOID 1.3.6.1.4.1.2495 + keydata */
-		WIRE_VALID(0x00, 0x00, 0x00, 254, 0x06, 0x07, 0x2b, 0x06, 0x01,
-			   0x04, 0x01, 0x93, 0x3f, 0x00),
+		WIRE_VALID(0x00, 0x00, 0x00, 254, 0x09, 0x06, 0x07, 0x2b, 0x06,
+			   0x01, 0x04, 0x01, 0x93, 0x3f, 0x00),
 		/* PRIVATEOID malformed OID - high-bit set on last octet */
 		WIRE_INVALID(0x00, 0x00, 0x00, 254, 0x06, 0x07, 0x2b, 0x06,
 			     0x01, 0x04, 0x01, 0x93, 0xbf, 0x00),
 		/* PRIVATEOID malformed OID - wrong tag */
-		WIRE_INVALID(0x00, 0x00, 0x00, 254, 0x07, 0x07, 0x2b, 0x06,
-			     0x01, 0x04, 0x01, 0x93, 0x3f, 0x00),
+		WIRE_INVALID(0x00, 0x00, 0x00, 254, 0x09, 0x07, 0x07, 0x2b,
+			     0x06, 0x01, 0x04, 0x01, 0x93, 0x3f, 0x00),
 		WIRE_SENTINEL()
 	};
 	text_ok_t text_ok[] = { /* PRIVATEDNS example. */
-				TEXT_INVALID("0 0 253 B2V4YW1wbGUA"),
+				TEXT_VALID("0 0 253 B2V4YW1wbGUA"),
 				/* PRIVATEDNS example. + keydata */
 				TEXT_VALID("0 0 253 B2V4YW1wbGUAAA=="),
 				/* PRIVATEDNS compression pointer. */
@@ -2070,14 +2227,14 @@ ISC_RUN_TEST_IMPL(key) {
 				/* PRIVATEOID */
 				TEXT_INVALID("0 0 254 AA=="),
 				/* PRIVATEOID 1.3.6.1.4.1.2495 */
-				TEXT_INVALID("0 0 254 BgcrBgEEAZM/"),
+				TEXT_VALID("0 0 254 CQYHKwYBBAGTPw=="),
 				/* PRIVATEOID 1.3.6.1.4.1.2495 + keydata */
-				TEXT_VALID("0 0 254 BgcrBgEEAZM/AA=="),
+				TEXT_VALID("0 0 254 CQYHKwYBBAGTPwA="),
 				/* PRIVATEOID malformed OID - high-bit set on
 				   last octet */
-				TEXT_INVALID("0 0 254 BgcrBgEEAZO/AA=="),
+				TEXT_INVALID("0 0 254 CQYHKwYBBAGTvwA="),
 				/* PRIVATEOID malformed OID - wrong tag */
-				TEXT_INVALID("0 0 254 BwcrBgEEAZM/AA=="),
+				TEXT_INVALID("0 0 254 CQcHKwYBBAGTPwA="),
 				/*
 				 * Sentinel.
 				 */
@@ -2342,6 +2499,22 @@ ISC_RUN_TEST_IMPL(rkey) {
 		    dns_rdatatype_rkey, sizeof(dns_rdata_rkey_t));
 }
 
+ISC_RUN_TEST_IMPL(resinfo) {
+	text_ok_t text_ok[] = {
+		TEXT_VALID_CHANGED("qnamemin exterr=15,16,17 "
+				   "infourl=https://resolver.example.com/guide",
+				   "\"qnamemin\" \"exterr=15,16,17\" "
+				   "\"infourl=https://resolver.example.com/"
+				   "guide\""),
+		/*
+		 * Sentinel.
+		 */
+		TEXT_SENTINEL()
+	};
+	check_rdata(text_ok, NULL, NULL, false, dns_rdataclass_in,
+		    dns_rdatatype_resinfo, sizeof(dns_rdata_rkey_t));
+}
+
 /* SSHFP RDATA manipulations */
 ISC_RUN_TEST_IMPL(sshfp) {
 	text_ok_t text_ok[] = { TEXT_INVALID(""),     /* too short */
@@ -2422,6 +2595,18 @@ ISC_RUN_TEST_IMPL(sshfp) {
 
 	check_rdata(text_ok, wire_ok, NULL, false, dns_rdataclass_in,
 		    dns_rdatatype_sshfp, sizeof(dns_rdata_sshfp_t));
+}
+
+ISC_RUN_TEST_IMPL(wallet) {
+	text_ok_t text_ok[] = { TEXT_VALID_CHANGED("cid-example wid-example",
+						   "\"cid-example\" "
+						   "\"wid-example\""),
+				/*
+				 * Sentinel.
+				 */
+				TEXT_SENTINEL() };
+	check_rdata(text_ok, NULL, NULL, false, dns_rdataclass_in,
+		    dns_rdatatype_wallet, sizeof(dns_rdata_rkey_t));
 }
 
 /*
@@ -2516,8 +2701,8 @@ ISC_RUN_TEST_IMPL(https_svcb) {
 		TEXT_INVALID("0"),
 		/* minimal record */
 		TEXT_VALID_LOOP(0, "0 ."),
-		/* Alias form requires SvcFieldValue to be empty */
-		TEXT_INVALID("0 . alpn=\"h2\""),
+		/* Alias form possible future extension */
+		TEXT_VALID_LOOP(1, "0 . alpn=\"h2\""),
 		/* no "key" prefix */
 		TEXT_INVALID("2 svc.example.net. 0=\"2222\""),
 		/* no key value */
@@ -2575,6 +2760,10 @@ ISC_RUN_TEST_IMPL(https_svcb) {
 		TEXT_INVALID("2 svc.example.net. alpn=,h1"),
 		TEXT_INVALID("2 svc.example.net. alpn=h1,"),
 		TEXT_INVALID("2 svc.example.net. alpn=h1,,h2"),
+		/* empty alpn-id sub fields - RFC 1035 escaped commas */
+		TEXT_INVALID("2 svc.example.net. alpn=\\,abc"),
+		TEXT_INVALID("2 svc.example.net. alpn=abc\\,"),
+		TEXT_INVALID("2 svc.example.net. alpn=a\\,\\,abc"),
 		/* mandatory */
 		TEXT_VALID_LOOP(2, "2 svc.example.net. mandatory=alpn "
 				   "alpn=\"h2\""),
@@ -2617,13 +2806,51 @@ ISC_RUN_TEST_IMPL(https_svcb) {
 		TEXT_INVALID("1 foo.example.com. ( mandatory=key123,key123 "
 			     "key123=abc)"),
 		/* dohpath tests */
+		TEXT_VALID_LOOPCHG(1, "1 example.net. dohpath=/{dns}",
+				   "1 example.net. dohpath=\"/{dns}\""),
+		TEXT_VALID_LOOPCHG(1, "1 example.net. dohpath=/{+dns}",
+				   "1 example.net. dohpath=\"/{+dns}\""),
+		TEXT_VALID_LOOPCHG(1, "1 example.net. dohpath=/{#dns}",
+				   "1 example.net. dohpath=\"/{#dns}\""),
+		TEXT_VALID_LOOPCHG(1, "1 example.net. dohpath=/{.dns}",
+				   "1 example.net. dohpath=\"/{.dns}\""),
+		TEXT_VALID_LOOP(1, "1 example.net. dohpath=\"/{;dns}\""),
 		TEXT_VALID_LOOPCHG(1, "1 example.net. dohpath=/{?dns}",
-				   "1 example.net. key7=\"/{?dns}\""),
+				   "1 example.net. dohpath=\"/{?dns}\""),
 		TEXT_VALID_LOOPCHG(1, "1 example.net. dohpath=/some/path{?dns}",
-				   "1 example.net. key7=\"/some/path{?dns}\""),
-		TEXT_INVALID("1 example.com. dohpath=no-slash"),
-		TEXT_INVALID("1 example.com. dohpath=/{?notdns}"),
-		TEXT_INVALID("1 example.com. dohpath=/notvariable"),
+				   "1 example.net. "
+				   "dohpath=\"/some/path{?dns}\""),
+		TEXT_VALID_LOOPCHG(1, "1 example.net. dohpath=/{dns:9999}",
+				   "1 example.net. dohpath=\"/{dns:9999}\""),
+		TEXT_VALID_LOOPCHG(1, "1 example.net. dohpath=/{dns*}",
+				   "1 example.net. dohpath=\"/{dns*}\""),
+		TEXT_VALID_LOOPCHG(
+			1, "1 example.net. dohpath=/some/path?key=value{&dns}",
+			"1 example.net. "
+			"dohpath=\"/some/path?key=value{&dns}\""),
+		TEXT_VALID_LOOPCHG(1,
+				   "1 example.net. "
+				   "dohpath=/some/path?key=value{&dns,x*}",
+				   "1 example.net. "
+				   "dohpath=\"/some/path?key=value{&dns,x*}\""),
+		TEXT_INVALID("1 example.com. dohpath=not-relative"),
+		TEXT_INVALID("1 example.com. dohpath=/{?no_dns_variable}"),
+		TEXT_INVALID("1 example.com. dohpath=/novariable"),
+		TEXT_INVALID("1 example.com. dohpath=/{?dnsx}"),
+		/* index too big > 9999 */
+		TEXT_INVALID("1 example.com. dohpath=/{?dns:10000}"),
+		/* index not postive */
+		TEXT_INVALID("1 example.com. dohpath=/{?dns:0}"),
+		/* index leading zero */
+		TEXT_INVALID("1 example.com. dohpath=/{?dns:01}"),
+		/* two operators */
+		TEXT_INVALID("1 example.com. dohpath=/{??dns}"),
+		/* invalid % encoding */
+		TEXT_INVALID("1 example.com. dohpath=/%a{?dns}"),
+		/* invalid % encoding */
+		TEXT_INVALID("1 example.com. dohpath=/{?dns,%a}"),
+		/* incomplete macro */
+		TEXT_INVALID("1 example.com. dohpath=/{?dns" /*}*/),
 		TEXT_SENTINEL()
 
 	};
@@ -2637,7 +2864,7 @@ ISC_RUN_TEST_IMPL(https_svcb) {
 		 */
 		WIRE_VALID(0x00, 0x00, 0x00),
 		/*
-		 * Alias with non-empty SvcFieldValue (key7="").
+		 * Alias with invalid dohpath.
 		 */
 		WIRE_INVALID(0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00),
 		/*
@@ -3122,12 +3349,15 @@ ISC_TEST_ENTRY(nsec)
 ISC_TEST_ENTRY(nsec3)
 ISC_TEST_ENTRY(nxt)
 ISC_TEST_ENTRY(rkey)
+ISC_TEST_ENTRY(resinfo)
 ISC_TEST_ENTRY(sshfp)
+ISC_TEST_ENTRY(wallet)
 ISC_TEST_ENTRY(wks)
 ISC_TEST_ENTRY(zonemd)
 
 /* other tests */
 ISC_TEST_ENTRY(edns_client_subnet)
+ISC_TEST_ENTRY(edns_rad)
 ISC_TEST_ENTRY(atcname)
 ISC_TEST_ENTRY(atparent)
 ISC_TEST_ENTRY(iszonecutauth)

@@ -194,7 +194,7 @@ isc_ratelimiter_enqueue(isc_ratelimiter_t *restrict rl,
 		UNREACHABLE();
 	}
 	UNLOCK(&rl->lock);
-	return (result);
+	return result;
 }
 
 isc_result_t
@@ -212,13 +212,12 @@ isc_ratelimiter_dequeue(isc_ratelimiter_t *restrict rl, isc_rlevent_t **rlep) {
 		result = ISC_R_NOTFOUND;
 	}
 	UNLOCK(&rl->lock);
-	return (result);
+	return result;
 }
 
 static void
 isc__ratelimiter_tick(void *arg) {
 	isc_ratelimiter_t *rl = (isc_ratelimiter_t *)arg;
-	isc_rlevent_t *rle = NULL;
 	uint32_t pertic;
 	ISC_LIST(isc_rlevent_t) pending;
 
@@ -231,13 +230,13 @@ isc__ratelimiter_tick(void *arg) {
 	REQUIRE(rl->timer != NULL);
 
 	if (rl->state == isc_ratelimiter_shuttingdown) {
-		INSIST(EMPTY(rl->pending));
+		INSIST(ISC_LIST_EMPTY(rl->pending));
 		goto unlock;
 	}
 
 	pertic = rl->pertic;
 	while (pertic != 0) {
-		rle = ISC_LIST_HEAD(rl->pending);
+		isc_rlevent_t *rle = ISC_LIST_HEAD(rl->pending);
 		if (rle != NULL) {
 			/* There is work to do.  Let's do it after unlocking. */
 			ISC_LIST_UNLINK(rl->pending, rle, link);
@@ -263,7 +262,7 @@ isc__ratelimiter_tick(void *arg) {
 unlock:
 	UNLOCK(&rl->lock);
 
-	while ((rle = ISC_LIST_HEAD(pending)) != NULL) {
+	ISC_LIST_FOREACH (pending, rle, link) {
 		ISC_LIST_UNLINK(pending, rle, link);
 		isc_async_run(rle->loop, rle->cb, rle->arg);
 	}
@@ -277,7 +276,7 @@ isc__ratelimiter_doshutdown(void *arg) {
 
 	LOCK(&rl->lock);
 	INSIST(rl->state == isc_ratelimiter_shuttingdown);
-	INSIST(EMPTY(rl->pending));
+	INSIST(ISC_LIST_EMPTY(rl->pending));
 
 	isc_timer_stop(rl->timer);
 	isc_timer_destroy(&rl->timer);
@@ -288,7 +287,6 @@ isc__ratelimiter_doshutdown(void *arg) {
 
 void
 isc_ratelimiter_shutdown(isc_ratelimiter_t *restrict rl) {
-	isc_rlevent_t *rle = NULL;
 	ISC_LIST(isc_rlevent_t) pending;
 
 	REQUIRE(VALID_RATELIMITER(rl));
@@ -304,7 +302,7 @@ isc_ratelimiter_shutdown(isc_ratelimiter_t *restrict rl) {
 	}
 	UNLOCK(&rl->lock);
 
-	while ((rle = ISC_LIST_HEAD(pending)) != NULL) {
+	ISC_LIST_FOREACH (pending, rle, link) {
 		ISC_LIST_UNLINK(pending, rle, link);
 		rle->canceled = true;
 		isc_async_run(rl->loop, rle->cb, rle->arg);
@@ -313,8 +311,6 @@ isc_ratelimiter_shutdown(isc_ratelimiter_t *restrict rl) {
 
 static void
 ratelimiter_destroy(isc_ratelimiter_t *restrict rl) {
-	isc_refcount_destroy(&rl->references);
-
 	LOCK(&rl->lock);
 	REQUIRE(rl->state == isc_ratelimiter_shuttingdown);
 	UNLOCK(&rl->lock);

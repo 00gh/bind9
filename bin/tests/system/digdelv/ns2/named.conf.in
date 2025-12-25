@@ -25,7 +25,7 @@ options {
 
 zone "." {
 	type hint;
-	file "../../common/root.hint";
+	file "../../_common/root.hint";
 };
 
 zone "example" {
@@ -36,4 +36,5 @@ zone "example" {
 zone "example.tld" {
 	type primary;
 	file "example.tld.db";
+	provide-zoneversion no;
 };

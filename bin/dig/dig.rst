@@ -20,7 +20,7 @@ dig - DNS lookup utility
 
 Synopsis
 ~~~~~~~~
-:program:`dig` [@server] [**-b** address] [**-c** class] [**-f** filename] [**-k** filename] [**-m**] [**-p** port#] [**-q** name] [**-t** type] [**-v**] [**-x** addr] [**-y** [hmac:]name:key] [ [**-4**] | [**-6**] ] [name] [type] [class] [queryopt...]
+:program:`dig` [@server] [**-b** address] [**-c** class] [**-f** filename] [**-F**] [**-k** filename] [**-m**] [**-p** port#] [**-q** name] [**-t** type] [**-v**] [**-x** addr] [**-y** [hmac:]name:key] [ [**-4**] | [**-6**] ] [name] [type] [class] [queryopt...]
 
 :program:`dig` [**-h**]
 
@@ -125,6 +125,10 @@ Options
    the given ``file``. Each line in the file should be organized in the
    same way it would be presented as a query to :program:`dig` using the
    command-line interface.
+
+.. option:: -F
+
+   This option enables FIPS mode if supported by the cryptographic library in use.
 
 .. option:: -h
 
@@ -298,6 +302,13 @@ abbreviation is unambiguous; for example, :option:`+cd` is equivalent to
    always has a global effect; it cannot be set globally and then overridden on a
    per-lookup basis. The default is to print this comment.
 
+.. option:: +coflag, +co, +nocoflag, +noco
+
+   This option sets [or does not set] the CO (Compact denial of
+   existence Ok) EDNS bit in the query.  If set, it tells servers
+   that Compact Denial of Existence responses are acceptable when
+   replying to queries.  The default is ``+nocoflag``.
+
 .. option:: +comments, +nocomments
 
    This option toggles the display of some comment lines in the output, with
@@ -358,7 +369,7 @@ abbreviation is unambiguous; for example, :option:`+cd` is equivalent to
 
    This option sets the must-be-zero EDNS flags bits (Z bits) to the specified value.
    Decimal, hex, and octal encodings are accepted. Setting a named flag
-   (e.g., DO) is silently ignored. By default, no Z bits are set.
+   (e.g. DO, CO) is silently ignored. By default, no Z bits are set.
 
 .. option:: +ednsnegotiation, +noednsnegotiation
 
@@ -507,6 +518,44 @@ abbreviation is unambiguous; for example, :option:`+cd` is equivalent to
    mandatory. Responses to padded queries may also be padded, but only
    if the query uses TCP or DNS COOKIE.
 
+.. option:: +proxy[=src_addr[#src_port]-dst_addr[#dst_port]], +noproxy
+
+   When this option is set, :program:`dig` adds PROXYv2 headers to the
+   queries. When source and destination addresses are specified, the
+   headers contain them and use the ``PROXY`` command. It means for
+   the remote peer that the queries were sent on behalf of another
+   node and that the PROXYv2 header reflects the original connection
+   endpoints. The default source port is ``0`` and destination port is
+   `53`.
+
+   For encrypted DNS transports, to prevent accidental information
+   leakage, encryption is applied to the PROXYv2 headers: the headers
+   are sent right after the handshake process has been completed.
+
+   For plain DNS transports, no encryption is applied to the PROXYv2
+   headers.
+
+   If the addressees are omitted, PROXYv2 headers, that use the
+   ``LOCAL`` command set, are added instead. For the remote peer, that
+   means that the queries were sent on purpose without being relayed,
+   so the real connection endpoint addresses must be used.
+
+.. option:: +proxy-plain[=src_addr[#src_port]-dst_addr[#dst_port], +noproxy-plain
+
+   The same as ``+[no]proxy``, but instructs ``dig`` to send PROXYv2
+   headers ahead of any encryption, before any handshake messages are
+   sent. That makes :program:`dig` behave exactly how it is described
+   in the PROXY protocol specification, but not all software expects
+   such behaviour.
+
+   Please consult the software documentation to find out if you need
+   this option. (for example, ``dnsdist`` expects encrypted PROXYv2
+   headers sent over TLS when encryption is used, while ``HAProxy``
+   and many other software packages expect plain ones).
+
+   For plain DNS transports the option is effectively an alias for the
+   ``+[no]proxy`` described above.
+
 .. option:: +qid=value
 
    This option specifies the query ID to use when sending queries.
@@ -572,14 +621,15 @@ abbreviation is unambiguous; for example, :option:`+cd` is equivalent to
    BADCOOKIE rcode before retrying the request or not. The default
    is to not show the messages.
 
+.. option:: +showbadvers, +noshowbadvers
+
+   This option toggles whether to show the message containing the
+   BADVERS rcode before retrying the request or not. The default
+   is to not show the messages.
+
 .. option:: +showsearch, +noshowsearch
 
    This option performs [or does not perform] a search showing intermediate results.
-
-.. option:: +sigchase, +nosigchase
-
-   This feature is now obsolete and has been removed; use :iscman:`delv`
-   instead.
 
 .. option:: +split=W
 
@@ -604,6 +654,14 @@ abbreviation is unambiguous; for example, :option:`+cd` is equivalent to
    sends an EDNS CLIENT-SUBNET option with an empty address and a source
    prefix-length of zero, which signals a resolver that the client's
    address information must *not* be used when resolving this query.
+
+.. option:: +svcparamkeycompat, +nosvcparamkeycompat
+
+   This option sets [or does not set] the backward-compatible representation of
+   the Service Parameter Keys (SvcParamKeys) for SVCB records, in which case
+   the keys, which were not defined initially in :rfc:`9460` are represented
+   in their opaque "keyN"-like format, where "N" is their numerical value. The
+   default is ``+nosvcparamkeycompat``.
 
 .. option:: +tcflag, +notcflag
 
@@ -650,36 +708,29 @@ abbreviation is unambiguous; for example, :option:`+cd` is equivalent to
    server TLS certificate verification. Otherwise, the DNS server name
    is used. This option has no effect if :option:`+tls-ca` is not specified.
 
-.. option:: +topdown, +notopdown
-
-   This feature is related to :option:`dig +sigchase`, which is obsolete and
-   has been removed. Use :iscman:`delv` instead.
-
 .. option:: +trace, +notrace
 
-   This option toggles tracing of the delegation path from the root name servers for
-   the name being looked up. Tracing is disabled by default. When
-   tracing is enabled, :program:`dig` makes iterative queries to resolve the
-   name being looked up. It follows referrals from the root servers,
-   showing the answer from each server that was used to resolve the
-   lookup.
+   This option toggles tracing of the delegation path from the root name
+   servers for the name being looked up. Tracing is disabled by default.
+   When tracing is enabled, :program:`dig` makes iterative queries to
+   resolve the name being looked up. It follows referrals from the root
+   servers, showing the answer from each server that was used to resolve
+   the lookup.
 
    If ``@server`` is also specified, it affects only the initial query for
    the root zone name servers.
 
-   :option:`+dnssec` is also set when :option:`+trace` is set, to better emulate the
-   default queries from a name server.
+   :option:`+dnssec` is set when :option:`+trace` is set, to better
+   emulate the default queries from a name server.
+
+   Note that the ``delv +ns`` option can also be used for tracing the
+   resolution of a name from the root (see :iscman:`delv`).
 
 .. option:: +tries=T
 
    This option sets the number of times to try UDP and TCP queries to server to ``T``
    instead of the default, 3. If ``T`` is less than or equal to zero,
    the number of tries is silently rounded up to 1.
-
-.. option:: +trusted-key=####
-
-   This option formerly specified trusted keys for use with :option:`dig +sigchase`. This
-   feature is now obsolete and has been removed; use :iscman:`delv` instead.
 
 .. option:: +ttlid, +nottlid
 
@@ -712,6 +763,10 @@ abbreviation is unambiguous; for example, :option:`+cd` is equivalent to
 
    This option sets [or does not set] the last unassigned DNS header flag in a DNS query.
    This flag is off by default.
+
+.. option:: +zoneversion, +nozoneversion
+
+   When enabled, this option includes an EDNS Zone Version request when sending a query.
 
 Multiple Queries
 ~~~~~~~~~~~~~~~~

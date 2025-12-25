@@ -19,13 +19,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include <isc/lang.h>
 #include <isc/result.h> /* for ISC_R_ codes */
 #include <isc/util.h>
 
-#define ISC_MUTEX_INITIALIZER PTHREAD_MUTEX_INITIALIZER
-
-ISC_LANG_BEGINDECLS
+#define LOCK(lp)                                                           \
+	{                                                                  \
+		ISC_UTIL_TRACE(fprintf(stderr, "LOCKING %p %s %d\n", (lp), \
+				       __FILE__, __LINE__));               \
+		isc_mutex_lock((lp));                                      \
+		ISC_UTIL_TRACE(fprintf(stderr, "LOCKED %p %s %d\n", (lp),  \
+				       __FILE__, __LINE__));               \
+	}
+#define UNLOCK(lp)                                                          \
+	{                                                                   \
+		isc_mutex_unlock((lp));                                     \
+		ISC_UTIL_TRACE(fprintf(stderr, "UNLOCKED %p %s %d\n", (lp), \
+				       __FILE__, __LINE__));                \
+	}
 
 /*
  * We use macros instead of static inline functions so that the exact code
@@ -91,5 +101,3 @@ extern pthread_mutexattr_t isc__mutex_init_attr;
 		int _ret = pthread_mutex_destroy(mp);                \
 		PTHREADS_RUNTIME_CHECK(pthread_mutex_destroy, _ret); \
 	}
-
-ISC_LANG_ENDDECLS

@@ -14,6 +14,7 @@
 /*! \file */
 
 #include <inttypes.h>
+#include <limits.h>
 #include <stdbool.h>
 
 #include <isc/mem.h>
@@ -50,11 +51,13 @@ struct dns_peer {
 	bool bogus;
 	dns_transfer_format_t transfer_format;
 	uint32_t transfers;
+	uint32_t request_ixfr_maxdiffs;
 	bool support_ixfr;
 	bool provide_ixfr;
 	bool request_ixfr;
 	bool support_edns;
 	bool request_nsid;
+	bool request_zoneversion;
 	bool send_cookie;
 	bool require_cookie;
 	bool request_expire;
@@ -78,22 +81,30 @@ struct dns_peer {
 /*%
  * Bit positions in the dns_peer_t structure flags field
  */
-#define BOGUS_BIT		   0
-#define SERVER_TRANSFER_FORMAT_BIT 1
-#define TRANSFERS_BIT		   2
-#define PROVIDE_IXFR_BIT	   3
-#define REQUEST_IXFR_BIT	   4
-#define SUPPORT_EDNS_BIT	   5
-#define SERVER_UDPSIZE_BIT	   6
-#define SERVER_MAXUDP_BIT	   7
-#define REQUEST_NSID_BIT	   8
-#define SEND_COOKIE_BIT		   9
-#define REQUEST_EXPIRE_BIT	   10
-#define EDNS_VERSION_BIT	   11
-#define FORCE_TCP_BIT		   12
-#define SERVER_PADDING_BIT	   13
-#define REQUEST_TCP_KEEPALIVE_BIT  14
-#define REQUIRE_COOKIE_BIT	   15
+enum {
+	BOGUS_BIT = 0,
+	SERVER_TRANSFER_FORMAT_BIT,
+	TRANSFERS_BIT,
+	PROVIDE_IXFR_BIT,
+	REQUEST_IXFR_BIT,
+	REQUEST_IXFRMAXDIFFS_BIT,
+	SUPPORT_EDNS_BIT,
+	SERVER_UDPSIZE_BIT,
+	SERVER_MAXUDP_BIT,
+	REQUEST_NSID_BIT,
+	SEND_COOKIE_BIT,
+	REQUEST_EXPIRE_BIT,
+	EDNS_VERSION_BIT,
+	FORCE_TCP_BIT,
+	SERVER_PADDING_BIT,
+	REQUEST_TCP_KEEPALIVE_BIT,
+	REQUIRE_COOKIE_BIT,
+	DNS_PEER_FLAGS_COUNT,
+	REQUEST_ZONEVERSION
+};
+
+STATIC_ASSERT(DNS_PEER_FLAGS_COUNT <= CHAR_BIT * sizeof(uint32_t),
+	      "dns_peer_t structure flags fields are too many for uint32_t");
 
 static void
 peerlist_delete(dns_peerlist_t **list);
@@ -101,7 +112,7 @@ peerlist_delete(dns_peerlist_t **list);
 static void
 peer_delete(dns_peer_t **peer);
 
-isc_result_t
+void
 dns_peerlist_new(isc_mem_t *mem, dns_peerlist_t **list) {
 	dns_peerlist_t *l;
 
@@ -115,8 +126,6 @@ dns_peerlist_new(isc_mem_t *mem, dns_peerlist_t **list) {
 	l->magic = DNS_PEERLIST_MAGIC;
 
 	*list = l;
-
-	return (ISC_R_SUCCESS);
 }
 
 void
@@ -148,8 +157,7 @@ dns_peerlist_detach(dns_peerlist_t **list) {
 
 static void
 peerlist_delete(dns_peerlist_t **list) {
-	dns_peerlist_t *l;
-	dns_peer_t *server, *stmp;
+	dns_peerlist_t *l = NULL;
 
 	REQUIRE(list != NULL);
 	REQUIRE(DNS_PEERLIST_VALID(*list));
@@ -159,12 +167,9 @@ peerlist_delete(dns_peerlist_t **list) {
 
 	isc_refcount_destroy(&l->refs);
 
-	server = ISC_LIST_HEAD(l->elements);
-	while (server != NULL) {
-		stmp = ISC_LIST_NEXT(server, next);
+	ISC_LIST_FOREACH (l->elements, server, next) {
 		ISC_LIST_UNLINK(l->elements, server, next);
 		dns_peer_detach(&server);
-		server = stmp;
 	}
 
 	l->magic = 0;
@@ -173,56 +178,36 @@ peerlist_delete(dns_peerlist_t **list) {
 
 void
 dns_peerlist_addpeer(dns_peerlist_t *peers, dns_peer_t *peer) {
-	dns_peer_t *p = NULL;
-
-	dns_peer_attach(peer, &p);
-
 	/*
 	 * More specifics to front of list.
 	 */
-	for (p = ISC_LIST_HEAD(peers->elements); p != NULL;
-	     p = ISC_LIST_NEXT(p, next))
-	{
+	dns_peer_attach(peer, &(dns_peer_t *){ NULL });
+	ISC_LIST_FOREACH (peers->elements, p, next) {
 		if (p->prefixlen < peer->prefixlen) {
-			break;
+			ISC_LIST_INSERTBEFORE(peers->elements, p, peer, next);
+			return;
 		}
 	}
 
-	if (p != NULL) {
-		ISC_LIST_INSERTBEFORE(peers->elements, p, peer, next);
-	} else {
-		ISC_LIST_APPEND(peers->elements, peer, next);
-	}
+	ISC_LIST_APPEND(peers->elements, peer, next);
 }
 
 isc_result_t
 dns_peerlist_peerbyaddr(dns_peerlist_t *servers, const isc_netaddr_t *addr,
 			dns_peer_t **retval) {
-	dns_peer_t *server;
-	isc_result_t res;
-
 	REQUIRE(retval != NULL);
 	REQUIRE(DNS_PEERLIST_VALID(servers));
 
-	server = ISC_LIST_HEAD(servers->elements);
-	while (server != NULL) {
+	ISC_LIST_FOREACH (servers->elements, server, next) {
 		if (isc_netaddr_eqprefix(addr, &server->address,
 					 server->prefixlen))
 		{
-			break;
+			*retval = server;
+			return ISC_R_SUCCESS;
 		}
-
-		server = ISC_LIST_NEXT(server, next);
 	}
 
-	if (server != NULL) {
-		*retval = server;
-		res = ISC_R_SUCCESS;
-	} else {
-		res = ISC_R_NOTFOUND;
-	}
-
-	return (res);
+	return ISC_R_NOTFOUND;
 }
 
 isc_result_t
@@ -233,7 +218,7 @@ dns_peerlist_currpeer(dns_peerlist_t *peers, dns_peer_t **retval) {
 
 	dns_peer_attach(p, retval);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 isc_result_t
@@ -252,7 +237,7 @@ dns_peer_new(isc_mem_t *mem, const isc_netaddr_t *addr, dns_peer_t **peerptr) {
 		UNREACHABLE();
 	}
 
-	return (dns_peer_newprefix(mem, addr, prefixlen, peerptr));
+	return dns_peer_newprefix(mem, addr, prefixlen, peerptr);
 }
 
 isc_result_t
@@ -278,7 +263,7 @@ dns_peer_newprefix(isc_mem_t *mem, const isc_netaddr_t *addr,
 
 	*peerptr = peer;
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 void
@@ -372,7 +357,11 @@ ACCESS_OPTION(maxudp, SERVER_MAXUDP_BIT, uint16_t, maxudp)
 ACCESS_OPTION(provideixfr, PROVIDE_IXFR_BIT, bool, provide_ixfr)
 ACCESS_OPTION(requestexpire, REQUEST_EXPIRE_BIT, bool, request_expire)
 ACCESS_OPTION(requestixfr, REQUEST_IXFR_BIT, bool, request_ixfr)
+ACCESS_OPTION(requestixfrmaxdiffs, REQUEST_IXFRMAXDIFFS_BIT, uint32_t,
+	      request_ixfr_maxdiffs)
 ACCESS_OPTION(requestnsid, REQUEST_NSID_BIT, bool, request_nsid)
+ACCESS_OPTION(requestzoneversion, REQUEST_ZONEVERSION, bool,
+	      request_zoneversion)
 ACCESS_OPTION(requirecookie, REQUIRE_COOKIE_BIT, bool, require_cookie)
 ACCESS_OPTION(sendcookie, SEND_COOKIE_BIT, bool, send_cookie)
 ACCESS_OPTION(supportedns, SUPPORT_EDNS_BIT, bool, support_edns)
@@ -467,7 +456,7 @@ dns_peer_getkey(dns_peer_t *peer, dns_name_t **retval) {
 		*retval = peer->key;
 	}
 
-	return (peer->key == NULL ? ISC_R_NOTFOUND : ISC_R_SUCCESS);
+	return peer->key == NULL ? ISC_R_NOTFOUND : ISC_R_SUCCESS;
 }
 
 isc_result_t
@@ -483,7 +472,7 @@ dns_peer_setkey(dns_peer_t *peer, dns_name_t **keyval) {
 	peer->key = *keyval;
 	*keyval = NULL;
 
-	return (exists ? ISC_R_EXISTS : ISC_R_SUCCESS);
+	return exists ? ISC_R_EXISTS : ISC_R_SUCCESS;
 }
 
 isc_result_t
@@ -497,14 +486,14 @@ dns_peer_setkeybycharp(dns_peer_t *peer, const char *keyval) {
 	isc_buffer_constinit(&b, keyval, strlen(keyval));
 	isc_buffer_add(&b, strlen(keyval));
 	result = dns_name_fromtext(dns_fixedname_name(&fname), &b, dns_rootname,
-				   0, NULL);
+				   0);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	name = isc_mem_get(peer->mem, sizeof(dns_name_t));
 
-	dns_name_init(name, NULL);
+	dns_name_init(name);
 	dns_name_dup(dns_fixedname_name(&fname), peer->mem, name);
 
 	result = dns_peer_setkey(peer, &name);
@@ -512,5 +501,5 @@ dns_peer_setkeybycharp(dns_peer_t *peer, const char *keyval) {
 		isc_mem_put(peer->mem, name, sizeof(dns_name_t));
 	}
 
-	return (result);
+	return result;
 }

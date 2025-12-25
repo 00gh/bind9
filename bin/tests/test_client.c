@@ -25,6 +25,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <isc/lib.h>
 #include <isc/loop.h>
 #include <isc/managers.h>
 #include <isc/mem.h>
@@ -50,10 +51,6 @@ static const char *protocols[] = { "udp",	    "tcp",
 				   "https-get",	    "http-plain-post",
 				   "http-plain-get" };
 
-static isc_mem_t *mctx = NULL;
-static isc_loopmgr_t *loopmgr = NULL;
-static isc_nm_t *netmgr = NULL;
-
 static protocol_t protocol;
 static const char *address;
 static const char *port;
@@ -74,12 +71,12 @@ parse_port(const char *input) {
 	long val = strtol(input, &endptr, 10);
 
 	if ((*endptr != '\0') || (val <= 0) || (val >= 65536)) {
-		return (ISC_R_BADNUMBER);
+		return ISC_R_BADNUMBER;
 	}
 
 	port = input;
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -87,11 +84,11 @@ parse_protocol(const char *input) {
 	for (size_t i = 0; i < ARRAY_SIZE(protocols); i++) {
 		if (!strcasecmp(input, protocols[i])) {
 			protocol = i;
-			return (ISC_R_SUCCESS);
+			return ISC_R_SUCCESS;
 		}
 	}
 
-	return (ISC_R_BADNUMBER);
+	return ISC_R_BADNUMBER;
 }
 
 static isc_result_t
@@ -102,16 +99,16 @@ parse_address(const char *input) {
 	if (inet_pton(AF_INET6, input, &in6) == 1) {
 		family = AF_INET6;
 		address = input;
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	if (inet_pton(AF_INET, input, &in) == 1) {
 		family = AF_INET;
 		address = input;
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
-	return (ISC_R_BADADDRESSFORM);
+	return ISC_R_BADADDRESSFORM;
 }
 
 static int
@@ -120,12 +117,12 @@ parse_workers(const char *input) {
 	long val = strtol(input, &endptr, 10);
 
 	if ((*endptr != '\0') || (val <= 0) || (val >= 128)) {
-		return (ISC_R_BADNUMBER);
+		return ISC_R_BADNUMBER;
 	}
 
 	workers = val;
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -134,12 +131,12 @@ parse_timeout(const char *input) {
 	long val = strtol(input, &endptr, 10);
 
 	if ((*endptr != '\0') || (val <= 0) || (val >= 120)) {
-		return (ISC_R_BADNUMBER);
+		return ISC_R_BADNUMBER;
 	}
 
 	timeout = (in_port_t)val * 1000;
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -157,7 +154,7 @@ parse_input(const char *input) {
 
 	close(in);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -170,7 +167,7 @@ parse_output(const char *input) {
 	}
 	RUNTIME_CHECK(out >= 0);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static void
@@ -286,7 +283,7 @@ parse_options(int argc, char **argv) {
 
 static void
 setup(void) {
-	isc_managers_create(&mctx, workers, &loopmgr, &netmgr);
+	isc_managers_create(workers);
 }
 
 static void
@@ -299,7 +296,7 @@ teardown(void) {
 		isc_tlsctx_free(&tls_ctx);
 	}
 
-	isc_managers_destroy(&mctx, &loopmgr, &netmgr);
+	isc_managers_destroy();
 }
 
 static void
@@ -374,20 +371,20 @@ static void
 run(void) {
 	switch (protocol) {
 	case UDP:
-		isc_nm_udpconnect(netmgr, &sockaddr_local, &sockaddr_remote,
-				  connect_cb, NULL, timeout);
+		isc_nm_udpconnect(&sockaddr_local, &sockaddr_remote, connect_cb,
+				  NULL, timeout);
 		break;
 	case TCP:
-		isc_nm_streamdnsconnect(netmgr, &sockaddr_local,
-					&sockaddr_remote, connect_cb, NULL,
-					timeout, NULL, NULL);
+		isc_nm_streamdnsconnect(&sockaddr_local, &sockaddr_remote,
+					connect_cb, NULL, timeout, NULL, NULL,
+					NULL, ISC_NM_PROXY_NONE, NULL);
 		break;
 	case DOT: {
 		isc_tlsctx_createclient(&tls_ctx);
 
-		isc_nm_streamdnsconnect(netmgr, &sockaddr_local,
-					&sockaddr_remote, connect_cb, NULL,
-					timeout, tls_ctx, NULL);
+		isc_nm_streamdnsconnect(&sockaddr_local, &sockaddr_remote,
+					connect_cb, NULL, timeout, tls_ctx,
+					NULL, NULL, ISC_NM_PROXY_NONE, NULL);
 		break;
 	}
 #if HAVE_LIBNGHTTP2
@@ -406,9 +403,9 @@ run(void) {
 		if (is_https) {
 			isc_tlsctx_createclient(&tls_ctx);
 		}
-		isc_nm_httpconnect(netmgr, &sockaddr_local, &sockaddr_remote,
-				   req_url, is_post, connect_cb, NULL, tls_ctx,
-				   NULL, timeout);
+		isc_nm_httpconnect(&sockaddr_local, &sockaddr_remote, req_url,
+				   is_post, connect_cb, NULL, tls_ctx, NULL,
+				   NULL, timeout, ISC_NM_PROXY_NONE, NULL);
 	} break;
 #endif
 	default:
@@ -428,5 +425,5 @@ main(int argc, char **argv) {
 
 	teardown();
 
-	exit(EXIT_SUCCESS);
+	return EXIT_SUCCESS;
 }

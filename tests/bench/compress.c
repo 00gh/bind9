@@ -18,6 +18,7 @@
 #include <stdlib.h>
 
 #include <isc/buffer.h>
+#include <isc/lib.h>
 #include <isc/mem.h>
 #include <isc/result.h>
 #include <isc/time.h>
@@ -25,13 +26,14 @@
 
 #include <dns/compress.h>
 #include <dns/fixedname.h>
+#include <dns/lib.h>
 #include <dns/name.h>
 
 static void
 CHECKRESULT(isc_result_t result, const char *msg) {
 	if (result != ISC_R_SUCCESS) {
 		printf("%s: %s\n", msg, isc_result_totext(result));
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 }
 
@@ -39,9 +41,6 @@ int
 main(void) {
 	isc_result_t result;
 	isc_buffer_t buf;
-
-	isc_mem_t *mctx = NULL;
-	isc_mem_create(&mctx);
 
 	static dns_fixedname_t fixedname[65536];
 	unsigned int count = 0;
@@ -60,7 +59,7 @@ main(void) {
 			errx(1, "too many names");
 		}
 		dns_name_t *name = dns_fixedname_initname(&fixedname[count++]);
-		result = dns_name_fromtext(name, &buf, dns_rootname, 0, NULL);
+		result = dns_name_fromtext(name, &buf, dns_rootname, 0);
 		CHECKRESULT(result, line);
 	}
 
@@ -74,14 +73,14 @@ main(void) {
 		dns_compress_t cctx;
 
 		isc_buffer_init(&buf, wire, sizeof(wire));
-		dns_compress_init(&cctx, mctx, 0);
+		dns_compress_init(&cctx, isc_g_mctx, 0);
 
 		for (unsigned int i = 0; i < count; i++) {
 			dns_name_t *name = dns_fixedname_name(&fixedname[i]);
 			result = dns_name_towire(name, &cctx, &buf);
 			if (result == ISC_R_NOSPACE) {
 				dns_compress_invalidate(&cctx);
-				dns_compress_init(&cctx, mctx, 0);
+				dns_compress_init(&cctx, isc_g_mctx, 0);
 				isc_buffer_init(&buf, wire, sizeof(wire));
 			} else {
 				CHECKRESULT(result, "dns_name_towire");
@@ -98,7 +97,5 @@ main(void) {
 
 	printf("names %u\n", count);
 
-	isc_mem_destroy(&mctx);
-
-	return (0);
+	return 0;
 }

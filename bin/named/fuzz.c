@@ -25,13 +25,11 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <isc/condition.h>
+#include <isc/log.h>
 #include <isc/loop.h>
 #include <isc/mutex.h>
 #include <isc/thread.h>
 #include <isc/util.h>
-
-#include <dns/log.h>
 
 #include <named/globals.h>
 #include <named/log.h>
@@ -126,8 +124,8 @@ fuzz_thread_client(void *arg) {
 				close(sockfd);
 				named_server_flushonshutdown(named_g_server,
 							     false);
-				isc_loopmgr_shutdown(named_g_loopmgr);
-				return (NULL);
+				isc_loopmgr_shutdown();
+				return NULL;
 			}
 			raise(SIGSTOP);
 			goto next;
@@ -159,9 +157,9 @@ fuzz_thread_client(void *arg) {
 	close(sockfd);
 
 	named_server_flushonshutdown(named_g_server, false);
-	isc_loopmgr_shutdown(named_g_loopmgr);
+	isc_loopmgr_shutdown();
 
-	return (NULL);
+	return NULL;
 }
 
 /*
@@ -374,8 +372,8 @@ fuzz_thread_resolver(void *arg) {
 				close(listenfd);
 				named_server_flushonshutdown(named_g_server,
 							     false);
-				isc_loopmgr_shutdown(named_g_loopmgr);
-				return (NULL);
+				isc_loopmgr_shutdown();
+				return NULL;
 			}
 			raise(SIGSTOP);
 			continue;
@@ -574,7 +572,7 @@ fuzz_thread_resolver(void *arg) {
 	close(sockfd);
 	close(listenfd);
 	named_server_flushonshutdown(named_g_server, false);
-	isc_loopmgr_shutdown(named_g_loopmgr);
+	isc_loopmgr_shutdown();
 
 #ifdef __AFL_LOOP
 	/*
@@ -587,7 +585,7 @@ fuzz_thread_resolver(void *arg) {
 	__AFL_LOOP(0);
 #endif /* ifdef __AFL_LOOP */
 
-	return (NULL);
+	return NULL;
 }
 
 /*
@@ -716,9 +714,9 @@ fuzz_thread_tcp(void *arg) {
 	free(buf);
 	close(sockfd);
 	named_server_flushonshutdown(named_g_server, false);
-	isc_loopmgr_shutdown(named_g_loopmgr);
+	isc_loopmgr_shutdown();
 
-	return (NULL);
+	return NULL;
 }
 
 #endif /* ENABLE_AFL */
@@ -733,7 +731,7 @@ named_fuzz_notify(void) {
 #ifdef ENABLE_AFL
 	if (getenv("AFL_CMIN")) {
 		named_server_flushonshutdown(named_g_server, false);
-		isc_loopmgr_shutdown(named_g_loopmgr);
+		isc_loopmgr_shutdown();
 		return;
 	}
 

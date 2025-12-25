@@ -12,16 +12,17 @@
  */
 
 #include <ctype.h>
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
-#include <stdint.h>
 #include <stdlib.h>
 
 #define UNIT_TESTING
 #include <cmocka.h>
 
 #include <isc/ascii.h>
+#include <isc/lib.h>
 
 #include <tests/isc.h>
 

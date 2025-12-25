@@ -38,9 +38,9 @@
 	} while (0)
 
 #include <named/log.h>
-#define LOG(msg)                                               \
-	isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL, \
-		      NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR, "%s", msg)
+#define LOG(msg)                                                         \
+	isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER, \
+		      ISC_LOG_ERROR, "%s", msg)
 
 isc_result_t
 named_tkeyctx_fromconfig(const cfg_obj_t *options, isc_mem_t *mctx,
@@ -53,10 +53,7 @@ named_tkeyctx_fromconfig(const cfg_obj_t *options, isc_mem_t *mctx,
 	isc_buffer_t b;
 	const cfg_obj_t *obj;
 
-	result = dns_tkeyctx_create(mctx, &tctx);
-	if (result != ISC_R_SUCCESS) {
-		return (result);
-	}
+	dns_tkeyctx_create(mctx, &tctx);
 
 	obj = NULL;
 	result = cfg_map_get(options, "tkey-domain", &obj);
@@ -65,9 +62,9 @@ named_tkeyctx_fromconfig(const cfg_obj_t *options, isc_mem_t *mctx,
 		isc_buffer_constinit(&b, s, strlen(s));
 		isc_buffer_add(&b, strlen(s));
 		name = dns_fixedname_initname(&fname);
-		RETERR(dns_name_fromtext(name, &b, dns_rootname, 0, NULL));
+		RETERR(dns_name_fromtext(name, &b, dns_rootname, 0));
 		tctx->domain = isc_mem_get(mctx, sizeof(dns_name_t));
-		dns_name_init(tctx->domain, NULL);
+		dns_name_init(tctx->domain);
 		dns_name_dup(name, mctx, tctx->domain);
 	}
 
@@ -79,7 +76,7 @@ named_tkeyctx_fromconfig(const cfg_obj_t *options, isc_mem_t *mctx,
 		isc_buffer_constinit(&b, s, strlen(s));
 		isc_buffer_add(&b, strlen(s));
 		name = dns_fixedname_initname(&fname);
-		RETERR(dns_name_fromtext(name, &b, dns_rootname, 0, NULL));
+		RETERR(dns_name_fromtext(name, &b, dns_rootname, 0));
 		RETERR(dst_gssapi_acquirecred(name, false, &tctx->gsscred));
 	}
 
@@ -91,9 +88,9 @@ named_tkeyctx_fromconfig(const cfg_obj_t *options, isc_mem_t *mctx,
 	}
 
 	*tctxp = tctx;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 
 failure:
 	dns_tkeyctx_destroy(&tctx);
-	return (result);
+	return result;
 }

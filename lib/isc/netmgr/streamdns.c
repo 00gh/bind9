@@ -92,6 +92,9 @@ static bool
 streamdns_closing(isc_nmsocket_t *sock);
 
 static void
+streamdns_resume_processing(void *arg);
+
+static void
 streamdns_resumeread(isc_nmsocket_t *sock, isc_nmhandle_t *transphandle) {
 	if (!sock->streamdns.reading) {
 		sock->streamdns.reading = true;
@@ -169,18 +172,32 @@ streamdns_on_complete_dnsmessage(isc_dnsstream_assembler_t *dnsasm,
 		stop = true;
 	}
 
+	if (sock->active_handles_max != 0 &&
+	    (sock->active_handles_cur >= sock->active_handles_max))
+	{
+		stop = true;
+	}
+	INSIST(sock->active_handles_cur <= sock->active_handles_max);
+
 	isc__nmsocket_timer_stop(sock);
-	if (!stop && last_datum) {
+	if (stop) {
+		streamdns_pauseread(sock, transphandle);
+	} else if (last_datum) {
 		/*
 		 * We have processed all data, need to read more.
 		 * The call also restarts the timer.
 		 */
 		streamdns_readmore(sock, transphandle);
-	} else if (stop) {
+	} else {
+		/*
+		 * Process more DNS messages in the next loop tick.
+		 */
 		streamdns_pauseread(sock, transphandle);
+		isc_async_run(sock->worker->loop, streamdns_resume_processing,
+			      sock);
 	}
 
-	return (!stop);
+	return false;
 }
 
 /*
@@ -203,8 +220,8 @@ streamdns_on_dnsmessage_data_cb(isc_dnsstream_assembler_t *dnsasm,
 		 * A complete DNS message has been assembled from the incoming
 		 * data. Let's process it.
 		 */
-		return (streamdns_on_complete_dnsmessage(dnsasm, region, sock,
-							 transphandle));
+		return streamdns_on_complete_dnsmessage(dnsasm, region, sock,
+							transphandle);
 	case ISC_R_RANGE:
 		/*
 		 * It seems that someone attempts to send us some binary junk
@@ -213,7 +230,7 @@ streamdns_on_dnsmessage_data_cb(isc_dnsstream_assembler_t *dnsasm,
 		 * We should treat it as a hard error.
 		 */
 		streamdns_failed_read_cb(sock, result, false);
-		return (false);
+		return false;
 	case ISC_R_NOMORE:
 		/*
 		 * We do not have enough data to process the next message and
@@ -222,7 +239,7 @@ streamdns_on_dnsmessage_data_cb(isc_dnsstream_assembler_t *dnsasm,
 		if (sock->recv_handle != NULL) {
 			streamdns_readmore(sock, transphandle);
 		}
-		return (false);
+		return false;
 	default:
 		UNREACHABLE();
 	};
@@ -250,13 +267,11 @@ streamdns_sock_new(isc__networker_t *worker, const isc_nmsocket_type_t type,
 	INSIST(type == isc_nm_streamdnssocket ||
 	       type == isc_nm_streamdnslistener);
 
-	sock = isc_mem_get(worker->mctx, sizeof(*sock));
+	sock = isc_mempool_get(worker->nmsocket_pool);
 	isc__nmsocket_init(sock, worker, type, addr, NULL);
 	sock->result = ISC_R_UNSET;
 	if (type == isc_nm_streamdnssocket) {
-		uint32_t initial = 0;
-		isc_nm_gettimeouts(worker->netmgr, &initial, NULL, NULL, NULL);
-		sock->read_timeout = initial;
+		sock->read_timeout = isc_nm_getinitialtimeout();
 		sock->client = !is_server;
 		sock->connecting = !is_server;
 		sock->streamdns.input = isc_dnsstream_assembler_new(
@@ -264,7 +279,7 @@ streamdns_sock_new(isc__networker_t *worker, const isc_nmsocket_type_t type,
 			sock);
 	}
 
-	return (sock);
+	return sock;
 }
 
 static void
@@ -367,14 +382,14 @@ error:
 }
 
 void
-isc_nm_streamdnsconnect(isc_nm_t *mgr, isc_sockaddr_t *local,
-			isc_sockaddr_t *peer, isc_nm_cb_t cb, void *cbarg,
-			unsigned int timeout, isc_tlsctx_t *ctx,
-			isc_tlsctx_client_session_cache_t *client_sess_cache) {
+isc_nm_streamdnsconnect(isc_sockaddr_t *local, isc_sockaddr_t *peer,
+			isc_nm_cb_t cb, void *cbarg, unsigned int timeout,
+			isc_tlsctx_t *tlsctx, const char *sni_hostname,
+			isc_tlsctx_client_session_cache_t *client_sess_cache,
+			isc_nm_proxy_type_t proxy_type,
+			isc_nm_proxyheader_info_t *proxy_info) {
 	isc_nmsocket_t *nsock = NULL;
-	isc__networker_t *worker = &mgr->workers[isc_tid()];
-
-	REQUIRE(VALID_NM(mgr));
+	isc__networker_t *worker = isc__networker_current();
 
 	if (isc__nm_closing(worker)) {
 		cb(NULL, ISC_R_SHUTTINGDOWN, cbarg);
@@ -387,15 +402,42 @@ isc_nm_streamdnsconnect(isc_nm_t *mgr, isc_sockaddr_t *local,
 	nsock->connect_cbarg = cbarg;
 	nsock->connect_timeout = timeout;
 
-	if (ctx == NULL) {
-		INSIST(client_sess_cache == NULL);
-		isc_nm_tcpconnect(mgr, local, peer,
-				  streamdns_transport_connected, nsock,
-				  nsock->connect_timeout);
-	} else {
-		isc_nm_tlsconnect(mgr, local, peer,
-				  streamdns_transport_connected, nsock, ctx,
-				  client_sess_cache, nsock->connect_timeout);
+	switch (proxy_type) {
+	case ISC_NM_PROXY_NONE:
+		if (tlsctx == NULL) {
+			INSIST(client_sess_cache == NULL);
+			isc_nm_tcpconnect(local, peer,
+					  streamdns_transport_connected, nsock,
+					  nsock->connect_timeout);
+		} else {
+			isc_nm_tlsconnect(
+				local, peer, streamdns_transport_connected,
+				nsock, tlsctx, sni_hostname, client_sess_cache,
+				nsock->connect_timeout, false, proxy_info);
+		}
+		break;
+	case ISC_NM_PROXY_PLAIN:
+		if (tlsctx == NULL) {
+			isc_nm_proxystreamconnect(local, peer,
+						  streamdns_transport_connected,
+						  nsock, nsock->connect_timeout,
+						  NULL, NULL, NULL, proxy_info);
+		} else {
+			isc_nm_tlsconnect(
+				local, peer, streamdns_transport_connected,
+				nsock, tlsctx, sni_hostname, client_sess_cache,
+				nsock->connect_timeout, true, proxy_info);
+		}
+		break;
+	case ISC_NM_PROXY_ENCRYPTED:
+		INSIST(tlsctx != NULL);
+		isc_nm_proxystreamconnect(
+			local, peer, streamdns_transport_connected, nsock,
+			nsock->connect_timeout, tlsctx, sni_hostname,
+			client_sess_cache, proxy_info);
+		break;
+	default:
+		UNREACHABLE();
 	}
 }
 
@@ -407,14 +449,14 @@ isc__nmsocket_streamdns_timer_running(isc_nmsocket_t *sock) {
 	REQUIRE(sock->type == isc_nm_streamdnssocket);
 
 	if (sock->outerhandle == NULL) {
-		return (false);
+		return false;
 	}
 
 	INSIST(VALID_NMHANDLE(sock->outerhandle));
 	transp_sock = sock->outerhandle->sock;
 	INSIST(VALID_NMSOCK(transp_sock));
 
-	return (isc__nmsocket_timer_running(transp_sock));
+	return isc__nmsocket_timer_running(transp_sock);
 }
 
 void
@@ -567,7 +609,7 @@ streamdns_get_send_req(isc_nmsocket_t *sock, isc_mem_t *mctx,
 
 	sock->streamdns.nsending++;
 
-	return (send_req);
+	return send_req;
 }
 
 static void
@@ -621,10 +663,10 @@ streamdns_writecb(isc_nmhandle_t *handle, isc_result_t result, void *cbarg) {
 
 static bool
 streamdns_closing(isc_nmsocket_t *sock) {
-	return (isc__nmsocket_closing(sock) || isc__nm_closing(sock->worker) ||
-		sock->outerhandle == NULL ||
-		(sock->outerhandle != NULL &&
-		 isc__nmsocket_closing(sock->outerhandle->sock)));
+	return isc__nmsocket_closing(sock) || isc__nm_closing(sock->worker) ||
+	       sock->outerhandle == NULL ||
+	       (sock->outerhandle != NULL &&
+		isc__nmsocket_closing(sock->outerhandle->sock));
 }
 
 static void
@@ -639,6 +681,12 @@ streamdns_resume_processing(void *arg) {
 		return;
 	}
 
+	if (sock->active_handles_max != 0 &&
+	    (sock->active_handles_cur >= sock->active_handles_max))
+	{
+		return;
+	}
+
 	streamdns_handle_incoming_data(sock, sock->outerhandle, NULL, 0);
 }
 
@@ -647,16 +695,15 @@ streamdns_accept_cb(isc_nmhandle_t *handle, isc_result_t result, void *cbarg) {
 	isc_nmsocket_t *listensock = (isc_nmsocket_t *)cbarg;
 	isc_nmsocket_t *nsock;
 	isc_sockaddr_t iface;
-	int tid = isc_tid();
-	uint32_t initial = 0;
+	isc_tid_t tid = isc_tid();
 
 	REQUIRE(VALID_NMHANDLE(handle));
 	REQUIRE(VALID_NMSOCK(handle->sock));
 
 	if (isc__nm_closing(handle->sock->worker)) {
-		return (ISC_R_SHUTTINGDOWN);
+		return ISC_R_SHUTTINGDOWN;
 	} else if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	REQUIRE(VALID_NMSOCK(listensock));
@@ -670,9 +717,7 @@ streamdns_accept_cb(isc_nmhandle_t *handle, isc_result_t result, void *cbarg) {
 
 	nsock->peer = isc_nmhandle_peeraddr(handle);
 	nsock->tid = tid;
-	isc_nm_gettimeouts(handle->sock->worker->netmgr, &initial, NULL, NULL,
-			   NULL);
-	nsock->read_timeout = initial;
+	nsock->read_timeout = isc_nm_getinitialtimeout();
 	nsock->accepting = true;
 	nsock->active = true;
 
@@ -696,33 +741,31 @@ streamdns_accept_cb(isc_nmhandle_t *handle, isc_result_t result, void *cbarg) {
 
 	nsock->closehandle_cb = streamdns_resume_processing;
 	isc__nmhandle_set_manual_timer(nsock->outerhandle, true);
-	isc_nm_gettimeouts(nsock->worker->netmgr, &initial, NULL, NULL, NULL);
 	/* settimeout restarts the timer */
-	isc_nmhandle_settimeout(nsock->outerhandle, initial);
+	isc_nmhandle_settimeout(nsock->outerhandle, isc_nm_getinitialtimeout());
 	(void)isc_nmhandle_set_tcp_nodelay(nsock->outerhandle, true);
 	streamdns_handle_incoming_data(nsock, nsock->outerhandle, NULL, 0);
 
 exit:
 	nsock->accepting = false;
 
-	return (result);
+	return result;
 }
 
 isc_result_t
-isc_nm_listenstreamdns(isc_nm_t *mgr, uint32_t workers, isc_sockaddr_t *iface,
+isc_nm_listenstreamdns(uint32_t workers, isc_sockaddr_t *iface,
 		       isc_nm_recv_cb_t recv_cb, void *recv_cbarg,
 		       isc_nm_accept_cb_t accept_cb, void *accept_cbarg,
 		       int backlog, isc_quota_t *quota, isc_tlsctx_t *tlsctx,
-		       isc_nmsocket_t **sockp) {
-	isc_result_t result;
+		       isc_nm_proxy_type_t proxy_type, isc_nmsocket_t **sockp) {
+	isc_result_t result = ISC_R_FAILURE;
 	isc_nmsocket_t *listener = NULL;
-	isc__networker_t *worker = &mgr->workers[isc_tid()];
+	isc__networker_t *worker = isc__networker_current();
 
-	REQUIRE(VALID_NM(mgr));
 	REQUIRE(isc_tid() == 0);
 
 	if (isc__nm_closing(worker)) {
-		return (ISC_R_SHUTTINGDOWN);
+		return ISC_R_SHUTTINGDOWN;
 	}
 
 	listener = streamdns_sock_new(worker, isc_nm_streamdnslistener, iface,
@@ -732,19 +775,44 @@ isc_nm_listenstreamdns(isc_nm_t *mgr, uint32_t workers, isc_sockaddr_t *iface,
 	listener->recv_cb = recv_cb;
 	listener->recv_cbarg = recv_cbarg;
 
-	if (tlsctx == NULL) {
-		result = isc_nm_listentcp(mgr, workers, iface,
-					  streamdns_accept_cb, listener,
-					  backlog, quota, &listener->outer);
-	} else {
-		result = isc_nm_listentls(
-			mgr, workers, iface, streamdns_accept_cb, listener,
-			backlog, quota, tlsctx, &listener->outer);
-	}
+	switch (proxy_type) {
+	case ISC_NM_PROXY_NONE:
+		if (tlsctx == NULL) {
+			result = isc_nm_listentcp(
+				workers, iface, streamdns_accept_cb, listener,
+				backlog, quota, &listener->outer);
+		} else {
+			result = isc_nm_listentls(workers, iface,
+						  streamdns_accept_cb, listener,
+						  backlog, quota, tlsctx, false,
+						  &listener->outer);
+		}
+		break;
+	case ISC_NM_PROXY_PLAIN:
+		if (tlsctx == NULL) {
+			result = isc_nm_listenproxystream(
+				workers, iface, streamdns_accept_cb, listener,
+				backlog, quota, NULL, &listener->outer);
+		} else {
+			result = isc_nm_listentls(
+				workers, iface, streamdns_accept_cb, listener,
+				backlog, quota, tlsctx, true, &listener->outer);
+		}
+		break;
+	case ISC_NM_PROXY_ENCRYPTED:
+		INSIST(tlsctx != NULL);
+		result = isc_nm_listenproxystream(
+			workers, iface, streamdns_accept_cb, listener, backlog,
+			quota, tlsctx, &listener->outer);
+		break;
+	default:
+		UNREACHABLE();
+	};
+
 	if (result != ISC_R_SUCCESS) {
 		listener->closed = true;
 		isc__nmsocket_detach(&listener);
-		return (result);
+		return result;
 	}
 
 	/* copy the actual port we're listening on into sock->iface */
@@ -760,7 +828,7 @@ isc_nm_listenstreamdns(isc_nm_t *mgr, uint32_t workers, isc_sockaddr_t *iface,
 
 	*sockp = listener;
 
-	return (result);
+	return result;
 }
 
 void
@@ -784,12 +852,14 @@ isc__nm_streamdns_cleanup_data(isc_nmsocket_t *sock) {
 		break;
 	case isc_nm_tlslistener:
 	case isc_nm_tcplistener:
+	case isc_nm_proxystreamlistener:
 		if (sock->streamdns.listener != NULL) {
 			isc__nmsocket_detach(&sock->streamdns.listener);
 		}
 		break;
 	case isc_nm_tlssocket:
 	case isc_nm_tcpsocket:
+	case isc_nm_proxystreamsocket:
 		if (sock->streamdns.sock != NULL) {
 			isc__nmsocket_detach(&sock->streamdns.sock);
 		}
@@ -831,7 +901,7 @@ isc__nm_streamdns_read(isc_nmhandle_t *handle, isc_nm_recv_cb_t cb,
 	sock = handle->sock;
 	REQUIRE(VALID_NMSOCK(sock));
 	REQUIRE(sock->type == isc_nm_streamdnssocket);
-	REQUIRE(sock->recv_handle == NULL);
+	REQUIRE(sock->recv_handle == handle || sock->recv_handle == NULL);
 	REQUIRE(sock->tid == isc_tid());
 
 	closing = streamdns_closing(sock);
@@ -839,7 +909,9 @@ isc__nm_streamdns_read(isc_nmhandle_t *handle, isc_nm_recv_cb_t cb,
 	sock->recv_cb = cb;
 	sock->recv_cbarg = cbarg;
 	sock->reading = true;
-	isc_nmhandle_attach(handle, &sock->recv_handle);
+	if (sock->recv_handle == NULL) {
+		isc_nmhandle_attach(handle, &sock->recv_handle);
+	}
 
 	/*
 	 * In some cases there is little sense in making the operation
@@ -921,6 +993,7 @@ streamdns_close_direct(isc_nmsocket_t *sock) {
 
 	if (sock->outerhandle != NULL) {
 		sock->streamdns.reading = false;
+		isc__nmsocket_timer_stop(sock);
 		isc_nm_read_stop(sock->outerhandle);
 		isc_nmhandle_close(sock->outerhandle);
 		isc_nmhandle_detach(&sock->outerhandle);
@@ -1032,10 +1105,10 @@ isc__nm_streamdns_has_encryption(const isc_nmhandle_t *handle) {
 	sock = handle->sock;
 	if (sock->outerhandle != NULL) {
 		INSIST(VALID_NMHANDLE(sock->outerhandle));
-		return (isc_nm_has_encryption(sock->outerhandle));
+		return isc_nm_has_encryption(sock->outerhandle);
 	}
 
-	return (false);
+	return false;
 }
 
 const char *
@@ -1049,13 +1122,12 @@ isc__nm_streamdns_verify_tls_peer_result_string(const isc_nmhandle_t *handle) {
 	sock = handle->sock;
 	if (sock->outerhandle != NULL) {
 		INSIST(VALID_NMHANDLE(sock->outerhandle));
-		return (isc_nm_verify_tls_peer_result_string(
-			sock->outerhandle));
+		return isc_nm_verify_tls_peer_result_string(sock->outerhandle);
 	} else if (sock->streamdns.tls_verify_error != NULL) {
-		return (sock->streamdns.tls_verify_error);
+		return sock->streamdns.tls_verify_error;
 	}
 
-	return (NULL);
+	return NULL;
 }
 
 void
@@ -1086,7 +1158,7 @@ isc__nm_streamdns_xfr_checkperm(isc_nmsocket_t *sock) {
 		}
 	}
 
-	return (result);
+	return result;
 }
 
 void

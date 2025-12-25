@@ -22,7 +22,6 @@
 
 #include <dns/ecs.h>
 #include <dns/nsec.h>
-#include <dns/rbt.h>
 #include <dns/rdata.h>
 #include <dns/rdatatype.h>
 #include <dns/result.h>
@@ -46,12 +45,12 @@ dns_ecs_equals(const dns_ecs_t *ecs1, const dns_ecs_t *ecs2) {
 	if (ecs1->source != ecs2->source ||
 	    ecs1->addr.family != ecs2->addr.family)
 	{
-		return (false);
+		return false;
 	}
 
 	alen = (ecs1->source + 7) / 8;
 	if (alen == 0) {
-		return (true);
+		return true;
 	}
 
 	switch (ecs1->addr.family) {
@@ -74,7 +73,7 @@ dns_ecs_equals(const dns_ecs_t *ecs1, const dns_ecs_t *ecs2) {
 	 * prefix.
 	 */
 	if (alen > 1 && memcmp(addr1, addr2, alen - 1) != 0) {
-		return (false);
+		return false;
 	}
 
 	/*
@@ -89,10 +88,10 @@ dns_ecs_equals(const dns_ecs_t *ecs1, const dns_ecs_t *ecs2) {
 	}
 
 	if ((addr1[alen - 1] & mask) != (addr2[alen - 1] & mask)) {
-		return (false);
+		return false;
 	}
 
-	return (true);
+	return true;
 }
 
 void

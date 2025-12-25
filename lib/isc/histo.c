@@ -14,7 +14,6 @@
 #include <assert.h>
 #include <errno.h>
 #include <math.h>
-#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -26,23 +25,6 @@
 #include <isc/magic.h>
 #include <isc/mem.h>
 #include <isc/tid.h>
-
-/*
- * XXXFANF to be added to <isc/util.h> by a commmit in a qp-trie
- * feature branch
- */
-#define STRUCT_FLEX_SIZE(pointer, member, count) \
-	(sizeof(*(pointer)) + sizeof(*(pointer)->member) * (count))
-
-/*
- * XXXFANF this should probably be in <isc/util.h> too
- */
-#define OUTARG(ptr, val)                \
-	({                              \
-		if ((ptr) != NULL) {    \
-			*(ptr) = (val); \
-		}                       \
-	})
 
 #define HISTO_MAGIC	    ISC_MAGIC('H', 's', 't', 'o')
 #define HISTO_VALID(p)	    ISC_MAGIC_VALID(p, HISTO_MAGIC)
@@ -75,9 +57,8 @@
 #define EXPONENTS(hg) (CHUNKS - DENORMALS(hg))
 #define BUCKETS(hg)   (EXPONENTS(hg) * MANTISSAS(hg))
 
-#define MAXCHUNK(hg)   EXPONENTS(hg)
-#define CHUNKSIZE(hg)  MANTISSAS(hg)
-#define CHUNKBYTES(hg) (CHUNKSIZE(hg) * sizeof(hg_bucket_t))
+#define MAXCHUNK(hg)  EXPONENTS(hg)
+#define CHUNKSIZE(hg) MANTISSAS(hg)
 
 typedef atomic_uint_fast64_t hg_bucket_t;
 typedef atomic_ptr(hg_bucket_t) hg_chunk_t;
@@ -124,7 +105,8 @@ isc_histo_destroy(isc_histo_t **hgp) {
 
 	for (uint c = 0; c < CHUNKS; c++) {
 		if (hg->chunk[c] != NULL) {
-			isc_mem_put(hg->mctx, hg->chunk[c], CHUNKBYTES(hg));
+			isc_mem_cput(hg->mctx, hg->chunk[c], CHUNKSIZE(hg),
+				     sizeof(hg_bucket_t));
 		}
 	}
 	isc_mem_putanddetach(&hg->mctx, hg, sizeof(*hg));
@@ -135,7 +117,7 @@ isc_histo_destroy(isc_histo_t **hgp) {
 uint
 isc_histo_sigbits(isc_histo_t *hg) {
 	REQUIRE(HISTO_VALID(hg));
-	return (hg->sigbits);
+	return hg->sigbits;
 }
 
 /*
@@ -146,14 +128,14 @@ uint
 isc_histo_bits_to_digits(uint bits) {
 	REQUIRE(bits >= ISC_HISTO_MINBITS);
 	REQUIRE(bits <= ISC_HISTO_MAXBITS);
-	return (floor(1.0 - (1.0 - bits) * LN_2 / LN_10));
+	return floor(1.0 - (1.0 - bits) * LN_2 / LN_10);
 }
 
 uint
 isc_histo_digits_to_bits(uint digits) {
 	REQUIRE(digits >= ISC_HISTO_MINDIGITS);
 	REQUIRE(digits <= ISC_HISTO_MAXDIGITS);
-	return (ceil(1.0 - (1.0 - digits) * LN_10 / LN_2));
+	return ceil(1.0 - (1.0 - digits) * LN_10 / LN_2);
 }
 
 /**********************************************************************/
@@ -204,7 +186,7 @@ value_to_key(const isc_histo_t *hg, uint64_t value) {
 	/* mantissa has leading bit set except for denormals */
 	uint mantissa = value >> exponent;
 	/* leading bit of mantissa adds one to exponent */
-	return ((exponent << hg->sigbits) + mantissa);
+	return (exponent << hg->sigbits) + mantissa;
 }
 
 /*
@@ -233,12 +215,12 @@ key_to_minval(const isc_histo_t *hg, uint key) {
 	uint chunksize = CHUNKSIZE(hg);
 	uint exponent = (key / chunksize) - 1;
 	uint64_t mantissa = (key % chunksize) + chunksize;
-	return (key < chunksize ? key : mantissa << exponent);
+	return key < chunksize ? key : mantissa << exponent;
 }
 
 static inline uint64_t
 key_to_maxval(const isc_histo_t *hg, uint key) {
-	return (key_to_minval(hg, key + 1) - 1);
+	return key_to_minval(hg, key + 1) - 1;
 }
 
 /**********************************************************************/
@@ -249,22 +231,23 @@ key_to_new_bucket(isc_histo_t *hg, uint key) {
 	uint chunksize = CHUNKSIZE(hg);
 	uint chunk = key / chunksize;
 	uint bucket = key % chunksize;
-	size_t bytes = CHUNKBYTES(hg);
 	hg_bucket_t *old_cp = NULL;
-	hg_bucket_t *new_cp = isc_mem_getx(hg->mctx, bytes, ISC_MEM_ZERO);
+	hg_bucket_t *new_cp = isc_mem_cget(hg->mctx, CHUNKSIZE(hg),
+					   sizeof(hg_bucket_t));
 	hg_chunk_t *cpp = &hg->chunk[chunk];
 	if (atomic_compare_exchange_strong_acq_rel(cpp, &old_cp, new_cp)) {
-		return (&new_cp[bucket]);
+		return &new_cp[bucket];
 	} else {
 		/* lost the race, so use the winner's chunk */
-		isc_mem_put(hg->mctx, new_cp, bytes);
-		return (&old_cp[bucket]);
+		isc_mem_cput(hg->mctx, new_cp, CHUNKSIZE(hg),
+			     sizeof(hg_bucket_t));
+		return &old_cp[bucket];
 	}
 }
 
 static hg_bucket_t *
 get_chunk(const isc_histo_t *hg, uint chunk) {
-	return (atomic_load_acquire(&hg->chunk[chunk]));
+	return atomic_load_acquire(&hg->chunk[chunk]);
 }
 
 static inline hg_bucket_t *
@@ -274,17 +257,17 @@ key_to_bucket(const isc_histo_t *hg, uint key) {
 	uint chunk = key / chunksize;
 	uint bucket = key % chunksize;
 	hg_bucket_t *cp = get_chunk(hg, chunk);
-	return (cp == NULL ? NULL : &cp[bucket]);
+	return cp == NULL ? NULL : &cp[bucket];
 }
 
 static inline uint64_t
 bucket_count(const hg_bucket_t *bp) {
-	return (bp == NULL ? 0 : atomic_load_relaxed(bp));
+	return bp == NULL ? 0 : atomic_load_relaxed(bp);
 }
 
 static inline uint64_t
 get_key_count(const isc_histo_t *hg, uint key) {
-	return (bucket_count(key_to_bucket(hg, key)));
+	return bucket_count(key_to_bucket(hg, key));
 }
 
 static inline void
@@ -334,12 +317,12 @@ isc_histo_get(const isc_histo_t *hg, uint key, uint64_t *minp, uint64_t *maxp,
 	REQUIRE(HISTO_VALID(hg));
 
 	if (key < BUCKETS(hg)) {
-		OUTARG(minp, key_to_minval(hg, key));
-		OUTARG(maxp, key_to_maxval(hg, key));
-		OUTARG(countp, get_key_count(hg, key));
-		return (ISC_R_SUCCESS);
+		SET_IF_NOT_NULL(minp, key_to_minval(hg, key));
+		SET_IF_NOT_NULL(maxp, key_to_maxval(hg, key));
+		SET_IF_NOT_NULL(countp, get_key_count(hg, key));
+		return ISC_R_SUCCESS;
 	} else {
-		return (ISC_R_RANGE);
+		return ISC_R_RANGE;
 	}
 }
 
@@ -391,8 +374,8 @@ isc_histomulti_create(isc_mem_t *mctx, uint sigbits, isc_histomulti_t **hmp) {
 	uint size = isc_tid_count();
 	INSIST(size > 0);
 
-	isc_histomulti_t *hm = isc_mem_getx(
-		mctx, STRUCT_FLEX_SIZE(hm, hg, size), ISC_MEM_ZERO);
+	isc_histomulti_t *hm = isc_mem_cget(mctx, 1,
+					    STRUCT_FLEX_SIZE(hm, hg, size));
 	*hm = (isc_histomulti_t){
 		.magic = HISTOMULTI_MAGIC,
 		.size = size,
@@ -472,9 +455,9 @@ isc_histo_moments(const isc_histo_t *hg, double *pm0, double *pm1,
 		sigma += count * delta * (value - mean);
 	}
 
-	OUTARG(pm0, pop);
-	OUTARG(pm1, mean);
-	OUTARG(pm2, (pop > 0) ? sqrt(sigma / pop) : 0.0);
+	SET_IF_NOT_NULL(pm0, pop);
+	SET_IF_NOT_NULL(pm1, mean);
+	SET_IF_NOT_NULL(pm2, (pop > 0) ? sqrt(sigma / pop) : 0.0);
 }
 
 /*
@@ -490,7 +473,7 @@ lerp(uint64_t min, uint64_t max, uint64_t lo, uint64_t in, uint64_t hi) {
 	double inpart = (double)(in - lo);
 	double outrange = (double)(max - min);
 	double outpart = round(outrange * inpart / inrange);
-	return (min + ISC_MIN((uint64_t)outpart, max - min));
+	return min + ISC_MIN((uint64_t)outpart, max - min);
 }
 
 /*
@@ -498,7 +481,7 @@ lerp(uint64_t min, uint64_t max, uint64_t lo, uint64_t in, uint64_t hi) {
  */
 static inline bool
 inside(uint64_t lo, uint64_t in, uint64_t hi) {
-	return (lo < hi && lo <= in && in <= hi);
+	return lo < hi && lo <= in && in <= hi;
 }
 
 isc_result_t
@@ -576,13 +559,13 @@ isc_histo_quantiles(const isc_histo_t *hg, uint size, const double *fraction,
 						key_to_maxval(hg, key),
 						bucket_lo, rank[i], bucket_hi);
 				if (++i == size) {
-					return (ISC_R_SUCCESS);
+					return ISC_R_SUCCESS;
 				}
 			}
 		}
 	}
 
-	return (ISC_R_UNSET);
+	return ISC_R_UNSET;
 }
 
 /**********************************************************************/

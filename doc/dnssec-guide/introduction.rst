@@ -41,7 +41,7 @@ Who May Not Want to Read this Guide?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 If you are already operating a DNSSEC-signed zone, you may not learn
-much from the first half of this document, and you may want to start with 
+much from the first half of this document, and you may want to start with
 :ref:`dnssec_advanced_discussions`. If you want to
 learn about details of the protocol extension, such as data fields and flags,
 or the new record types, this document can help you get started but it
@@ -221,7 +221,7 @@ trust one key: the root key.
 The 12-Step DNSSEC Validation Process (Simplified)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The following example shows the 12 steps of the DNSSEC validating process 
+The following example shows the 12 steps of the DNSSEC validating process
 at a very high level, looking up the name ``www.isc.org`` :
 
 .. figure:: ../dnssec-guide/img/dnssec-12-steps.png
@@ -346,7 +346,7 @@ want to consider deploying DNSSEC:
    implementing DNSSEC, if your organization is subject to compliance
    standards that mandate it. For example, the US government set a
    deadline in 2008 to have all ``.gov`` subdomains signed by
-   December 2009  [#]_. So if you operate a subdomain in ``.gov``, you
+   December 2009. [#omb_memo]_ So if you operate a subdomain in ``.gov``, you
    must implement DNSSEC to be compliant. ICANN also requires
    that all new top-level domains support DNSSEC.
 
@@ -369,14 +369,14 @@ want to consider deploying DNSSEC:
    infrastructure. To take a peek at these next-generation DNS features,
    check out :ref:`introduction_to_dane`.
 
-.. [#]
+.. [#omb_memo]
    The Office of Management and Budget (OMB) for the US government
    published `a memo in
-   2008 <https://www.whitehouse.gov/sites/whitehouse.gov/files/omb/memoranda/2008/m08-23.pdf>`__,
+   2008 <https://georgewbush-whitehouse.archives.gov/omb/memoranda/fy2008/m08-23.pdf>`__,
    requesting all ``.gov`` subdomains to be DNSSEC-signed by December
    2009. This explains why ``.gov`` is the most-deployed DNSSEC domain
    currently, with `around 90% of subdomains
-   signed. <https://fedv6-deployment.antd.nist.gov/cgi-bin/generate-gov>`__
+   signed. <https://usgv6-deploymon.nist.gov/cgi-bin/generate-gov>`__
 
 .. _how_does_dnssec_change_my_job:
 

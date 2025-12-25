@@ -13,16 +13,18 @@
 
 /*! \file */
 
-#include "util.h"
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include <isc/tls.h>
 
+#include "isc/commandline.h"
+#include "util.h"
+
 extern bool verbose;
-extern const char *progname;
 
 void
 notify(const char *fmt, ...) {
@@ -40,11 +42,10 @@ void
 fatal(const char *format, ...) {
 	va_list args;
 
-	fprintf(stderr, "%s: ", progname);
+	fprintf(stderr, "%s: ", isc_commandline_progname);
 	va_start(args, format);
 	vfprintf(stderr, format, args);
 	va_end(args);
 	fprintf(stderr, "\n");
-	isc__tls_setfatalmode();
-	exit(1);
+	_exit(EXIT_FAILURE);
 }

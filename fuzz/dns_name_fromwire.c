@@ -30,7 +30,7 @@ bool debug = false;
 
 int
 LLVMFuzzerInitialize(int *argc ISC_ATTR_UNUSED, char ***argv ISC_ATTR_UNUSED) {
-	return (0);
+	return 0;
 }
 
 int
@@ -41,8 +41,6 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 	dns_fixedname_t old_fixed;
 	dns_name_t *new_name = dns_fixedname_initname(&new_fixed);
 	dns_name_t *old_name = dns_fixedname_initname(&old_fixed);
-	uint8_t *new_offsets;
-	uint8_t *old_offsets;
 	dns_decompress_t dctx = DNS_DECOMPRESS_PERMITTED;
 	isc_buffer_t new_buf;
 	isc_buffer_t old_buf;
@@ -81,12 +79,6 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
 	REQUIRE(new_result == old_result);
 	REQUIRE(dns_name_equal(new_name, old_name));
-	REQUIRE(new_name->labels == old_name->labels);
-
-	new_offsets = new_name->offsets;
-	old_offsets = old_name->offsets;
-	REQUIRE(new_offsets != NULL && old_offsets != NULL);
-	REQUIRE(memcmp(new_offsets, old_offsets, old_name->labels) == 0);
 
 	REQUIRE(new_fixed.buffer.current == old_fixed.buffer.current);
 	REQUIRE(new_fixed.buffer.active == old_fixed.buffer.active);
@@ -99,5 +91,5 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 	REQUIRE(new_buf.used == old_buf.used);
 	REQUIRE(new_buf.length == old_buf.length);
 
-	return (0);
+	return 0;
 }

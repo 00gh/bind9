@@ -18,6 +18,7 @@ options {
 	listen-on { 10.53.0.2; };
 	listen-on-v6 { none; };
 	recursion no;
+	dnssec-validation no;
 };
 
 key rndc_key {
@@ -37,7 +38,7 @@ controls {
 
 zone "." {
 	type hint;
-	file "../../common/root.hint";
+	file "../../_common/root.hint";
 };
 
 zone "nil" {

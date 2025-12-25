@@ -48,10 +48,10 @@
 			goto failure;        \
 	} while (0)
 
-#define OPTOUT(x)  (((x)&DNS_NSEC3FLAG_OPTOUT) != 0)
-#define CREATE(x)  (((x)&DNS_NSEC3FLAG_CREATE) != 0)
-#define INITIAL(x) (((x)&DNS_NSEC3FLAG_INITIAL) != 0)
-#define REMOVE(x)  (((x)&DNS_NSEC3FLAG_REMOVE) != 0)
+#define OPTOUT(x)  (((x) & DNS_NSEC3FLAG_OPTOUT) != 0)
+#define CREATE(x)  (((x) & DNS_NSEC3FLAG_CREATE) != 0)
+#define INITIAL(x) (((x) & DNS_NSEC3FLAG_INITIAL) != 0)
+#define REMOVE(x)  (((x) & DNS_NSEC3FLAG_REMOVE) != 0)
 
 isc_result_t
 dns_nsec3_buildrdata(dns_db_t *db, dns_dbversion_t *version, dns_dbnode_t *node,
@@ -61,13 +61,11 @@ dns_nsec3_buildrdata(dns_db_t *db, dns_dbversion_t *version, dns_dbnode_t *node,
 		     size_t hash_length, unsigned char *buffer,
 		     dns_rdata_t *rdata) {
 	isc_result_t result;
-	dns_rdataset_t rdataset;
 	isc_region_t r;
 	unsigned int i;
 	bool found;
 	bool found_ns;
 	bool need_rrsig;
-
 	unsigned char *nsec_bits, *bm;
 	unsigned int max_type;
 	dns_rdatasetiter_t *rdsiter;
@@ -116,16 +114,14 @@ dns_nsec3_buildrdata(dns_db_t *db, dns_dbversion_t *version, dns_dbnode_t *node,
 	if (node == NULL) {
 		goto collapse_bitmap;
 	}
-	dns_rdataset_init(&rdataset);
 	rdsiter = NULL;
 	result = dns_db_allrdatasets(db, node, version, 0, 0, &rdsiter);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 	found = found_ns = need_rrsig = false;
-	for (result = dns_rdatasetiter_first(rdsiter); result == ISC_R_SUCCESS;
-	     result = dns_rdatasetiter_next(rdsiter))
-	{
+	DNS_RDATASETITER_FOREACH (rdsiter) {
+		dns_rdataset_t rdataset = DNS_RDATASET_INIT;
 		dns_rdatasetiter_current(rdsiter, &rdataset);
 		if (rdataset.type != dns_rdatatype_nsec &&
 		    rdataset.type != dns_rdatatype_nsec3 &&
@@ -156,6 +152,8 @@ dns_nsec3_buildrdata(dns_db_t *db, dns_dbversion_t *version, dns_dbnode_t *node,
 		}
 		dns_rdataset_disassociate(&rdataset);
 	}
+	dns_rdatasetiter_destroy(&rdsiter);
+
 	if ((found && !found_ns) || need_rrsig) {
 		if (dns_rdatatype_rrsig > max_type) {
 			max_type = dns_rdatatype_rrsig;
@@ -178,18 +176,13 @@ dns_nsec3_buildrdata(dns_db_t *db, dns_dbversion_t *version, dns_dbnode_t *node,
 		}
 	}
 
-	dns_rdatasetiter_destroy(&rdsiter);
-	if (result != ISC_R_NOMORE) {
-		return (result);
-	}
-
 collapse_bitmap:
 	nsec_bits += dns_nsec_compressbitmap(nsec_bits, bm, max_type);
 	r.length = (unsigned int)(nsec_bits - r.base);
 	INSIST(r.length <= DNS_NSEC3_BUFFERSIZE);
 	dns_rdata_fromregion(rdata, dns_db_class(db), dns_rdatatype_nsec3, &r);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 bool
@@ -227,16 +220,16 @@ dns_nsec3_typepresent(dns_rdata_t *rdata, dns_rdatatype_t type) {
 		break;
 	}
 	dns_rdata_freestruct(&nsec3);
-	return (present);
+	return present;
 }
 
 isc_result_t
 dns_nsec3_generate_salt(unsigned char *salt, size_t saltlen) {
 	if (saltlen > 255U) {
-		return (ISC_R_RANGE);
+		return ISC_R_RANGE;
 	}
 	isc_nonce_buf(salt, saltlen);
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 isc_result_t
@@ -261,19 +254,17 @@ dns_nsec3_hashname(dns_fixedname_t *result,
 	memset(rethash, 0, NSEC3_MAX_HASH_LENGTH);
 
 	downcased = dns_fixedname_initname(&fixed);
-	dns_name_downcase(name, downcased, NULL);
+	dns_name_downcase(name, downcased);
 
 	/* hash the node name */
 	len = isc_iterated_hash(rethash, hashalg, iterations, salt,
 				(int)saltlength, downcased->ndata,
 				downcased->length);
 	if (len == 0U) {
-		return (DNS_R_BADALG);
+		return DNS_R_BADALG;
 	}
 
-	if (hash_length != NULL) {
-		*hash_length = len;
-	}
+	SET_IF_NOT_NULL(hash_length, len);
 
 	/* convert the hash to base32hex non-padded */
 	region.base = rethash;
@@ -283,26 +274,26 @@ dns_nsec3_hashname(dns_fixedname_t *result,
 
 	/* convert the hex to a domain name */
 	dns_fixedname_init(result);
-	return (dns_name_fromtext(dns_fixedname_name(result), &namebuffer,
-				  origin, 0, NULL));
+	return dns_name_fromtext(dns_fixedname_name(result), &namebuffer,
+				 origin, 0);
 }
 
 unsigned int
 dns_nsec3_hashlength(dns_hash_t hash) {
 	switch (hash) {
 	case dns_hash_sha1:
-		return (ISC_SHA1_DIGESTLENGTH);
+		return ISC_SHA1_DIGESTLENGTH;
 	}
-	return (0);
+	return 0;
 }
 
 bool
 dns_nsec3_supportedhash(dns_hash_t hash) {
 	switch (hash) {
 	case dns_hash_sha1:
-		return (true);
+		return true;
 	}
-	return (false);
+	return false;
 }
 
 /*%
@@ -332,7 +323,7 @@ do_one_tuple(dns_difftuple_t **tuple, dns_db_t *db, dns_dbversion_t *ver,
 	ISC_LIST_UNLINK(temp_diff.tuples, *tuple, link);
 	if (result != ISC_R_SUCCESS) {
 		dns_difftuple_free(tuple);
-		return (result);
+		return result;
 	}
 
 	/*
@@ -343,7 +334,7 @@ do_one_tuple(dns_difftuple_t **tuple, dns_db_t *db, dns_dbversion_t *ver,
 	/*
 	 * Do not clear temp_diff.
 	 */
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 /*%
@@ -359,10 +350,10 @@ name_exists(dns_db_t *db, dns_dbversion_t *version, const dns_name_t *name,
 	result = dns_db_findnode(db, name, false, &node);
 	if (result == ISC_R_NOTFOUND) {
 		*exists = false;
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	result = dns_db_allrdatasets(db, node, version, 0, (isc_stdtime_t)0,
@@ -384,7 +375,7 @@ name_exists(dns_db_t *db, dns_dbversion_t *version, const dns_name_t *name,
 
 cleanup_node:
 	dns_db_detachnode(db, &node);
-	return (result);
+	return result;
 }
 
 static bool
@@ -395,9 +386,9 @@ match_nsec3param(const dns_rdata_nsec3_t *nsec3,
 	    nsec3->salt_length == nsec3param->salt_length &&
 	    !memcmp(nsec3->salt, nsec3param->salt, nsec3->salt_length))
 	{
-		return (true);
+		return true;
 	}
-	return (false);
+	return false;
 }
 
 /*%
@@ -415,10 +406,10 @@ delnsec3(dns_db_t *db, dns_dbversion_t *version, const dns_name_t *name,
 
 	result = dns_db_findnsec3node(db, name, false, &node);
 	if (result == ISC_R_NOTFOUND) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	dns_rdataset_init(&rdataset);
@@ -433,9 +424,7 @@ delnsec3(dns_db_t *db, dns_dbversion_t *version, const dns_name_t *name,
 		goto cleanup_node;
 	}
 
-	for (result = dns_rdataset_first(&rdataset); result == ISC_R_SUCCESS;
-	     result = dns_rdataset_next(&rdataset))
-	{
+	DNS_RDATASET_FOREACH (&rdataset) {
 		dns_rdata_t rdata = DNS_RDATA_INIT;
 		dns_rdataset_current(&rdataset, &rdata);
 		CHECK(dns_rdata_tostruct(&rdata, &nsec3, NULL));
@@ -444,19 +433,14 @@ delnsec3(dns_db_t *db, dns_dbversion_t *version, const dns_name_t *name,
 			continue;
 		}
 
-		result = dns_difftuple_create(diff->mctx, DNS_DIFFOP_DEL, name,
-					      rdataset.ttl, &rdata, &tuple);
-		if (result != ISC_R_SUCCESS) {
-			goto failure;
-		}
+		dns_difftuple_create(diff->mctx, DNS_DIFFOP_DEL, name,
+				     rdataset.ttl, &rdata, &tuple);
 		result = do_one_tuple(&tuple, db, version, diff);
 		if (result != ISC_R_SUCCESS) {
 			goto failure;
 		}
 	}
-	if (result != ISC_R_NOMORE) {
-		goto failure;
-	}
+
 	result = ISC_R_SUCCESS;
 
 failure:
@@ -464,23 +448,19 @@ failure:
 cleanup_node:
 	dns_db_detachnode(db, &node);
 
-	return (result);
+	return result;
 }
 
 static bool
 better_param(dns_rdataset_t *nsec3paramset, dns_rdata_t *param) {
-	dns_rdataset_t rdataset;
-	isc_result_t result;
+	dns_rdataset_t rdataset = DNS_RDATASET_INIT;
 
 	if (REMOVE(param->data[1])) {
-		return (true);
+		return true;
 	}
 
-	dns_rdataset_init(&rdataset);
 	dns_rdataset_clone(nsec3paramset, &rdataset);
-	for (result = dns_rdataset_first(&rdataset); result == ISC_R_SUCCESS;
-	     result = dns_rdataset_next(&rdataset))
-	{
+	DNS_RDATASET_FOREACH (&rdataset) {
 		dns_rdata_t rdata = DNS_RDATA_INIT;
 		unsigned char buf[DNS_NSEC3PARAM_BUFFERSIZE];
 
@@ -509,31 +489,27 @@ better_param(dns_rdataset_t *nsec3paramset, dns_rdata_t *param) {
 		}
 		if (CREATE(rdata.data[1]) && !CREATE(param->data[1])) {
 			dns_rdataset_disassociate(&rdataset);
-			return (true);
+			return true;
 		}
 	}
 	dns_rdataset_disassociate(&rdataset);
-	return (false);
+	return false;
 }
 
 static isc_result_t
 find_nsec3(dns_rdata_nsec3_t *nsec3, dns_rdataset_t *rdataset,
 	   const dns_rdata_nsec3param_t *nsec3param) {
-	isc_result_t result;
-	for (result = dns_rdataset_first(rdataset); result == ISC_R_SUCCESS;
-	     result = dns_rdataset_next(rdataset))
-	{
+	DNS_RDATASET_FOREACH (rdataset) {
 		dns_rdata_t rdata = DNS_RDATA_INIT;
-
 		dns_rdataset_current(rdataset, &rdata);
-		CHECK(dns_rdata_tostruct(&rdata, nsec3, NULL));
-		dns_rdata_reset(&rdata);
+		dns_rdata_tostruct(&rdata, nsec3, NULL);
+
 		if (match_nsec3param(nsec3, nsec3param)) {
-			break;
+			return ISC_R_SUCCESS;
 		}
 	}
-failure:
-	return (result);
+
+	return ISC_R_NOTFOUND;
 }
 
 isc_result_t
@@ -646,9 +622,6 @@ dns_nsec3_addnsec3(dns_db_t *db, dns_dbversion_t *version,
 			}
 		} else {
 			dns_rdataset_disassociate(&rdataset);
-			if (result != ISC_R_NOMORE) {
-				goto failure;
-			}
 		}
 	}
 
@@ -673,12 +646,9 @@ dns_nsec3_addnsec3(dns_db_t *db, dns_dbversion_t *version,
 		}
 
 		result = find_nsec3(&nsec3, &rdataset, nsec3param);
-		if (result == ISC_R_NOMORE) {
+		if (result == ISC_R_NOTFOUND) {
 			dns_rdataset_disassociate(&rdataset);
 			continue;
-		}
-		if (result != ISC_R_SUCCESS) {
-			goto failure;
 		}
 
 		if (maybe_remove_unsecure) {
@@ -722,8 +692,8 @@ dns_nsec3_addnsec3(dns_db_t *db, dns_dbversion_t *version,
 		CHECK(dns_rdata_fromstruct(&rdata, rdataset.rdclass,
 					   dns_rdatatype_nsec3, &nsec3,
 					   &buffer));
-		CHECK(dns_difftuple_create(diff->mctx, DNS_DIFFOP_ADD, prev,
-					   rdataset.ttl, &rdata, &tuple));
+		dns_difftuple_create(diff->mctx, DNS_DIFFOP_ADD, prev,
+				     rdataset.ttl, &rdata, &tuple);
 		CHECK(do_one_tuple(&tuple, db, version, diff));
 		INSIST(old_length <= sizeof(nexthash));
 		memmove(nexthash, old_next, old_length);
@@ -752,8 +722,8 @@ addnsec3:
 	/*
 	 * Add the new NSEC3 and record the change.
 	 */
-	CHECK(dns_difftuple_create(diff->mctx, DNS_DIFFOP_ADD, hashname,
-				   nsecttl, &rdata, &tuple));
+	dns_difftuple_create(diff->mctx, DNS_DIFFOP_ADD, hashname, nsecttl,
+			     &rdata, &tuple);
 	CHECK(do_one_tuple(&tuple, db, version, diff));
 	INSIST(tuple == NULL);
 	dns_rdata_reset(&rdata);
@@ -762,7 +732,7 @@ addnsec3:
 	/*
 	 * Add missing NSEC3 records for empty nodes
 	 */
-	dns_name_init(&empty, NULL);
+	dns_name_init(&empty);
 	dns_name_clone(name, &empty);
 	do {
 		labels = dns_name_countlabels(&empty) - 1;
@@ -781,7 +751,7 @@ addnsec3:
 		/*
 		 * Create the node if it doesn't exist and hold
 		 * a reference to it until we have added the NSEC3
-		 * or we discover we don't need to add make a change.
+		 * or we discover we don't need to make a change.
 		 */
 		CHECK(dns_db_findnsec3node(db, hashname, true, &newnode));
 		result = dns_db_findrdataset(db, newnode, version,
@@ -794,9 +764,17 @@ addnsec3:
 				dns_db_detachnode(db, &newnode);
 				break;
 			}
-			if (result != ISC_R_NOMORE) {
-				goto failure;
-			}
+		} else if (result == ISC_R_NOTFOUND) {
+			/*
+			 * If we didn't find an NSEC3 in the node,
+			 * then the node must have been newly created
+			 * by dns_db_findnsec3node(). The iterator
+			 * needs to be updated so we can seek for
+			 * the node's predecessor.
+			 */
+			dns_dbiterator_destroy(&dbit);
+			CHECK(dns_db_createiterator(db, DNS_DB_NSEC3ONLY,
+						    &dbit));
 		}
 
 		/*
@@ -820,12 +798,9 @@ addnsec3:
 				continue;
 			}
 			result = find_nsec3(&nsec3, &rdataset, nsec3param);
-			if (result == ISC_R_NOMORE) {
+			if (result == ISC_R_NOTFOUND) {
 				dns_rdataset_disassociate(&rdataset);
 				continue;
-			}
-			if (result != ISC_R_SUCCESS) {
-				goto failure;
 			}
 
 			old_next = nsec3.next;
@@ -845,9 +820,8 @@ addnsec3:
 			CHECK(dns_rdata_fromstruct(&rdata, rdataset.rdclass,
 						   dns_rdatatype_nsec3, &nsec3,
 						   &buffer));
-			CHECK(dns_difftuple_create(diff->mctx, DNS_DIFFOP_ADD,
-						   prev, rdataset.ttl, &rdata,
-						   &tuple));
+			dns_difftuple_create(diff->mctx, DNS_DIFFOP_ADD, prev,
+					     rdataset.ttl, &rdata, &tuple);
 			CHECK(do_one_tuple(&tuple, db, version, diff));
 			INSIST(old_length <= sizeof(nexthash));
 			memmove(nexthash, old_next, old_length);
@@ -875,8 +849,8 @@ addnsec3:
 		/*
 		 * Add the new NSEC3 and record the change.
 		 */
-		CHECK(dns_difftuple_create(diff->mctx, DNS_DIFFOP_ADD, hashname,
-					   nsecttl, &rdata, &tuple));
+		dns_difftuple_create(diff->mctx, DNS_DIFFOP_ADD, hashname,
+				     nsecttl, &rdata, &tuple);
 		CHECK(do_one_tuple(&tuple, db, version, diff));
 		INSIST(tuple == NULL);
 		dns_rdata_reset(&rdata);
@@ -899,7 +873,7 @@ failure:
 	if (newnode != NULL) {
 		dns_db_detachnode(db, &newnode);
 	}
-	return (result);
+	return result;
 }
 
 /*%
@@ -922,7 +896,7 @@ dns_nsec3_addnsec3s(dns_db_t *db, dns_dbversion_t *version,
 	 */
 	result = dns_db_getoriginnode(db, &node);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	result = dns_db_findrdataset(db, node, version,
@@ -930,18 +904,16 @@ dns_nsec3_addnsec3s(dns_db_t *db, dns_dbversion_t *version,
 				     NULL);
 	dns_db_detachnode(db, &node);
 	if (result == ISC_R_NOTFOUND) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	/*
 	 * Update each active NSEC3 chain.
 	 */
-	for (result = dns_rdataset_first(&rdataset); result == ISC_R_SUCCESS;
-	     result = dns_rdataset_next(&rdataset))
-	{
+	DNS_RDATASET_FOREACH (&rdataset) {
 		dns_rdata_t rdata = DNS_RDATA_INIT;
 
 		dns_rdataset_current(&rdataset, &rdata);
@@ -956,9 +928,6 @@ dns_nsec3_addnsec3s(dns_db_t *db, dns_dbversion_t *version,
 		CHECK(dns_nsec3_addnsec3(db, version, name, &nsec3param,
 					 nsecttl, unsecure, diff));
 	}
-	if (result == ISC_R_NOMORE) {
-		result = ISC_R_SUCCESS;
-	}
 
 failure:
 	if (dns_rdataset_isassociated(&rdataset)) {
@@ -968,7 +937,7 @@ failure:
 		dns_db_detachnode(db, &node);
 	}
 
-	return (result);
+	return result;
 }
 
 bool
@@ -983,7 +952,7 @@ dns_nsec3param_fromprivate(dns_rdata_t *src, dns_rdata_t *target,
 	 * NSEC3PARAM records from DNSKEY pointers.
 	 */
 	if (src->length < 1 || src->data[0] != 0) {
-		return (false);
+		return false;
 	}
 
 	isc_buffer_init(&buf1, src->data + 1, src->length - 1);
@@ -994,14 +963,14 @@ dns_nsec3param_fromprivate(dns_rdata_t *src, dns_rdata_t *target,
 				    dns_rdatatype_nsec3param, &buf1,
 				    DNS_DECOMPRESS_NEVER, &buf2);
 
-	return (result == ISC_R_SUCCESS);
+	return result == ISC_R_SUCCESS;
 }
 
 void
 dns_nsec3param_toprivate(dns_rdata_t *src, dns_rdata_t *target,
 			 dns_rdatatype_t privatetype, unsigned char *buf,
 			 size_t buflen) {
-	REQUIRE(buflen >= src->length + 1);
+	REQUIRE(buflen >= (unsigned int)src->length + 1);
 
 	REQUIRE(DNS_RDATA_INITIALIZED(target));
 
@@ -1036,28 +1005,23 @@ rr_exists(dns_db_t *db, dns_dbversion_t *ver, const dns_name_t *name,
 		goto failure;
 	}
 
-	for (result = dns_rdataset_first(&rdataset); result == ISC_R_SUCCESS;
-	     result = dns_rdataset_next(&rdataset))
-	{
+	bool matched = false;
+	DNS_RDATASET_FOREACH (&rdataset) {
 		dns_rdata_t myrdata = DNS_RDATA_INIT;
 		dns_rdataset_current(&rdataset, &myrdata);
-		if (!dns_rdata_casecompare(&myrdata, rdata)) {
+		if (dns_rdata_casecompare(&myrdata, rdata) == 0) {
+			matched = true;
 			break;
 		}
 	}
 	dns_rdataset_disassociate(&rdataset);
-	if (result == ISC_R_SUCCESS) {
-		*flag = true;
-	} else if (result == ISC_R_NOMORE) {
-		*flag = false;
-		result = ISC_R_SUCCESS;
-	}
+	*flag = matched;
 
 failure:
 	if (node != NULL) {
 		dns_db_detachnode(db, &node);
 	}
-	return (result);
+	return result;
 }
 
 isc_result_t
@@ -1072,10 +1036,10 @@ dns_nsec3param_salttotext(dns_rdata_nsec3param_t *nsec3param, char *dst,
 
 	if (nsec3param->salt_length == 0) {
 		if (dstlen < 2U) {
-			return (ISC_R_NOSPACE);
+			return ISC_R_NOSPACE;
 		}
 		strlcpy(dst, "-", dstlen);
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	r.base = nsec3param->salt;
@@ -1084,15 +1048,15 @@ dns_nsec3param_salttotext(dns_rdata_nsec3param_t *nsec3param, char *dst,
 
 	result = isc_hex_totext(&r, 2, "", &b);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	if (isc_buffer_availablelength(&b) < 1) {
-		return (ISC_R_NOSPACE);
+		return ISC_R_NOSPACE;
 	}
 	isc_buffer_putuint8(&b, 0);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 isc_result_t
@@ -1101,7 +1065,6 @@ dns_nsec3param_deletechains(dns_db_t *db, dns_dbversion_t *ver,
 	dns_dbnode_t *node = NULL;
 	dns_difftuple_t *tuple = NULL;
 	dns_name_t next;
-	dns_rdata_t rdata = DNS_RDATA_INIT;
 	dns_rdataset_t rdataset;
 	bool flag;
 	isc_result_t result = ISC_R_SUCCESS;
@@ -1109,12 +1072,12 @@ dns_nsec3param_deletechains(dns_db_t *db, dns_dbversion_t *ver,
 	dns_name_t *origin = dns_zone_getorigin(zone);
 	dns_rdatatype_t privatetype = dns_zone_getprivatetype(zone);
 
-	dns_name_init(&next, NULL);
+	dns_name_init(&next);
 	dns_rdataset_init(&rdataset);
 
 	result = dns_db_getoriginnode(db, &node);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	/*
@@ -1129,18 +1092,11 @@ dns_nsec3param_deletechains(dns_db_t *db, dns_dbversion_t *ver,
 		goto failure;
 	}
 
-	for (result = dns_rdataset_first(&rdataset); result == ISC_R_SUCCESS;
-	     result = dns_rdataset_next(&rdataset))
-	{
+	DNS_RDATASET_FOREACH (&rdataset) {
+		dns_rdata_t rdata = DNS_RDATA_INIT;
 		dns_rdata_t private = DNS_RDATA_INIT;
 
 		dns_rdataset_current(&rdataset, &rdata);
-
-		CHECK(dns_difftuple_create(diff->mctx, DNS_DIFFOP_DEL, origin,
-					   rdataset.ttl, &rdata, &tuple));
-		CHECK(do_one_tuple(&tuple, db, ver, diff));
-		INSIST(tuple == NULL);
-
 		dns_nsec3param_toprivate(&rdata, &private, privatetype, buf,
 					 sizeof(buf));
 		buf[2] = DNS_NSEC3FLAG_REMOVE;
@@ -1151,16 +1107,11 @@ dns_nsec3param_deletechains(dns_db_t *db, dns_dbversion_t *ver,
 		CHECK(rr_exists(db, ver, origin, &private, &flag));
 
 		if (!flag) {
-			CHECK(dns_difftuple_create(diff->mctx, DNS_DIFFOP_ADD,
-						   origin, 0, &private,
-						   &tuple));
+			dns_difftuple_create(diff->mctx, DNS_DIFFOP_ADD, origin,
+					     0, &private, &tuple);
 			CHECK(do_one_tuple(&tuple, db, ver, diff));
 			INSIST(tuple == NULL);
 		}
-		dns_rdata_reset(&rdata);
-	}
-	if (result != ISC_R_NOMORE) {
-		goto failure;
 	}
 
 	dns_rdataset_disassociate(&rdataset);
@@ -1178,10 +1129,8 @@ try_private:
 		goto failure;
 	}
 
-	for (result = dns_rdataset_first(&rdataset); result == ISC_R_SUCCESS;
-	     result = dns_rdataset_next(&rdataset))
-	{
-		dns_rdata_reset(&rdata);
+	DNS_RDATASET_FOREACH (&rdataset) {
+		dns_rdata_t rdata = DNS_RDATA_INIT;
 		dns_rdataset_current(&rdataset, &rdata);
 		INSIST(rdata.length <= sizeof(buf));
 		memmove(buf, rdata.data, rdata.length);
@@ -1197,8 +1146,8 @@ try_private:
 			continue;
 		}
 
-		CHECK(dns_difftuple_create(diff->mctx, DNS_DIFFOP_DEL, origin,
-					   0, &rdata, &tuple));
+		dns_difftuple_create(diff->mctx, DNS_DIFFOP_DEL, origin, 0,
+				     &rdata, &tuple);
 		CHECK(do_one_tuple(&tuple, db, ver, diff));
 		INSIST(tuple == NULL);
 
@@ -1211,15 +1160,13 @@ try_private:
 		CHECK(rr_exists(db, ver, origin, &rdata, &flag));
 
 		if (!flag) {
-			CHECK(dns_difftuple_create(diff->mctx, DNS_DIFFOP_ADD,
-						   origin, 0, &rdata, &tuple));
+			dns_difftuple_create(diff->mctx, DNS_DIFFOP_ADD, origin,
+					     0, &rdata, &tuple);
 			CHECK(do_one_tuple(&tuple, db, ver, diff));
 			INSIST(tuple == NULL);
 		}
 	}
-	if (result != ISC_R_NOMORE) {
-		goto failure;
-	}
+
 success:
 	result = ISC_R_SUCCESS;
 
@@ -1228,7 +1175,7 @@ failure:
 		dns_rdataset_disassociate(&rdataset);
 	}
 	dns_db_detachnode(db, &node);
-	return (result);
+	return result;
 }
 
 isc_result_t
@@ -1249,7 +1196,7 @@ dns_nsec3_addnsec3sx(dns_db_t *db, dns_dbversion_t *version,
 	 */
 	result = dns_db_getoriginnode(db, &node);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	result = dns_db_findrdataset(db, node, version, type, 0, 0, &prdataset,
@@ -1271,9 +1218,7 @@ dns_nsec3_addnsec3sx(dns_db_t *db, dns_dbversion_t *version,
 	/*
 	 * Update each active NSEC3 chain.
 	 */
-	for (result = dns_rdataset_first(&rdataset); result == ISC_R_SUCCESS;
-	     result = dns_rdataset_next(&rdataset))
-	{
+	DNS_RDATASET_FOREACH (&rdataset) {
 		dns_rdata_t rdata = DNS_RDATA_INIT;
 
 		dns_rdataset_current(&rdataset, &rdata);
@@ -1289,9 +1234,6 @@ dns_nsec3_addnsec3sx(dns_db_t *db, dns_dbversion_t *version,
 		CHECK(dns_nsec3_addnsec3(db, version, name, &nsec3param,
 					 nsecttl, unsecure, diff));
 	}
-	if (result != ISC_R_NOMORE) {
-		goto failure;
-	}
 
 	dns_rdataset_disassociate(&rdataset);
 
@@ -1302,9 +1244,7 @@ try_private:
 	/*
 	 * Update each active NSEC3 chain.
 	 */
-	for (result = dns_rdataset_first(&prdataset); result == ISC_R_SUCCESS;
-	     result = dns_rdataset_next(&prdataset))
-	{
+	DNS_RDATASET_FOREACH (&prdataset) {
 		dns_rdata_t rdata1 = DNS_RDATA_INIT;
 		dns_rdata_t rdata2 = DNS_RDATA_INIT;
 		unsigned char buf[DNS_NSEC3PARAM_BUFFERSIZE];
@@ -1330,10 +1270,9 @@ try_private:
 		CHECK(dns_nsec3_addnsec3(db, version, name, &nsec3param,
 					 nsecttl, unsecure, diff));
 	}
-	if (result == ISC_R_NOMORE) {
-	success:
-		result = ISC_R_SUCCESS;
-	}
+
+success:
+	result = ISC_R_SUCCESS;
 failure:
 	if (dns_rdataset_isassociated(&rdataset)) {
 		dns_rdataset_disassociate(&rdataset);
@@ -1345,7 +1284,7 @@ failure:
 		dns_db_detachnode(db, &node);
 	}
 
-	return (result);
+	return result;
 }
 
 /*%
@@ -1369,19 +1308,19 @@ deleteit(dns_db_t *db, dns_dbversion_t *ver, const dns_name_t *name,
 	    result == DNS_R_ZONECUT)
 	{
 		*yesno = false;
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	if (result == DNS_R_GLUE || result == DNS_R_DNAME ||
 	    result == DNS_R_DELEGATION || result == DNS_R_NXDOMAIN)
 	{
 		*yesno = true;
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	/*
 	 * Silence compiler.
 	 */
 	*yesno = true;
-	return (result);
+	return result;
 }
 
 isc_result_t
@@ -1469,11 +1408,8 @@ dns_nsec3_delnsec3(dns_db_t *db, dns_dbversion_t *version,
 		memmove(nexthash, nsec3.next, next_length);
 	}
 	dns_rdataset_disassociate(&rdataset);
-	if (result == ISC_R_NOMORE) {
+	if (result == ISC_R_NOTFOUND) {
 		goto success;
-	}
-	if (result != ISC_R_SUCCESS) {
-		goto failure;
 	}
 
 	/*
@@ -1496,12 +1432,9 @@ dns_nsec3_delnsec3(dns_db_t *db, dns_dbversion_t *version,
 			continue;
 		}
 		result = find_nsec3(&nsec3, &rdataset, nsec3param);
-		if (result == ISC_R_NOMORE) {
+		if (result == ISC_R_NOTFOUND) {
 			dns_rdataset_disassociate(&rdataset);
 			continue;
-		}
-		if (result != ISC_R_SUCCESS) {
-			goto failure;
 		}
 
 		/*
@@ -1521,8 +1454,8 @@ dns_nsec3_delnsec3(dns_db_t *db, dns_dbversion_t *version,
 		CHECK(dns_rdata_fromstruct(&rdata, rdataset.rdclass,
 					   dns_rdatatype_nsec3, &nsec3,
 					   &buffer));
-		CHECK(dns_difftuple_create(diff->mctx, DNS_DIFFOP_ADD, prev,
-					   rdataset.ttl, &rdata, &tuple));
+		dns_difftuple_create(diff->mctx, DNS_DIFFOP_ADD, prev,
+				     rdataset.ttl, &rdata, &tuple);
 		CHECK(do_one_tuple(&tuple, db, version, diff));
 		dns_rdata_reset(&rdata);
 		dns_rdataset_disassociate(&rdataset);
@@ -1538,7 +1471,7 @@ dns_nsec3_delnsec3(dns_db_t *db, dns_dbversion_t *version,
 	 *  Delete NSEC3 records for now non active nodes.
 	 */
 cleanup_orphaned_ents:
-	dns_name_init(&empty, NULL);
+	dns_name_init(&empty);
 	dns_name_clone(name, &empty);
 	do {
 		labels = dns_name_countlabels(&empty) - 1;
@@ -1582,11 +1515,8 @@ cleanup_orphaned_ents:
 			memmove(nexthash, nsec3.next, next_length);
 		}
 		dns_rdataset_disassociate(&rdataset);
-		if (result == ISC_R_NOMORE) {
+		if (result == ISC_R_NOTFOUND) {
 			goto success;
-		}
-		if (result != ISC_R_SUCCESS) {
-			goto failure;
 		}
 
 		pass = 0;
@@ -1606,12 +1536,9 @@ cleanup_orphaned_ents:
 				continue;
 			}
 			result = find_nsec3(&nsec3, &rdataset, nsec3param);
-			if (result == ISC_R_NOMORE) {
+			if (result == ISC_R_NOTFOUND) {
 				dns_rdataset_disassociate(&rdataset);
 				continue;
-			}
-			if (result != ISC_R_SUCCESS) {
-				goto failure;
 			}
 
 			/*
@@ -1628,9 +1555,8 @@ cleanup_orphaned_ents:
 			CHECK(dns_rdata_fromstruct(&rdata, rdataset.rdclass,
 						   dns_rdatatype_nsec3, &nsec3,
 						   &buffer));
-			CHECK(dns_difftuple_create(diff->mctx, DNS_DIFFOP_ADD,
-						   prev, rdataset.ttl, &rdata,
-						   &tuple));
+			dns_difftuple_create(diff->mctx, DNS_DIFFOP_ADD, prev,
+					     rdataset.ttl, &rdata, &tuple);
 			CHECK(do_one_tuple(&tuple, db, version, diff));
 			dns_rdata_reset(&rdata);
 			dns_rdataset_disassociate(&rdataset);
@@ -1658,13 +1584,13 @@ failure:
 	if (node != NULL) {
 		dns_db_detachnode(db, &node);
 	}
-	return (result);
+	return result;
 }
 
 isc_result_t
 dns_nsec3_delnsec3s(dns_db_t *db, dns_dbversion_t *version,
 		    const dns_name_t *name, dns_diff_t *diff) {
-	return (dns_nsec3_delnsec3sx(db, version, name, 0, diff));
+	return dns_nsec3_delnsec3sx(db, version, name, 0, diff);
 }
 
 isc_result_t
@@ -1683,7 +1609,7 @@ dns_nsec3_delnsec3sx(dns_db_t *db, dns_dbversion_t *version,
 	 */
 	result = dns_db_getoriginnode(db, &node);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	result = dns_db_findrdataset(db, node, version,
@@ -1699,9 +1625,7 @@ dns_nsec3_delnsec3sx(dns_db_t *db, dns_dbversion_t *version,
 	/*
 	 * Update each active NSEC3 chain.
 	 */
-	for (result = dns_rdataset_first(&rdataset); result == ISC_R_SUCCESS;
-	     result = dns_rdataset_next(&rdataset))
-	{
+	DNS_RDATASET_FOREACH (&rdataset) {
 		dns_rdata_t rdata = DNS_RDATA_INIT;
 
 		dns_rdataset_current(&rdataset, &rdata);
@@ -1733,9 +1657,7 @@ try_private:
 	/*
 	 * Update each NSEC3 chain being built.
 	 */
-	for (result = dns_rdataset_first(&rdataset); result == ISC_R_SUCCESS;
-	     result = dns_rdataset_next(&rdataset))
-	{
+	DNS_RDATASET_FOREACH (&rdataset) {
 		dns_rdata_t rdata1 = DNS_RDATA_INIT;
 		dns_rdata_t rdata2 = DNS_RDATA_INIT;
 		unsigned char buf[DNS_NSEC3PARAM_BUFFERSIZE];
@@ -1760,11 +1682,9 @@ try_private:
 		 */
 		CHECK(dns_nsec3_delnsec3(db, version, name, &nsec3param, diff));
 	}
-	if (result == ISC_R_NOMORE) {
-	success:
-		result = ISC_R_SUCCESS;
-	}
 
+success:
+	result = ISC_R_SUCCESS;
 failure:
 	if (dns_rdataset_isassociated(&rdataset)) {
 		dns_rdataset_disassociate(&rdataset);
@@ -1773,13 +1693,13 @@ failure:
 		dns_db_detachnode(db, &node);
 	}
 
-	return (result);
+	return result;
 }
 
 isc_result_t
 dns_nsec3_active(dns_db_t *db, dns_dbversion_t *version, bool complete,
 		 bool *answer) {
-	return (dns_nsec3_activex(db, version, complete, 0, answer));
+	return dns_nsec3_activex(db, version, complete, 0, answer);
 }
 
 isc_result_t
@@ -1796,7 +1716,7 @@ dns_nsec3_activex(dns_db_t *db, dns_dbversion_t *version, bool complete,
 
 	result = dns_db_getoriginnode(db, &node);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	result = dns_db_findrdataset(db, node, version,
@@ -1809,36 +1729,28 @@ dns_nsec3_activex(dns_db_t *db, dns_dbversion_t *version, bool complete,
 
 	if (result != ISC_R_SUCCESS) {
 		dns_db_detachnode(db, &node);
-		return (result);
+		return result;
 	}
-	for (result = dns_rdataset_first(&rdataset); result == ISC_R_SUCCESS;
-	     result = dns_rdataset_next(&rdataset))
-	{
-		dns_rdata_t rdata = DNS_RDATA_INIT;
 
+	bool found = false;
+	DNS_RDATASET_FOREACH (&rdataset) {
+		dns_rdata_t rdata = DNS_RDATA_INIT;
 		dns_rdataset_current(&rdataset, &rdata);
-		result = dns_rdata_tostruct(&rdata, &nsec3param, NULL);
-		RUNTIME_CHECK(result == ISC_R_SUCCESS);
+		dns_rdata_tostruct(&rdata, &nsec3param, NULL);
 
 		if (nsec3param.flags == 0) {
+			found = true;
 			break;
 		}
 	}
 	dns_rdataset_disassociate(&rdataset);
-	if (result == ISC_R_SUCCESS) {
-		dns_db_detachnode(db, &node);
-		*answer = true;
-		return (ISC_R_SUCCESS);
-	}
-	if (result == ISC_R_NOMORE) {
-		*answer = false;
-	}
+	*answer = found;
 
 try_private:
 	if (privatetype == 0 || complete) {
 		dns_db_detachnode(db, &node);
 		*answer = false;
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	result = dns_db_findrdataset(db, node, version, privatetype, 0, 0,
 				     &rdataset, NULL);
@@ -1846,15 +1758,14 @@ try_private:
 	dns_db_detachnode(db, &node);
 	if (result == ISC_R_NOTFOUND) {
 		*answer = false;
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
-	for (result = dns_rdataset_first(&rdataset); result == ISC_R_SUCCESS;
-	     result = dns_rdataset_next(&rdataset))
-	{
+	found = false;
+	DNS_RDATASET_FOREACH (&rdataset) {
 		dns_rdata_t rdata1 = DNS_RDATA_INIT;
 		dns_rdata_t rdata2 = DNS_RDATA_INIT;
 		unsigned char buf[DNS_NSEC3PARAM_BUFFERSIZE];
@@ -1865,29 +1776,22 @@ try_private:
 		{
 			continue;
 		}
-		result = dns_rdata_tostruct(&rdata2, &nsec3param, NULL);
-		RUNTIME_CHECK(result == ISC_R_SUCCESS);
 
+		dns_rdata_tostruct(&rdata2, &nsec3param, NULL);
 		if (!complete && CREATE(nsec3param.flags)) {
+			found = true;
 			break;
 		}
 	}
 	dns_rdataset_disassociate(&rdataset);
-	if (result == ISC_R_SUCCESS) {
-		*answer = true;
-		result = ISC_R_SUCCESS;
-	}
-	if (result == ISC_R_NOMORE) {
-		*answer = false;
-		result = ISC_R_SUCCESS;
-	}
+	*answer = found;
 
-	return (result);
+	return result;
 }
 
 unsigned int
 dns_nsec3_maxiterations(void) {
-	return (DNS_NSEC3_MAXITERATIONS);
+	return DNS_NSEC3_MAXITERATIONS;
 }
 
 isc_result_t
@@ -1931,14 +1835,14 @@ dns_nsec3_noexistnodata(dns_rdatatype_t type, const dns_name_t *name,
 	result = dns_rdataset_first(nsec3set);
 	if (result != ISC_R_SUCCESS) {
 		(*logit)(arg, ISC_LOG_DEBUG(3), "failure processing NSEC3 set");
-		return (result);
+		return result;
 	}
 
 	dns_rdataset_current(nsec3set, &rdata);
 
 	result = dns_rdata_tostruct(&rdata, &nsec3, NULL);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	(*logit)(arg, ISC_LOG_DEBUG(3), "looking for relevant NSEC3");
@@ -1950,7 +1854,7 @@ dns_nsec3_noexistnodata(dns_rdatatype_t type, const dns_name_t *name,
 	 * NSEC3 records must have two or more labels to be valid.
 	 */
 	if (zlabels < 2) {
-		return (ISC_R_IGNORE);
+		return ISC_R_IGNORE;
 	}
 
 	/*
@@ -1963,7 +1867,7 @@ dns_nsec3_noexistnodata(dns_rdatatype_t type, const dns_name_t *name,
 	 * If not below the zone name we can ignore this record.
 	 */
 	if (!dns_name_issubdomain(name, zone)) {
-		return (ISC_R_IGNORE);
+		return ISC_R_IGNORE;
 	}
 
 	/*
@@ -1976,14 +1880,14 @@ dns_nsec3_noexistnodata(dns_rdatatype_t type, const dns_name_t *name,
 	}
 
 	if (!dns_name_equal(zone, zonename)) {
-		return (ISC_R_IGNORE);
+		return ISC_R_IGNORE;
 	}
 
 	/*
 	 * Are we only looking for the most enclosing zone?
 	 */
 	if (exists == NULL || data == NULL) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	/*
@@ -1994,7 +1898,7 @@ dns_nsec3_noexistnodata(dns_rdatatype_t type, const dns_name_t *name,
 		if (unknown != NULL) {
 			*unknown = true;
 		}
-		return (ISC_R_IGNORE);
+		return ISC_R_IGNORE;
 	}
 
 	/*
@@ -2005,14 +1909,14 @@ dns_nsec3_noexistnodata(dns_rdatatype_t type, const dns_name_t *name,
 	isc_buffer_init(&buffer, owner, sizeof(owner));
 	result = isc_base32hex_decoderegion(&hashlabel, &buffer);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	/*
 	 * The hash lengths should match.  If not ignore the record.
 	 */
 	if (isc_buffer_usedlength(&buffer) != nsec3.next_length) {
-		return (ISC_R_IGNORE);
+		return ISC_R_IGNORE;
 	}
 
 	/*
@@ -2025,7 +1929,7 @@ dns_nsec3_noexistnodata(dns_rdatatype_t type, const dns_name_t *name,
 	 * Prepare to compute all the hashes.
 	 */
 	qname = dns_fixedname_initname(&qfixed);
-	dns_name_downcase(name, qname, NULL);
+	dns_name_downcase(name, qname);
 	qlabels = dns_name_countlabels(qname);
 	first = true;
 
@@ -2034,7 +1938,7 @@ dns_nsec3_noexistnodata(dns_rdatatype_t type, const dns_name_t *name,
 		 * If there are too many iterations reject the NSEC3 record.
 		 */
 		if (nsec3.iterations > DNS_NSEC3_MAXITERATIONS) {
-			return (DNS_R_NSEC3ITERRANGE);
+			return DNS_R_NSEC3ITERRANGE;
 		}
 
 		length = isc_iterated_hash(hash, nsec3.hash, nsec3.iterations,
@@ -2047,7 +1951,7 @@ dns_nsec3_noexistnodata(dns_rdatatype_t type, const dns_name_t *name,
 			(*logit)(arg, ISC_LOG_DEBUG(3),
 				 "ignoring NSEC bad length %u vs %u", length,
 				 nsec3.next_length);
-			return (ISC_R_IGNORE);
+			return ISC_R_IGNORE;
 		}
 
 		order = memcmp(hash, owner, length);
@@ -2068,7 +1972,7 @@ dns_nsec3_noexistnodata(dns_rdatatype_t type, const dns_name_t *name,
 					 */
 					(*logit)(arg, ISC_LOG_DEBUG(3),
 						 "ignoring parent NSEC3");
-					return (ISC_R_IGNORE);
+					return ISC_R_IGNORE;
 				}
 			} else if (atparent && ns && soa) {
 				/*
@@ -2077,7 +1981,7 @@ dns_nsec3_noexistnodata(dns_rdatatype_t type, const dns_name_t *name,
 				 */
 				(*logit)(arg, ISC_LOG_DEBUG(3),
 					 "ignoring child NSEC3");
-				return (ISC_R_IGNORE);
+				return ISC_R_IGNORE;
 			}
 			if (type == dns_rdatatype_cname ||
 			    type == dns_rdatatype_nxt ||
@@ -2091,11 +1995,11 @@ dns_nsec3_noexistnodata(dns_rdatatype_t type, const dns_name_t *name,
 					 "NSEC3 proves name exists (owner) "
 					 "data=%d",
 					 *data);
-				return (ISC_R_SUCCESS);
+				return ISC_R_SUCCESS;
 			}
 			(*logit)(arg, ISC_LOG_DEBUG(3),
 				 "NSEC3 proves CNAME exists");
-			return (ISC_R_IGNORE);
+			return ISC_R_IGNORE;
 		}
 
 		if (order == 0 &&
@@ -2109,7 +2013,7 @@ dns_nsec3_noexistnodata(dns_rdatatype_t type, const dns_name_t *name,
 			 */
 			(*logit)(arg, ISC_LOG_DEBUG(3),
 				 "ignoring parent NSEC3");
-			return (ISC_R_IGNORE);
+			return ISC_R_IGNORE;
 		}
 
 		/*
@@ -2137,7 +2041,7 @@ dns_nsec3_noexistnodata(dns_rdatatype_t type, const dns_name_t *name,
 			dns_name_format(qname, namebuf, sizeof(namebuf));
 			(*logit)(arg, ISC_LOG_DEBUG(3),
 				 "NSEC3 at super-domain %s", namebuf);
-			return (answer);
+			return answer;
 		}
 
 		/*
@@ -2175,9 +2079,9 @@ dns_nsec3_noexistnodata(dns_rdatatype_t type, const dns_name_t *name,
 				*optout = ((nsec3.flags &
 					    DNS_NSEC3FLAG_OPTOUT) != 0);
 				(*logit)(arg, ISC_LOG_DEBUG(3),
-					 (*optout ? "NSEC3 indicates optout"
-						  : "NSEC3 indicates secure "
-						    "range"));
+					 *optout ? "NSEC3 indicates optout"
+						 : "NSEC3 indicates secure "
+						   "range");
 			}
 			answer = ISC_R_SUCCESS;
 		}
@@ -2188,5 +2092,5 @@ dns_nsec3_noexistnodata(dns_rdatatype_t type, const dns_name_t *name,
 		}
 		first = false;
 	}
-	return (answer);
+	return answer;
 }

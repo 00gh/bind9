@@ -17,14 +17,10 @@
 
 #include <stdbool.h>
 
-#include <isc/lang.h>
-
 #include <dns/acl.h>
 #include <dns/types.h>
 
 #include <dst/dst.h>
-
-ISC_LANG_BEGINDECLS
 
 typedef enum {
 	dns_ssumatchtype_name = 0,
@@ -64,10 +60,6 @@ dns_ssutable_create(isc_mem_t *mctx, dns_ssutable_t **table);
  *	Requires:
  *\li		'mctx' is a valid memory context
  *\li		'table' is not NULL, and '*table' is NULL
- *
- *	Returns:
- *\li		ISC_R_SUCCESS
- *\li		ISC_R_NOMEMORY
  */
 
 void
@@ -111,7 +103,7 @@ void
 dns_ssutable_addrule(dns_ssutable_t *table, bool grant,
 		     const dns_name_t *identity, dns_ssumatchtype_t matchtype,
 		     const dns_name_t *name, unsigned int ntypes,
-		     dns_ssuruletype_t *types);
+		     dns_ssuruletype_t *types, const char *debug);
 /*%<
  *	Adds a new rule to a simple-secure-update rule table.  The rule
  *	either grants or denies update privileges of an identity (or set of
@@ -134,10 +126,7 @@ dns_ssutable_addrule(dns_ssutable_t *table, bool grant,
  *\li		'matchtype' must be one of the defined constants.
  *\li		'name' is a valid absolute name
  *\li		If 'ntypes' > 0, 'types' must not be NULL
- *
- *	Returns:
- *\li		ISC_R_SUCCESS
- *\li		ISC_R_NOMEMORY
+ *\li		'debug' must not be NULL
  */
 
 bool
@@ -257,5 +246,3 @@ dns_ssu_mtypefromstring(const char *str, dns_ssumatchtype_t *mtype);
  *\li	#ISC_R_SUCCESS
  *\li	#ISC_R_NOTFOUND
  */
-
-ISC_LANG_ENDDECLS

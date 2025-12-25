@@ -26,6 +26,7 @@ options {
 	notify yes;
 	minimal-responses no;
 	update-quota 1;
+	dnssec-validation no;
 	include "tls.options";
 };
 
@@ -79,6 +80,7 @@ zone "max-ttl.nil" {
 	check-integrity no;
 	allow-update { named-acl; };
 	allow-transfer { any; };
+	max-records-per-type 3;
 };
 
 zone "other.nil" {
@@ -92,7 +94,7 @@ zone "other.nil" {
 	allow-transfer { any; };
 };
 
-primaries others {
+remote-servers others {
 	10.53.0.2 port @PORT@;
 	10.53.0.2 port @PORT@ key altkey;
 };
@@ -131,6 +133,12 @@ include "sha224.key";
 include "sha256.key";
 include "sha384.key";
 include "sha512.key";
+include "legacy157.key";
+include "legacy161.key";
+include "legacy162.key";
+include "legacy163.key";
+include "legacy164.key";
+include "legacy165.key";
 
 zone "keytests.nil" {
 	type primary;
@@ -142,6 +150,12 @@ zone "keytests.nil" {
 	    grant sha256-key name sha256.keytests.nil. ANY;
 	    grant sha384-key name sha384.keytests.nil. ANY;
 	    grant sha512-key name sha512.keytests.nil. ANY;
+	    grant legacy-157 name 157.keytests.nil. ANY;
+	    grant legacy-161 name 161.keytests.nil. ANY;
+	    grant legacy-162 name 162.keytests.nil. ANY;
+	    grant legacy-163 name 163.keytests.nil. ANY;
+	    grant legacy-164 name 164.keytests.nil. ANY;
+	    grant legacy-165 name 165.keytests.nil. ANY;
 	};
 };
 

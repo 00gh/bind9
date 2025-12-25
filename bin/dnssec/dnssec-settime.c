@@ -25,6 +25,8 @@
 #include <isc/commandline.h>
 #include <isc/file.h>
 #include <isc/hash.h>
+#include <isc/lib.h>
+#include <isc/log.h>
 #include <isc/mem.h>
 #include <isc/result.h>
 #include <isc/string.h>
@@ -32,26 +34,22 @@
 #include <isc/util.h>
 
 #include <dns/keyvalues.h>
-#include <dns/log.h>
+#include <dns/lib.h>
 
 #include <dst/dst.h>
 
 #include "dnssectool.h"
 
-const char *program = "dnssec-settime";
-
-static isc_mem_t *mctx = NULL;
-
-noreturn static void
+ISC_NORETURN static void
 usage(void);
 
 static void
 usage(void) {
 	fprintf(stderr, "Usage:\n");
-	fprintf(stderr, "    %s [options] keyfile\n\n", program);
+	fprintf(stderr, "    %s [options] keyfile\n\n",
+		isc_commandline_progname);
 	fprintf(stderr, "Version: %s\n", PACKAGE_VERSION);
 	fprintf(stderr, "General options:\n");
-	fprintf(stderr, "    -E engine:          specify OpenSSL engine\n");
 	fprintf(stderr, "    -f:                 force update of old-style "
 			"keys\n");
 	fprintf(stderr, "    -K directory:       set key file location\n");
@@ -101,7 +99,7 @@ usage(void) {
 	fprintf(stderr, "     K<name>+<alg>+<new id>.key, "
 			"K<name>+<alg>+<new id>.private\n");
 
-	exit(-1);
+	exit(EXIT_FAILURE);
 }
 
 static void
@@ -186,7 +184,6 @@ writekey(dst_key_t *key, const char *directory, bool write_state) {
 int
 main(int argc, char **argv) {
 	isc_result_t result;
-	const char *engine = NULL;
 	const char *filename = NULL;
 	char *directory = NULL;
 	char keystr[DST_KEY_FORMATSIZE];
@@ -228,7 +225,6 @@ main(int argc, char **argv) {
 	bool epoch = false;
 	bool changed = false;
 	bool write_state = false;
-	isc_log_t *log = NULL;
 	isc_stdtime_t syncadd = 0, syncdel = 0;
 	bool unsetsyncadd = false, setsyncadd = false;
 	bool unsetsyncdel = false, setsyncdel = false;
@@ -239,15 +235,15 @@ main(int argc, char **argv) {
 	bool printdsadd = false, printdsdel = false;
 	isc_stdtime_t now = isc_stdtime_now();
 
+	isc_commandline_init(argc, argv);
+
 	options = DST_TYPE_PUBLIC | DST_TYPE_PRIVATE | DST_TYPE_STATE;
 
 	if (argc == 1) {
 		usage();
 	}
 
-	isc_mem_create(&mctx);
-
-	setup_logging(mctx, &log);
+	setup_logging();
 
 	isc_commandline_errprint = false;
 
@@ -314,7 +310,7 @@ main(int argc, char **argv) {
 					   &setdstime);
 			break;
 		case 'E':
-			engine = isc_commandline_argument;
+			fatal("%s", isc_result_totext(DST_R_NOENGINE));
 			break;
 		case 'f':
 			force = true;
@@ -337,7 +333,8 @@ main(int argc, char **argv) {
 		case '?':
 			if (isc_commandline_option != '?') {
 				fprintf(stderr, "%s: invalid argument -%c\n",
-					program, isc_commandline_option);
+					isc_commandline_progname,
+					isc_commandline_option);
 			}
 			FALLTHROUGH;
 		case 'h':
@@ -361,7 +358,7 @@ main(int argc, char **argv) {
 			 * We don't have to copy it here, but do it to
 			 * simplify cleanup later
 			 */
-			directory = isc_mem_strdup(mctx,
+			directory = isc_mem_strdup(isc_g_mctx,
 						   isc_commandline_argument);
 			break;
 		case 'k':
@@ -514,7 +511,7 @@ main(int argc, char **argv) {
 			break;
 		case 'V':
 			/* Does not return. */
-			version(program);
+			version(isc_commandline_progname);
 		case 'v':
 			verbose = strtol(isc_commandline_argument, &endp, 0);
 			if (*endp != '\0') {
@@ -534,9 +531,10 @@ main(int argc, char **argv) {
 			break;
 
 		default:
-			fprintf(stderr, "%s: unhandled option -%c\n", program,
+			fprintf(stderr, "%s: unhandled option -%c\n",
+				isc_commandline_progname,
 				isc_commandline_option);
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 	}
 
@@ -555,12 +553,6 @@ main(int argc, char **argv) {
 		fatal("Options -g, -d, -k, -r and -z require -s to be set");
 	}
 
-	result = dst_lib_init(mctx, engine);
-	if (result != ISC_R_SUCCESS) {
-		fatal("Could not initialize dst: %s",
-		      isc_result_totext(result));
-	}
-
 	if (predecessor != NULL) {
 		int major, minor;
 
@@ -576,7 +568,7 @@ main(int argc, char **argv) {
 		}
 
 		result = dst_key_fromnamedfile(predecessor, directory, options,
-					       mctx, &prevkey);
+					       isc_g_mctx, &prevkey);
 		if (result != ISC_R_SUCCESS) {
 			fatal("Invalid keyfile %s: %s", filename,
 			      isc_result_totext(result));
@@ -633,14 +625,14 @@ main(int argc, char **argv) {
 				"removal date;\n\t"
 				"it will remain in the zone "
 				"indefinitely after rollover.\n",
-				program);
+				isc_commandline_progname);
 		} else if (prevdel < previnact) {
 			fprintf(stderr,
 				"%s: warning: Predecessor is "
 				"scheduled to be deleted\n\t"
 				"before it is scheduled to be "
 				"inactive.\n",
-				program);
+				isc_commandline_progname);
 		}
 
 		changed = setpub = setact = true;
@@ -674,7 +666,8 @@ main(int argc, char **argv) {
 	if (directory != NULL) {
 		filename = argv[isc_commandline_index];
 	} else {
-		result = isc_file_splitpath(mctx, argv[isc_commandline_index],
+		result = isc_file_splitpath(isc_g_mctx,
+					    argv[isc_commandline_index],
 					    &directory, &filename);
 		if (result != ISC_R_SUCCESS) {
 			fatal("cannot process filename %s: %s",
@@ -683,7 +676,7 @@ main(int argc, char **argv) {
 		}
 	}
 
-	result = dst_key_fromnamedfile(filename, directory, options, mctx,
+	result = dst_key_fromnamedfile(filename, directory, options, isc_g_mctx,
 				       &key);
 	if (result != ISC_R_SUCCESS) {
 		fatal("Invalid keyfile %s: %s", filename,
@@ -725,7 +718,7 @@ main(int argc, char **argv) {
 			"%s: warning: Key is scheduled to "
 			"be deleted before it is\n\t"
 			"scheduled to be inactive.\n",
-			program);
+			isc_commandline_progname);
 	}
 
 	if (force) {
@@ -735,7 +728,7 @@ main(int argc, char **argv) {
 	}
 
 	if (verbose > 2) {
-		fprintf(stderr, "%s: %s\n", program, keystr);
+		fprintf(stderr, "%s: %s\n", isc_commandline_progname, keystr);
 	}
 
 	/*
@@ -759,14 +752,14 @@ main(int argc, char **argv) {
 				"%s: warning: Key %s is already "
 				"revoked; changing the revocation date "
 				"will not affect this.\n",
-				program, keystr);
+				isc_commandline_progname, keystr);
 		}
 		if ((dst_key_flags(key) & DNS_KEYFLAG_KSK) == 0) {
 			fprintf(stderr,
 				"%s: warning: Key %s is not flagged as "
 				"a KSK, but -R was used.  Revoking a "
 				"ZSK is legal, but undefined.\n",
-				program, keystr);
+				isc_commandline_progname, keystr);
 		}
 		dst_key_settime(key, DST_TIME_REVOKE, rev);
 	} else if (unsetrev) {
@@ -775,7 +768,7 @@ main(int argc, char **argv) {
 				"%s: warning: Key %s is already "
 				"revoked; removing the revocation date "
 				"will not affect this.\n",
-				program, keystr);
+				isc_commandline_progname, keystr);
 		}
 		dst_key_unsettime(key, DST_TIME_REVOKE);
 	}
@@ -952,13 +945,10 @@ main(int argc, char **argv) {
 		dst_key_free(&prevkey);
 	}
 	dst_key_free(&key);
-	dst_lib_destroy();
 	if (verbose > 10) {
-		isc_mem_stats(mctx, stdout);
+		isc_mem_stats(isc_g_mctx, stdout);
 	}
-	cleanup_logging(&log);
-	isc_mem_free(mctx, directory);
-	isc_mem_destroy(&mctx);
+	isc_mem_free(isc_g_mctx, directory);
 
-	return (0);
+	return 0;
 }

@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -24,8 +25,9 @@
 #include <cmocka.h>
 
 #include <isc/buffer.h>
-#include <isc/fips.h>
+#include <isc/crypto.h>
 #include <isc/hex.h>
+#include <isc/lib.h>
 #include <isc/md.h>
 #include <isc/region.h>
 #include <isc/result.h>
@@ -40,30 +42,30 @@ static int
 _setup(void **state) {
 	isc_md_t *md = isc_md_new();
 	if (md == NULL) {
-		return (-1);
+		return -1;
 	}
 	*state = md;
-	return (0);
+	return 0;
 }
 
 static int
 _teardown(void **state) {
 	if (*state == NULL) {
-		return (-1);
+		return -1;
 	}
 	isc_md_free(*state);
-	return (0);
+	return 0;
 }
 
 static int
 _reset(void **state) {
 	if (*state == NULL) {
-		return (-1);
+		return -1;
 	}
 	if (isc_md_reset(*state) != ISC_R_SUCCESS) {
-		return (-1);
+		return -1;
 	}
-	return (0);
+	return 0;
 }
 
 ISC_RUN_TEST_IMPL(isc_md_new) {
@@ -106,7 +108,7 @@ isc_md_test(isc_md_t *md, const isc_md_type_t *type, const char *buf,
 
 	assert_return_code(res, ISC_R_SUCCESS);
 
-	assert_memory_equal(hexdigest, result, (result ? strlen(result) : 0));
+	assert_memory_equal(hexdigest, result, result ? strlen(result) : 0);
 	assert_int_equal(isc_md_reset(md), ISC_R_SUCCESS);
 }
 
@@ -118,7 +120,10 @@ ISC_RUN_TEST_IMPL(isc_md_init) {
 
 	assert_int_equal(isc_md_init(md, NULL), ISC_R_NOTIMPLEMENTED);
 
-	if (!isc_fips_mode()) {
+	if (isc_crypto_fips_mode()) {
+		assert_int_equal(isc_md_init(md, ISC_MD_MD5),
+				 ISC_R_NOTIMPLEMENTED);
+	} else {
 		assert_int_equal(isc_md_init(md, ISC_MD_MD5), ISC_R_SUCCESS);
 		assert_int_equal(isc_md_reset(md), ISC_R_SUCCESS);
 	}
@@ -197,7 +202,7 @@ ISC_RUN_TEST_IMPL(isc_md_final) {
 ISC_RUN_TEST_IMPL(isc_md_md5) {
 	isc_md_t *md = *state;
 
-	if (isc_fips_mode()) {
+	if (isc_crypto_fips_mode()) {
 		skip();
 		return;
 	}

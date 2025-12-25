@@ -21,6 +21,7 @@ options {
 	session-keyfile "session.key";
 	listen-on { 10.53.0.7; };
 	listen-on-v6 { none; };
+	allow-transfer { any; };
 	minimal-responses no;
 	recursion yes;
 	dnssec-validation yes;
@@ -31,8 +32,6 @@ options {
 	nsip-enable yes
 	nsdname-enable yes
 	min-update-interval 0;
-
-	include "../dnsrps.conf";
 };
 
 logging { category rpz { default_debug; }; };

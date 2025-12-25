@@ -24,8 +24,10 @@
 #include <cmocka.h>
 
 #include <isc/buffer.h>
+#include <isc/lib.h>
 #include <isc/util.h>
 
+#include <dns/lib.h>
 #include <dns/nsec3.h>
 #include <dns/private.h>
 #include <dns/rdataclass.h>
@@ -36,30 +38,6 @@
 #include <tests/dns.h>
 
 static dns_rdatatype_t privatetype = 65534;
-
-static int
-setup_test(void **state) {
-	isc_result_t result;
-
-	UNUSED(state);
-
-	result = dst_lib_init(mctx, NULL);
-
-	if (result != ISC_R_SUCCESS) {
-		return (1);
-	}
-
-	return (0);
-}
-
-static int
-teardown_test(void **state) {
-	UNUSED(state);
-
-	dst_lib_destroy();
-
-	return (0);
-}
 
 typedef struct {
 	unsigned char alg;
@@ -190,8 +168,10 @@ ISC_RUN_TEST_IMPL(private_nsec3_totext) {
 	const char *results[] = { "Creating NSEC3 chain 1 0 1 BEEF",
 				  "Creating NSEC3 chain 1 1 10 DADD",
 				  "Pending NSEC3 chain 1 0 20 BEAD",
+				  /* clang-format off */
 				  ("Removing NSEC3 chain 1 0 30 DEAF / "
 				   "creating NSEC chain"),
+				  /* clang-format on */
 				  "Removing NSEC3 chain 1 0 100 FEEDABEE" };
 	int ncases = 5;
 
@@ -211,8 +191,8 @@ ISC_RUN_TEST_IMPL(private_nsec3_totext) {
 }
 
 ISC_TEST_LIST_START
-ISC_TEST_ENTRY_CUSTOM(private_signing_totext, setup_test, teardown_test)
-ISC_TEST_ENTRY_CUSTOM(private_nsec3_totext, setup_test, teardown_test)
+ISC_TEST_ENTRY(private_signing_totext)
+ISC_TEST_ENTRY(private_nsec3_totext)
 ISC_TEST_LIST_END
 
 ISC_TEST_MAIN

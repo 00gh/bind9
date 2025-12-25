@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -24,6 +25,7 @@
 
 #include <isc/buffer.h>
 #include <isc/lex.h>
+#include <isc/lib.h>
 #include <isc/mem.h>
 #include <isc/util.h>
 
@@ -42,7 +44,7 @@ ISC_RUN_TEST_IMPL(lex_0xff) {
 
 	UNUSED(state);
 
-	isc_lex_create(mctx, 1024, &lex);
+	isc_lex_create(isc_g_mctx, 1024, &lex);
 
 	isc_buffer_init(&death_buf, &death[0], sizeof(death));
 	isc_buffer_add(&death_buf, sizeof(death));
@@ -68,7 +70,7 @@ ISC_RUN_TEST_IMPL(lex_setline) {
 
 	UNUSED(state);
 
-	isc_lex_create(mctx, 1024, &lex);
+	isc_lex_create(isc_g_mctx, 1024, &lex);
 
 	isc_buffer_init(&buf, &text[0], sizeof(text));
 	isc_buffer_add(&buf, sizeof(text));
@@ -190,7 +192,7 @@ ISC_RUN_TEST_IMPL(lex_string) {
 	UNUSED(state);
 
 	for (i = 0; i < ARRAY_SIZE(parse_tests); i++) {
-		isc_lex_create(mctx, 1024, &lex);
+		isc_lex_create(isc_g_mctx, 1024, &lex);
 
 		isc_buffer_constinit(&buf, parse_tests[i].text,
 				     strlen(parse_tests[i].text));
@@ -243,7 +245,7 @@ ISC_RUN_TEST_IMPL(lex_qstring) {
 	UNUSED(state);
 
 	for (i = 0; i < ARRAY_SIZE(parse_tests); i++) {
-		isc_lex_create(mctx, 1024, &lex);
+		isc_lex_create(isc_g_mctx, 1024, &lex);
 
 		isc_buffer_constinit(&buf, parse_tests[i].text,
 				     strlen(parse_tests[i].text));
@@ -297,7 +299,7 @@ ISC_RUN_TEST_IMPL(lex_keypair) {
 	UNUSED(state);
 
 	for (i = 0; i < ARRAY_SIZE(parse_tests); i++) {
-		isc_lex_create(mctx, 1024, &lex);
+		isc_lex_create(isc_g_mctx, 1024, &lex);
 
 		isc_buffer_constinit(&buf, parse_tests[i].text,
 				     strlen(parse_tests[i].text));

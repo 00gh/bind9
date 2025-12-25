@@ -35,13 +35,16 @@
 
 ``edns-disabled``
     Log queries that have been forced to use plain DNS due to timeouts. This is often due to the remote servers not being :rfc:`1034`-compliant (not always returning FORMERR or similar to EDNS queries and other extensions to the DNS when they are not understood). In other words, this is targeted at servers that fail to respond to DNS queries that they don't understand.
-    
+
     Note: the log message can also be due to packet loss. Before reporting servers for non-:rfc:`1034` compliance they should be re-tested to determine the nature of the non-compliance. This testing should prevent or reduce the number of false-positive reports.
-    
+
     Note: eventually :iscman:`named` will have to stop treating such timeouts as due to :rfc:`1034` non-compliance and start treating it as plain packet loss. Falsely classifying packet loss as due to :rfc:`1034` non-compliance impacts DNSSEC validation, which requires EDNS for the DNSSEC records to be returned.
 
 ``general``
     A catch-all for many things that still are not classified into categories.
+
+``dns-reporting-agent``
+    Reports from clients indicating that there is an error in our responses.
 
 ``lame-servers``
     Misconfigurations in remote servers, discovered by BIND 9 when trying to query those servers during resolution.
@@ -56,17 +59,17 @@
     NSID options received from upstream servers.
 
 ``queries``
-    A location where queries should be logged.
-    
+    The locations where queries should be logged.
+
     At startup, specifying the category ``queries`` also enables query logging unless the :any:`querylog` option has been specified.
-    
+
     The query log entry first reports a client object identifier in @0x<hexadecimal-number> format. Next, it reports the client's IP address and port number, and the query name, class, and type. Next, it reports whether the Recursion Desired flag was set (+ if set, - if not set), whether the query was signed (S), whether EDNS was in use along with the EDNS version number (E(#)), whether TCP was used (T), whether DO (DNSSEC Ok) was set (D), whether CD (Checking Disabled) was set (C), whether a valid DNS Server COOKIE was received (V), and whether a DNS COOKIE option without a valid Server COOKIE was present (K). After this, the destination address the query was sent to is reported. Finally, if any CLIENT-SUBNET option was present in the client query, it is included in square brackets in the format [ECS address/source/scope].
 
-    ``client 127.0.0.1#62536 (www.example.com):``
-    ``query: www.example.com IN AAAA +SE``
-    ``client ::1#62537 (www.example.net):``
-    ``query: www.example.net IN AAAA -SE``
-    
+    .. code-block:: none
+
+       client @0x7f91b8005490 127.0.0.1#62536 (www.example.com): query: www.example.com IN AAAA +E(0)K (127.0.0.1)
+       client @0x7f91b4007400 ::1#62537 (www.example.net): query: www.example.net IN AAAA +E(0)K (::1)
+
     The first part of this log message, showing the client address/port number and query name, is repeated in all subsequent log messages related to the same query.
 
 ``query-errors``
@@ -74,11 +77,14 @@
 
 ``rate-limit``
     Start, periodic, and final notices of the rate limiting of a stream of responses that are logged at ``info`` severity in this category. These messages include a hash value of the domain name of the response and the name itself, except when there is insufficient memory to record the name for the final notice. The final notice is normally delayed until about one minute after rate limiting stops. A lack of memory can hurry the final notice, which is indicated by an initial asterisk (\*). Various internal events are logged at debug level 1 and higher.
-    
+
     Rate limiting of individual requests is logged in the ``query-errors`` category.
 
 ``resolver``
     DNS resolution, such as the recursive lookups performed on behalf of clients by a caching name server.
+
+``responses``
+    The locations where query response summaries should be logged.
 
 ``rpz``
     Information about errors in response policy zone files, rewritten responses, and, at the highest ``debug`` levels, mere rewriting attempts.
@@ -107,6 +113,9 @@
 ``update``
     Dynamic updates.
 
+``update-policy``
+    Update-policy rule matching.
+
 ``update-security``
     Approval and denial of update requests.
 
@@ -118,3 +127,7 @@
 
 ``zoneload``
     Loading of zones and creation of automatic empty zones.
+
+``zoneversion``
+    ZONEVERSION options received from upstream servers.
+

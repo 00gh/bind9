@@ -14,14 +14,15 @@
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include <isc/attributes.h>
 #include <isc/base32.h>
 #include <isc/buffer.h>
 #include <isc/commandline.h>
-#include <isc/file.h>
 #include <isc/hex.h>
 #include <isc/iterated_hash.h>
+#include <isc/lib.h>
 #include <isc/result.h>
 #include <isc/string.h>
 #include <isc/tls.h>
@@ -29,26 +30,24 @@
 #include <isc/util.h>
 
 #include <dns/fixedname.h>
+#include <dns/lib.h>
 #include <dns/name.h>
 #include <dns/nsec3.h>
 #include <dns/types.h>
 
-const char *program = "nsec3hash";
-
-noreturn static void
+ISC_NORETURN static void
 fatal(const char *format, ...);
 
 static void
 fatal(const char *format, ...) {
 	va_list args;
 
-	fprintf(stderr, "%s: ", program);
+	fprintf(stderr, "%s: ", isc_commandline_progname);
 	va_start(args, format);
 	vfprintf(stderr, format, args);
 	va_end(args);
 	fprintf(stderr, "\n");
-	isc__tls_setfatalmode();
-	exit(1);
+	_exit(EXIT_FAILURE);
 }
 
 static void
@@ -61,10 +60,10 @@ check_result(isc_result_t result, const char *message) {
 static void
 usage(void) {
 	fprintf(stderr, "Usage: %s salt algorithm iterations domain\n",
-		program);
+		isc_commandline_progname);
 	fprintf(stderr, "       %s -r algorithm flags iterations salt domain\n",
-		program);
-	exit(1);
+		isc_commandline_progname);
+	exit(EXIT_FAILURE);
 }
 
 typedef void
@@ -120,10 +119,10 @@ nsec3hash(nsec3printer *nsec3print, const char *algostr, const char *flagstr,
 	name = dns_fixedname_initname(&fixed);
 	isc_buffer_constinit(&buffer, domain, strlen(domain));
 	isc_buffer_add(&buffer, strlen(domain));
-	result = dns_name_fromtext(name, &buffer, dns_rootname, 0, NULL);
+	result = dns_name_fromtext(name, &buffer, dns_rootname, 0);
 	check_result(result, "dns_name_fromtext() failed");
 
-	dns_name_downcase(name, name, NULL);
+	dns_name_downcase(name, name);
 	length = isc_iterated_hash(hash, hash_alg, iterations, salt,
 				   salt_length, name->ndata, name->length);
 	if (length == 0) {
@@ -161,6 +160,8 @@ main(int argc, char *argv[]) {
 	bool rdata_format = false;
 	int ch;
 
+	isc_commandline_init(argc, argv);
+
 	while ((ch = isc_commandline_parse(argc, argv, "-r")) != -1) {
 		switch (ch) {
 		case 'r':
@@ -191,5 +192,5 @@ skip:
 		nsec3hash(nsec3hash_print, argv[1], NULL, argv[2], argv[0],
 			  argv[3]);
 	}
-	return (0);
+	return 0;
 }

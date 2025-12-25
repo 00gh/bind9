@@ -32,6 +32,7 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include <protobuf-c/protobuf-c.h>
 
@@ -39,6 +40,7 @@
 #include <isc/buffer.h>
 #include <isc/commandline.h>
 #include <isc/hex.h>
+#include <isc/lib.h>
 #include <isc/mem.h>
 #include <isc/result.h>
 #include <isc/string.h>
@@ -46,44 +48,42 @@
 
 #include <dns/dnstap.h>
 #include <dns/fixedname.h>
+#include <dns/lib.h>
 #include <dns/masterdump.h>
 #include <dns/message.h>
 #include <dns/name.h>
 
 #include "dnstap.pb-c.h"
 
-isc_mem_t *mctx = NULL;
-bool memrecord = false;
 bool printmessage = false;
 bool hexmessage = false;
 bool yaml = false;
 bool timestampmillis = false;
 
-const char *program = "dnstap-read";
-
-#define CHECKM(op, msg)                                               \
-	do {                                                          \
-		result = (op);                                        \
-		if (result != ISC_R_SUCCESS) {                        \
-			fprintf(stderr, "%s: %s: %s\n", program, msg, \
-				isc_result_totext(result));           \
-			goto cleanup;                                 \
-		}                                                     \
+#define CHECKM(op, msg)                                        \
+	do {                                                   \
+		result = (op);                                 \
+		if (result != ISC_R_SUCCESS) {                 \
+			fprintf(stderr, "%s: %s: %s\n",        \
+				isc_commandline_progname, msg, \
+				isc_result_totext(result));    \
+			goto cleanup;                          \
+		}                                              \
 	} while (0)
 
-noreturn static void
+ISC_NORETURN static void
 fatal(const char *format, ...);
 
 static void
 fatal(const char *format, ...) {
 	va_list args;
 
-	fprintf(stderr, "%s: fatal: ", program);
+	fprintf(stderr, "%s: fatal: ", isc_commandline_progname);
 	va_start(args, format);
 	vfprintf(stderr, format, args);
 	va_end(args);
 	fprintf(stderr, "\n");
-	exit(1);
+	_exit(EXIT_FAILURE);
 }
 
 static void
@@ -102,7 +102,7 @@ print_dtdata(dns_dtdata_t *dt) {
 	isc_result_t result;
 	isc_buffer_t *b = NULL;
 
-	isc_buffer_allocate(mctx, &b, 2048);
+	isc_buffer_allocate(isc_g_mctx, &b, 2048);
 	if (b == NULL) {
 		fatal("out of memory");
 	}
@@ -128,7 +128,7 @@ print_hex(dns_dtdata_t *dt) {
 	}
 
 	textlen = (dt->msgdata.length * 2) + 1;
-	isc_buffer_allocate(mctx, &b, textlen);
+	isc_buffer_allocate(isc_g_mctx, &b, textlen);
 	if (b == NULL) {
 		fatal("out of memory");
 	}
@@ -153,7 +153,7 @@ print_packet(dns_dtdata_t *dt, const dns_master_style_t *style) {
 	if (dt->msg != NULL) {
 		size_t textlen = 2048;
 
-		isc_buffer_allocate(mctx, &b, textlen);
+		isc_buffer_allocate(isc_g_mctx, &b, textlen);
 		if (b == NULL) {
 			fatal("out of memory");
 		}
@@ -268,7 +268,8 @@ print_yaml(dns_dtdata_t *dt) {
 		}
 	}
 
-	printf("  socket_protocol: %s\n", dt->tcp ? "TCP" : "UDP");
+	printf("  socket_protocol: %s\n",
+	       dt->transport == DNS_TRANSPORT_UDP ? "UDP" : "TCP");
 
 	if (m->has_query_address) {
 		ProtobufCBinaryData *ip = &m->query_address;
@@ -336,16 +337,16 @@ int
 main(int argc, char *argv[]) {
 	isc_result_t result;
 	dns_message_t *message = NULL;
-	isc_buffer_t *b = NULL;
 	dns_dtdata_t *dt = NULL;
 	dns_dthandle_t *handle = NULL;
 	int rv = 0, ch;
 
+	isc_commandline_init(argc, argv);
+
 	while ((ch = isc_commandline_parse(argc, argv, "mptxy")) != -1) {
 		switch (ch) {
 		case 'm':
-			isc_mem_debugging |= ISC_MEM_DEBUGRECORD;
-			memrecord = true;
+			isc_mem_debugon(ISC_MEM_DEBUGRECORD);
 			break;
 		case 'p':
 			printmessage = true;
@@ -361,7 +362,7 @@ main(int argc, char *argv[]) {
 			break;
 		default:
 			usage();
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 	}
 
@@ -372,9 +373,7 @@ main(int argc, char *argv[]) {
 		fatal("no file specified");
 	}
 
-	isc_mem_create(&mctx);
-
-	CHECKM(dns_dt_open(argv[0], dns_dtmode_file, mctx, &handle),
+	CHECKM(dns_dt_open(argv[0], dns_dtmode_file, isc_g_mctx, &handle),
 	       "dns_dt_openfile");
 
 	for (;;) {
@@ -392,17 +391,8 @@ main(int argc, char *argv[]) {
 		input.base = data;
 		input.length = datalen;
 
-		if (b != NULL) {
-			isc_buffer_free(&b);
-		}
-		isc_buffer_allocate(mctx, &b, 2048);
-		if (b == NULL) {
-			fatal("out of memory");
-		}
-
-		result = dns_dt_parse(mctx, &input, &dt);
+		result = dns_dt_parse(isc_g_mctx, &input, &dt);
 		if (result != ISC_R_SUCCESS) {
-			isc_buffer_free(&b);
 			continue;
 		}
 
@@ -431,10 +421,6 @@ cleanup:
 	if (message != NULL) {
 		dns_message_detach(&message);
 	}
-	if (b != NULL) {
-		isc_buffer_free(&b);
-	}
-	isc_mem_destroy(&mctx);
 
 	exit(rv);
 }

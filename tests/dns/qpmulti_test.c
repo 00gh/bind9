@@ -12,28 +12,29 @@
  */
 
 #include <assert.h>
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <stdlib.h>
 
 #define UNIT_TESTING
 #include <cmocka.h>
 
 #include <isc/assertions.h>
+#include <isc/lib.h>
 #include <isc/log.h>
 #include <isc/loop.h>
 #include <isc/magic.h>
 #include <isc/mem.h>
-#include <isc/qsbr.h>
 #include <isc/random.h>
 #include <isc/refcount.h>
 #include <isc/rwlock.h>
+#include <isc/urcu.h>
 #include <isc/util.h>
 
-#include <dns/log.h>
+#include <dns/lib.h>
 #include <dns/qp.h>
 #include <dns/types.h>
 
@@ -48,9 +49,9 @@
 #define TRANSACTION_COUNT 1234
 
 #if VERBOSE
-#define TRACE(fmt, ...)                                                     \
-	isc_log_write(dns_lctx, DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_QP, \
-		      ISC_LOG_DEBUG(7), "%s:%d:%s(): " fmt, __FILE__,       \
+#define TRACE(fmt, ...)                                               \
+	isc_log_write(DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_QP,     \
+		      ISC_LOG_DEBUG(7), "%s:%d:%s(): " fmt, __FILE__, \
 		      __LINE__, __func__, ##__VA_ARGS__)
 #else
 #define TRACE(...)
@@ -68,31 +69,15 @@
 
 static void
 setup_logging(void) {
-	isc_result_t result;
-	isc_logdestination_t destination;
-	isc_logconfig_t *logconfig = NULL;
-
-	isc_log_create(mctx, &lctx, &logconfig);
-	isc_log_setcontext(lctx);
-	dns_log_init(lctx);
-	dns_log_setcontext(lctx);
-
-	destination.file.stream = stderr;
-	destination.file.name = NULL;
-	destination.file.versions = ISC_LOG_ROLLNEVER;
-	destination.file.maximum_size = 0;
-	isc_log_createchannel(logconfig, "stderr", ISC_LOG_TOFILEDESC,
-			      ISC_LOG_DYNAMIC, &destination,
-			      ISC_LOG_PRINTPREFIX | ISC_LOG_PRINTTIME |
-				      ISC_LOG_ISO8601);
-
 #if VERBOSE
-	isc_log_setdebuglevel(lctx, 7);
+	isc_log_setdebuglevel(7);
 #endif
-
-	result = isc_log_usechannel(logconfig, "stderr",
-				    ISC_LOGCATEGORY_DEFAULT, NULL);
-	assert_int_equal(result, ISC_R_SUCCESS);
+	isc_logconfig_t *logconfig = isc_logconfig_get();
+	isc_log_createandusechannel(
+		logconfig, "default_stderr", ISC_LOG_TOFILEDESC,
+		ISC_LOG_DYNAMIC, ISC_LOGDESTINATION_STDERR,
+		ISC_LOG_PRINTPREFIX | ISC_LOG_PRINTTIME | ISC_LOG_ISO8601,
+		ISC_LOGCATEGORY_DEFAULT, ISC_LOGMODULE_DEFAULT);
 }
 
 static struct {
@@ -135,7 +120,7 @@ item_makekey(dns_qpkey_t key, void *ctx, void *pval, uint32_t ival) {
 		ISC_INSIST(pval == &item[ival]);
 	}
 	memmove(key, item[ival].key, item[ival].len);
-	return (item[ival].len);
+	return item[ival].len;
 }
 
 static void
@@ -153,15 +138,14 @@ const dns_qpmethods_t test_methods = {
 
 static uint8_t
 random_byte(void) {
-	return (isc_random_uniform(SHIFT_OFFSET - SHIFT_NOBYTE) + SHIFT_NOBYTE);
+	return isc_random_uniform(SHIFT_OFFSET - SHIFT_NOBYTE) + SHIFT_NOBYTE;
 }
 
 static void
 setup_items(void) {
 	void *pval = NULL;
-	uint32_t ival = ~0U;
 	dns_qp_t *qp = NULL;
-	dns_qp_create(mctx, &test_methods, NULL, &qp);
+	dns_qp_create(isc_g_mctx, &test_methods, NULL, &qp);
 	for (size_t i = 0; i < ARRAY_SIZE(item); i++) {
 		do {
 			size_t len = isc_random_uniform(16) + 4;
@@ -172,7 +156,7 @@ setup_items(void) {
 			memmove(item[i].ascii, item[i].key, len);
 			qp_test_keytoascii(item[i].ascii, len);
 		} while (dns_qp_getkey(qp, item[i].key, item[i].len, &pval,
-				       &ival) == ISC_R_SUCCESS);
+				       NULL) == ISC_R_SUCCESS);
 		assert_int_equal(dns_qp_insert(qp, &item[i], i), ISC_R_SUCCESS);
 	}
 	dns_qp_destroy(&qp);
@@ -202,7 +186,7 @@ checkkey(dns_qpreadable_t qpr, size_t i, bool exists, const char *rubric) {
 		      rubric);
 		UNUSED(rubric);
 	}
-	return (ok);
+	return ok;
 }
 
 static bool
@@ -215,7 +199,7 @@ checkallro(dns_qpreadable_t qp) {
 		qp_test_dumptrie(qp);
 		TRACE("checkallro failed");
 	}
-	return (ok);
+	return ok;
 }
 
 static bool
@@ -228,7 +212,7 @@ checkallrw(dns_qpreadable_t qp) {
 		qp_test_dumptrie(qp);
 		TRACE("checkallrw failed");
 	}
-	return (ok);
+	return ok;
 }
 
 static void
@@ -283,9 +267,13 @@ one_transaction(dns_qpmulti_t *qpm) {
 		if (item[i].in_rw) {
 			/* TRACE("delete %zu %.*s", i,
 				 item[i].len, item[i].ascii); */
-			result = dns_qp_deletekey(qpw, item[i].key,
-						  item[i].len);
+			void *pvald = NULL;
+			uint32_t ivald = 0;
+			result = dns_qp_deletekey(qpw, item[i].key, item[i].len,
+						  &pvald, &ivald);
 			ASSERT(result == ISC_R_SUCCESS);
+			ASSERT(pvald == &item[i]);
+			ASSERT(ivald == i);
 			item[i].in_rw = false;
 		} else {
 			/* TRACE("insert %zu %.*s", i,
@@ -367,28 +355,27 @@ many_transactions(void *arg) {
 	UNUSED(arg);
 
 	dns_qpmulti_t *qpm = NULL;
-	dns_qpmulti_create(mctx, loopmgr, &test_methods, NULL, &qpm);
+	dns_qpmulti_create(isc_g_mctx, &test_methods, NULL, &qpm);
 	qpm->writer.write_protect = true;
 
 	for (size_t n = 0; n < TRANSACTION_COUNT; n++) {
 		TRACE("transaction %zu", n);
 		one_transaction(qpm);
-		isc__qsbr_quiescent_state(isc_loop_current(loopmgr));
-		isc_loopmgr_wakeup(loopmgr);
+		rcu_quiescent_state();
 	}
 
 	dns_qpmulti_destroy(&qpm);
-	isc_loopmgr_shutdown(loopmgr);
+	isc_loopmgr_shutdown();
 }
 
 ISC_RUN_TEST_IMPL(qpmulti) {
 	setup_loopmgr(NULL);
 	setup_logging();
 	setup_items();
-	isc_loop_setup(isc_loop_main(loopmgr), many_transactions, NULL);
-	isc_loopmgr_run(loopmgr);
-	isc_loopmgr_destroy(&loopmgr);
-	isc_log_destroy(&dns_lctx);
+	isc_loop_setup(isc_loop_main(), many_transactions, NULL);
+	isc_loopmgr_run();
+	rcu_barrier();
+	isc_loopmgr_destroy();
 }
 
 ISC_TEST_LIST_START

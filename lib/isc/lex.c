@@ -61,10 +61,10 @@ struct isc_lex {
 	unsigned int paren_count;
 	unsigned int saved_paren_count;
 	isc_lexspecials_t specials;
-	LIST(struct inputsource) sources;
+	ISC_LIST(struct inputsource) sources;
 };
 
-static isc_result_t
+static void
 grow_data(isc_lex_t *lex, size_t *remainingp, char **currp, char **prevp) {
 	char *tmp;
 
@@ -78,7 +78,6 @@ grow_data(isc_lex_t *lex, size_t *remainingp, char **currp, char **prevp) {
 	lex->data = tmp;
 	*remainingp += lex->max_token;
 	lex->max_token *= 2;
-	return (ISC_R_SUCCESS);
 }
 
 void
@@ -105,7 +104,7 @@ isc_lex_create(isc_mem_t *mctx, size_t max_token, isc_lex_t **lexp) {
 	lex->paren_count = 0;
 	lex->saved_paren_count = 0;
 	memset(lex->specials, 0, 256);
-	INIT_LIST(lex->sources);
+	ISC_LIST_INIT(lex->sources);
 	lex->magic = LEX_MAGIC;
 
 	*lexp = lex;
@@ -124,7 +123,7 @@ isc_lex_destroy(isc_lex_t **lexp) {
 	*lexp = NULL;
 	REQUIRE(VALID_LEX(lex));
 
-	while (!EMPTY(lex->sources)) {
+	while (!ISC_LIST_EMPTY(lex->sources)) {
 		RUNTIME_CHECK(isc_lex_close(lex) == ISC_R_SUCCESS);
 	}
 	if (lex->data != NULL) {
@@ -142,7 +141,7 @@ isc_lex_getcomments(isc_lex_t *lex) {
 
 	REQUIRE(VALID_LEX(lex));
 
-	return (lex->comments);
+	return lex->comments;
 }
 
 void
@@ -179,27 +178,24 @@ isc_lex_setspecials(isc_lex_t *lex, isc_lexspecials_t specials) {
 	memmove(lex->specials, specials, 256);
 }
 
-static isc_result_t
+static void
 new_source(isc_lex_t *lex, bool is_file, bool need_close, void *input,
 	   const char *name) {
 	inputsource *source;
 
 	source = isc_mem_get(lex->mctx, sizeof(*source));
-	source->result = ISC_R_SUCCESS;
-	source->is_file = is_file;
-	source->need_close = need_close;
-	source->at_eof = false;
-	source->last_was_eol = lex->last_was_eol;
-	source->input = input;
-	source->name = isc_mem_strdup(lex->mctx, name);
-	source->pushback = NULL;
+	*source = (inputsource){
+		.is_file = is_file,
+		.need_close = need_close,
+		.last_was_eol = lex->last_was_eol,
+		.input = input,
+		.name = isc_mem_strdup(lex->mctx, name),
+		.line = 1,
+		.link = ISC_LINK_INITIALIZER,
+	};
 	isc_buffer_allocate(lex->mctx, &source->pushback,
 			    (unsigned int)lex->max_token);
-	source->ignored = 0;
-	source->line = 1;
-	ISC_LIST_INITANDPREPEND(lex->sources, source, link);
-
-	return (ISC_R_SUCCESS);
+	ISC_LIST_PREPEND(lex->sources, source, link);
 }
 
 isc_result_t
@@ -215,17 +211,14 @@ isc_lex_openfile(isc_lex_t *lex, const char *filename) {
 
 	result = isc_stdio_open(filename, "r", &stream);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
-	result = new_source(lex, true, true, stream, filename);
-	if (result != ISC_R_SUCCESS) {
-		(void)fclose(stream);
-	}
-	return (result);
+	new_source(lex, true, true, stream, filename);
+	return ISC_R_SUCCESS;
 }
 
-isc_result_t
+void
 isc_lex_openstream(isc_lex_t *lex, FILE *stream) {
 	char name[128];
 
@@ -237,7 +230,7 @@ isc_lex_openstream(isc_lex_t *lex, FILE *stream) {
 
 	snprintf(name, sizeof(name), "stream-%p", stream);
 
-	return (new_source(lex, true, false, stream, name));
+	new_source(lex, true, false, stream, name);
 }
 
 isc_result_t
@@ -252,7 +245,8 @@ isc_lex_openbuffer(isc_lex_t *lex, isc_buffer_t *buffer) {
 
 	snprintf(name, sizeof(name), "buffer-%p", buffer);
 
-	return (new_source(lex, false, false, buffer, name));
+	new_source(lex, false, false, buffer, name);
+	return ISC_R_SUCCESS;
 }
 
 isc_result_t
@@ -265,9 +259,9 @@ isc_lex_close(isc_lex_t *lex) {
 
 	REQUIRE(VALID_LEX(lex));
 
-	source = HEAD(lex->sources);
+	source = ISC_LIST_HEAD(lex->sources);
 	if (source == NULL) {
-		return (ISC_R_NOMORE);
+		return ISC_R_NOMORE;
 	}
 
 	ISC_LIST_UNLINK(lex->sources, source, link);
@@ -281,7 +275,7 @@ isc_lex_close(isc_lex_t *lex) {
 	isc_buffer_free(&source->pushback);
 	isc_mem_put(lex->mctx, source, sizeof(*source));
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 typedef enum {
@@ -333,7 +327,7 @@ pushandgrow(isc_lex_t *lex, inputsource *source, int c) {
 		source->pushback = tbuf;
 	}
 	isc_buffer_putuint8(source->pushback, (uint8_t)c);
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 isc_result_t
@@ -358,19 +352,19 @@ isc_lex_gettoken(isc_lex_t *lex, unsigned int options, isc_token_t *tokenp) {
 	 */
 
 	REQUIRE(VALID_LEX(lex));
-	source = HEAD(lex->sources);
+	source = ISC_LIST_HEAD(lex->sources);
 	REQUIRE(tokenp != NULL);
 
 	if (source == NULL) {
 		if ((options & ISC_LEXOPT_NOMORE) != 0) {
 			tokenp->type = isc_tokentype_nomore;
-			return (ISC_R_SUCCESS);
+			return ISC_R_SUCCESS;
 		}
-		return (ISC_R_NOMORE);
+		return ISC_R_NOMORE;
 	}
 
 	if (source->result != ISC_R_SUCCESS) {
-		return (source->result);
+		return source->result;
 	}
 
 	lex->saved_paren_count = lex->paren_count;
@@ -382,18 +376,18 @@ isc_lex_gettoken(isc_lex_t *lex, unsigned int options, isc_token_t *tokenp) {
 		    lex->paren_count != 0)
 		{
 			lex->paren_count = 0;
-			return (ISC_R_UNBALANCED);
+			return ISC_R_UNBALANCED;
 		}
 		if ((options & ISC_LEXOPT_BTEXT) != 0 && lex->brace_count != 0)
 		{
 			lex->brace_count = 0;
-			return (ISC_R_UNBALANCED);
+			return ISC_R_UNBALANCED;
 		}
 		if ((options & ISC_LEXOPT_EOF) != 0) {
 			tokenp->type = isc_tokentype_eof;
-			return (ISC_R_SUCCESS);
+			return ISC_R_SUCCESS;
 		}
-		return (ISC_R_EOF);
+		return ISC_R_EOF;
 	}
 
 	isc_buffer_compact(source->pushback);
@@ -669,11 +663,7 @@ isc_lex_gettoken(isc_lex_t *lex, unsigned int options, isc_token_t *tokenp) {
 				state = lexstate_string;
 			}
 			if (remaining == 0U) {
-				result = grow_data(lex, &remaining, &curr,
-						   &prev);
-				if (result != ISC_R_SUCCESS) {
-					goto done;
-				}
+				grow_data(lex, &remaining, &curr, &prev);
 			}
 			INSIST(remaining > 0U);
 			*curr++ = c;
@@ -685,11 +675,8 @@ isc_lex_gettoken(isc_lex_t *lex, unsigned int options, isc_token_t *tokenp) {
 			    (options & ISC_LEXOPT_VPAIR) != 0)
 			{
 				if (remaining == 0U) {
-					result = grow_data(lex, &remaining,
-							   &curr, &prev);
-					if (result != ISC_R_SUCCESS) {
-						goto done;
-					}
+					grow_data(lex, &remaining, &curr,
+						  &prev);
 				}
 				INSIST(remaining > 0U);
 				*curr++ = c;
@@ -744,11 +731,7 @@ isc_lex_gettoken(isc_lex_t *lex, unsigned int options, isc_token_t *tokenp) {
 								  : false;
 			}
 			if (remaining == 0U) {
-				result = grow_data(lex, &remaining, &curr,
-						   &prev);
-				if (result != ISC_R_SUCCESS) {
-					goto done;
-				}
+				grow_data(lex, &remaining, &curr, &prev);
 			}
 			INSIST(remaining > 0U);
 			*curr++ = c;
@@ -849,11 +832,8 @@ isc_lex_gettoken(isc_lex_t *lex, unsigned int options, isc_token_t *tokenp) {
 					escaped = false;
 				}
 				if (remaining == 0U) {
-					result = grow_data(lex, &remaining,
-							   &curr, &prev);
-					if (result != ISC_R_SUCCESS) {
-						goto done;
-					}
+					grow_data(lex, &remaining, &curr,
+						  &prev);
 				}
 				INSIST(remaining > 0U);
 				prev = curr;
@@ -901,11 +881,7 @@ isc_lex_gettoken(isc_lex_t *lex, unsigned int options, isc_token_t *tokenp) {
 			}
 
 			if (remaining == 0U) {
-				result = grow_data(lex, &remaining, &curr,
-						   &prev);
-				if (result != ISC_R_SUCCESS) {
-					goto done;
-				}
+				grow_data(lex, &remaining, &curr, &prev);
 			}
 			INSIST(remaining > 0U);
 			prev = curr;
@@ -925,7 +901,7 @@ done:
 		funlockfile(source->input);
 	}
 #endif /* ifdef HAVE_FLOCKFILE */
-	return (result);
+	return result;
 }
 
 isc_result_t
@@ -950,37 +926,37 @@ isc_lex_getmastertoken(isc_lex_t *lex, isc_token_t *token,
 		isc_lex_ungettoken(lex, token);
 	}
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	if (eol && ((token->type == isc_tokentype_eol) ||
 		    (token->type == isc_tokentype_eof)))
 	{
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	if (token->type == isc_tokentype_string &&
 	    (expect == isc_tokentype_qstring || expect == isc_tokentype_qvpair))
 	{
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	if (token->type == isc_tokentype_vpair &&
 	    expect == isc_tokentype_qvpair)
 	{
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	if (token->type != expect) {
 		isc_lex_ungettoken(lex, token);
 		if (token->type == isc_tokentype_eol ||
 		    token->type == isc_tokentype_eof)
 		{
-			return (ISC_R_UNEXPECTEDEND);
+			return ISC_R_UNEXPECTEDEND;
 		}
 		if (expect == isc_tokentype_number) {
-			return (ISC_R_BADNUMBER);
+			return ISC_R_BADNUMBER;
 		}
-		return (ISC_R_UNEXPECTEDTOKEN);
+		return ISC_R_UNEXPECTEDTOKEN;
 	}
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 isc_result_t
@@ -995,24 +971,24 @@ isc_lex_getoctaltoken(isc_lex_t *lex, isc_token_t *token, bool eol) {
 		isc_lex_ungettoken(lex, token);
 	}
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	if (eol && ((token->type == isc_tokentype_eol) ||
 		    (token->type == isc_tokentype_eof)))
 	{
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	if (token->type != isc_tokentype_number) {
 		isc_lex_ungettoken(lex, token);
 		if (token->type == isc_tokentype_eol ||
 		    token->type == isc_tokentype_eof)
 		{
-			return (ISC_R_UNEXPECTEDEND);
+			return ISC_R_UNEXPECTEDEND;
 		}
-		return (ISC_R_BADNUMBER);
+		return ISC_R_BADNUMBER;
 	}
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 void
@@ -1023,7 +999,7 @@ isc_lex_ungettoken(isc_lex_t *lex, isc_token_t *tokenp) {
 	 */
 
 	REQUIRE(VALID_LEX(lex));
-	source = HEAD(lex->sources);
+	source = ISC_LIST_HEAD(lex->sources);
 	REQUIRE(source != NULL);
 	REQUIRE(tokenp != NULL);
 	REQUIRE(isc_buffer_consumedlength(source->pushback) != 0 ||
@@ -1042,7 +1018,7 @@ isc_lex_getlasttokentext(isc_lex_t *lex, isc_token_t *tokenp, isc_region_t *r) {
 	inputsource *source;
 
 	REQUIRE(VALID_LEX(lex));
-	source = HEAD(lex->sources);
+	source = ISC_LIST_HEAD(lex->sources);
 	REQUIRE(source != NULL);
 	REQUIRE(tokenp != NULL);
 	REQUIRE(isc_buffer_consumedlength(source->pushback) != 0 ||
@@ -1062,13 +1038,13 @@ isc_lex_getsourcename(isc_lex_t *lex) {
 	inputsource *source;
 
 	REQUIRE(VALID_LEX(lex));
-	source = HEAD(lex->sources);
+	source = ISC_LIST_HEAD(lex->sources);
 
 	if (source == NULL) {
-		return (NULL);
+		return NULL;
 	}
 
-	return (source->name);
+	return source->name;
 }
 
 unsigned long
@@ -1076,13 +1052,13 @@ isc_lex_getsourceline(isc_lex_t *lex) {
 	inputsource *source;
 
 	REQUIRE(VALID_LEX(lex));
-	source = HEAD(lex->sources);
+	source = ISC_LIST_HEAD(lex->sources);
 
 	if (source == NULL) {
-		return (0);
+		return 0;
 	}
 
-	return (source->line);
+	return source->line;
 }
 
 isc_result_t
@@ -1091,15 +1067,15 @@ isc_lex_setsourcename(isc_lex_t *lex, const char *name) {
 	char *newname;
 
 	REQUIRE(VALID_LEX(lex));
-	source = HEAD(lex->sources);
+	source = ISC_LIST_HEAD(lex->sources);
 
 	if (source == NULL) {
-		return (ISC_R_NOTFOUND);
+		return ISC_R_NOTFOUND;
 	}
 	newname = isc_mem_strdup(lex->mctx, name);
 	isc_mem_free(lex->mctx, source->name);
 	source->name = newname;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 isc_result_t
@@ -1107,14 +1083,14 @@ isc_lex_setsourceline(isc_lex_t *lex, unsigned long line) {
 	inputsource *source;
 
 	REQUIRE(VALID_LEX(lex));
-	source = HEAD(lex->sources);
+	source = ISC_LIST_HEAD(lex->sources);
 
 	if (source == NULL) {
-		return (ISC_R_NOTFOUND);
+		return ISC_R_NOTFOUND;
 	}
 
 	source->line = line;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 bool
@@ -1123,11 +1099,11 @@ isc_lex_isfile(isc_lex_t *lex) {
 
 	REQUIRE(VALID_LEX(lex));
 
-	source = HEAD(lex->sources);
+	source = ISC_LIST_HEAD(lex->sources);
 
 	if (source == NULL) {
-		return (false);
+		return false;
 	}
 
-	return (source->is_file);
+	return source->is_file;
 }

@@ -16,10 +16,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include <isc/qsbr.h>
 #include <isc/random.h>
 #include <isc/refcount.h>
 #include <isc/rwlock.h>
+#include <isc/urcu.h>
 #include <isc/util.h>
 
 #include <dns/qp.h>
@@ -76,7 +76,7 @@ fuzz_makekey(dns_qpkey_t key, void *ctx, void *pval, uint32_t ival) {
 	assert(ctx == NULL);
 	assert(pval == &item[ival]);
 	memmove(key, item[ival].key, item[ival].len);
-	return (item[ival].len);
+	return item[ival].len;
 }
 
 static void
@@ -94,7 +94,7 @@ const dns_qpmethods_t fuzz_methods = {
 
 static uint8_t
 random_byte(void) {
-	return (isc_random_uniform(SHIFT_OFFSET - SHIFT_NOBYTE) + SHIFT_NOBYTE);
+	return isc_random_uniform(SHIFT_OFFSET - SHIFT_NOBYTE) + SHIFT_NOBYTE;
 }
 
 int
@@ -104,15 +104,16 @@ LLVMFuzzerInitialize(int *argc, char ***argv) {
 
 	for (size_t i = 0; i < ARRAY_SIZE(item); i++) {
 		size_t len = isc_random_uniform(100) + 16;
-		item[i].len = len;
-		for (size_t off = 0; off < len; off++) {
+		item[i].len = len + 1;
+		item[i].key[0] = 0;
+		for (size_t off = 1; off < len; off++) {
 			item[i].key[off] = random_byte();
 		}
-		memmove(item[i].ascii, item[i].key, len);
-		qp_test_keytoascii(item[i].ascii, len);
+		memmove(item[i].ascii, item[i].key, item[i].len);
+		qp_test_keytoascii(item[i].ascii, item[i].len);
 	}
 
-	return (0);
+	return 0;
 }
 
 int
@@ -122,7 +123,7 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 	TRACE("------------------------------------------------");
 
 	isc_mem_t *mctx = NULL;
-	isc_mem_create(&mctx);
+	isc_mem_create("fuzz", &mctx);
 	isc_mem_setdestroycheck(mctx, true);
 
 	dns_qp_t *qp = NULL;
@@ -179,7 +180,8 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 				UNREACHABLE();
 			}
 		} else {
-			result = dns_qp_deletekey(qp, item[i].key, item[i].len);
+			result = dns_qp_deletekey(qp, item[i].key, item[i].len,
+						  NULL, NULL);
 			TRACE("count %zu del %s %zu >%s<", count,
 			      isc_result_toid(result), i, item[i].ascii);
 			if (result == ISC_R_SUCCESS) {
@@ -210,7 +212,7 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 	}
 
 	dns_qp_destroy(&qp);
-	isc_mem_destroy(&mctx);
+	isc_mem_detach(&mctx);
 	isc_mem_checkdestroyed(stderr);
 
 	for (size_t i = 0; i < ARRAY_SIZE(item); i++) {
@@ -218,5 +220,5 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 		assert(item[i].refcount == 0);
 	}
 
-	return (0);
+	return 0;
 }

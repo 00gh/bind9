@@ -29,7 +29,6 @@
 #include <inttypes.h>
 #include <stdbool.h>
 
-#include <isc/lang.h>
 #include <isc/magic.h>
 #include <isc/netaddr.h>
 #include <isc/refcount.h>
@@ -46,9 +45,7 @@
  *** Functions
  ***/
 
-ISC_LANG_BEGINDECLS
-
-isc_result_t
+void
 dns_peerlist_new(isc_mem_t *mem, dns_peerlist_t **list);
 
 void
@@ -101,6 +98,12 @@ isc_result_t
 dns_peer_getrequestixfr(dns_peer_t *peer, bool *retval);
 
 isc_result_t
+dns_peer_setrequestixfrmaxdiffs(dns_peer_t *peer, uint32_t newval);
+
+isc_result_t
+dns_peer_getrequestixfrmaxdiffs(dns_peer_t *peer, uint32_t *retval);
+
+isc_result_t
 dns_peer_setprovideixfr(dns_peer_t *peer, bool newval);
 
 isc_result_t
@@ -111,6 +114,12 @@ dns_peer_setrequestnsid(dns_peer_t *peer, bool newval);
 
 isc_result_t
 dns_peer_getrequestnsid(dns_peer_t *peer, bool *retval);
+
+isc_result_t
+dns_peer_setrequestzoneversion(dns_peer_t *peer, bool newval);
+
+isc_result_t
+dns_peer_getrequestzoneversion(dns_peer_t *peer, bool *retval);
 
 isc_result_t
 dns_peer_setsendcookie(dns_peer_t *peer, bool newval);
@@ -211,4 +220,3 @@ dns_peer_setednsversion(dns_peer_t *peer, uint8_t ednsversion);
 
 isc_result_t
 dns_peer_getednsversion(dns_peer_t *peer, uint8_t *ednsversion);
-ISC_LANG_ENDDECLS

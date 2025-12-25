@@ -11,7 +11,7 @@
  * information regarding copyright ownership.
  */
 
-include "../../common/rndc.key";
+include "../../_common/rndc.key";
 
 controls {
 	inet 10.53.0.1 port @CONTROLPORT@ allow { any; } keys { rndc_key; };
@@ -33,6 +33,7 @@ options {
 	notify-delay 0;
 	recursion no;
 	allow-transfer { any; };
+	dnssec-validation no;
 };
 
 view "default" {
@@ -67,6 +68,16 @@ view "default" {
 	};
 
 	/* catalog5 is missing on purpose */
+
+	zone "catalog6.example" {
+		type primary;
+		file "catalog6.example.db";
+		allow-transfer { any; };
+		allow-update { any; };
+		also-notify { 10.53.0.2; };
+		notify explicit;
+		notify-defer 5;
+	};
 
 	# No "version" property
 	zone "catalog-bad1.example" {

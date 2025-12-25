@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -25,6 +26,7 @@
 
 #include <isc/async.h>
 #include <isc/atomic.h>
+#include <isc/lib.h>
 #include <isc/loop.h>
 #include <isc/os.h>
 #include <isc/result.h>
@@ -38,35 +40,31 @@
 static atomic_uint scheduled = 0;
 
 static void
-async_cb(void *arg) {
-	uint32_t tid = isc_tid();
-
-	UNUSED(arg);
+async_cb(void *arg ISC_ATTR_UNUSED) {
+	isc_tid_t tid = isc_tid();
 
 	atomic_fetch_add(&scheduled, 1);
 
 	if (tid > 0) {
-		isc_loop_t *loop = isc_loop_get(loopmgr, tid - 1);
-		isc_async_run(loop, async_cb, loopmgr);
+		isc_loop_t *loop = isc_loop_get(tid - 1);
+		isc_async_run(loop, async_cb, NULL);
 	} else {
-		isc_loopmgr_shutdown(loopmgr);
+		isc_loopmgr_shutdown();
 	}
 }
 
 static void
-async_setup_cb(void *arg) {
-	uint32_t tid = isc_loopmgr_nloops(loopmgr) - 1;
-	isc_loop_t *loop = isc_loop_get(loopmgr, tid);
+async_setup_cb(void *arg ISC_ATTR_UNUSED) {
+	isc_tid_t tid = isc_loopmgr_nloops() - 1;
+	isc_loop_t *loop = isc_loop_get(tid);
 
-	UNUSED(arg);
-
-	isc_async_run(loop, async_cb, loopmgr);
+	isc_async_run(loop, async_cb, NULL);
 }
 
 ISC_RUN_TEST_IMPL(isc_async_run) {
-	isc_loop_setup(isc_loop_main(loopmgr), async_setup_cb, loopmgr);
-	isc_loopmgr_run(loopmgr);
-	assert_int_equal(atomic_load(&scheduled), loopmgr->nloops);
+	isc_loop_setup(isc_loop_main(), async_setup_cb, NULL);
+	isc_loopmgr_run();
+	assert_int_equal(atomic_load(&scheduled), isc_loopmgr_nloops());
 }
 
 static char string[32] = "";
@@ -80,23 +78,21 @@ append(void *arg) {
 }
 
 static void
-async_multiple(void *arg) {
-	isc_loop_t *loop = isc_loop_current(loopmgr);
-
-	UNUSED(arg);
+async_multiple(void *arg ISC_ATTR_UNUSED) {
+	isc_loop_t *loop = isc_loop();
 
 	isc_async_run(loop, append, &n1);
 	isc_async_run(loop, append, &n2);
 	isc_async_run(loop, append, &n3);
 	isc_async_run(loop, append, &n4);
 	isc_async_run(loop, append, &n5);
-	isc_loopmgr_shutdown(loopmgr);
+	isc_loopmgr_shutdown();
 }
 
 ISC_RUN_TEST_IMPL(isc_async_multiple) {
 	string[0] = '\0';
-	isc_loop_setup(isc_loop_main(loopmgr), async_multiple, loopmgr);
-	isc_loopmgr_run(loopmgr);
+	isc_loop_setup(isc_loop_main(), async_multiple, NULL);
+	isc_loopmgr_run();
 	assert_string_equal(string, "12345");
 }
 

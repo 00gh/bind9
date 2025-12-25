@@ -106,7 +106,6 @@
 #include <isc/assertions.h>
 #include <isc/endian.h>
 #include <isc/formatcheck.h>
-#include <isc/lang.h>
 #include <isc/list.h>
 #include <isc/magic.h>
 #include <isc/mem.h>
@@ -114,8 +113,6 @@
 #include <isc/string.h>
 #include <isc/types.h>
 #include <isc/util.h>
-
-ISC_LANG_BEGINDECLS
 
 /*@{*/
 /*!
@@ -488,7 +485,6 @@ isc_buffer_printf(isc_buffer_t *restrict b, const char *restrict format, ...)
  *\li	#ISC_R_SUCCESS	Operation succeeded.
  *\li	#ISC_R_NOSPACE	'b' does not allow reallocation and appending the
  *			formatted string to it would cause it to overflow.
- *\li	#ISC_R_NOMEMORY	Reallocation failed.
  *\li	#ISC_R_FAILURE	Other error occurred.
  */
 
@@ -844,10 +840,8 @@ isc_buffer_peekuint8(const isc_buffer_t *restrict b, uint8_t *valp) {
 	ISC_BUFFER_PEEK_CHECK(b, sizeof(*valp));
 
 	uint8_t *cp = isc_buffer_current(b);
-	if (valp != NULL) {
-		*valp = (uint8_t)(cp[0]);
-	}
-	return (ISC_R_SUCCESS);
+	SET_IF_NOT_NULL(valp, (uint8_t)(cp[0]));
+	return ISC_R_SUCCESS;
 }
 
 static inline uint8_t
@@ -856,25 +850,24 @@ isc_buffer_getuint8(isc_buffer_t *restrict b) {
 	isc_result_t result = isc_buffer_peekuint8(b, &val);
 	ENSURE(result == ISC_R_SUCCESS);
 	b->current += sizeof(val);
-	return (val);
+	return val;
 }
 
-#define ISC_BUFFER_PUT_RESERVE(b, v)                                           \
-	{                                                                      \
-		REQUIRE(ISC_BUFFER_VALID(b));                                  \
-                                                                               \
-		if (b->mctx) {                                                 \
-			isc_result_t result = isc_buffer_reserve(b,            \
-								 sizeof(val)); \
-			ENSURE(result == ISC_R_SUCCESS);                       \
-		}                                                              \
-                                                                               \
-		REQUIRE(isc_buffer_availablelength(b) >= sizeof(val));         \
+#define ISC_BUFFER_PUT_RESERVE(b, v, s)                                 \
+	{                                                               \
+		REQUIRE(ISC_BUFFER_VALID(b));                           \
+                                                                        \
+		if (b->mctx) {                                          \
+			isc_result_t result = isc_buffer_reserve(b, s); \
+			ENSURE(result == ISC_R_SUCCESS);                \
+		}                                                       \
+                                                                        \
+		REQUIRE(isc_buffer_availablelength(b) >= s);            \
 	}
 
 static inline void
 isc_buffer_putuint8(isc_buffer_t *restrict b, const uint8_t val) {
-	ISC_BUFFER_PUT_RESERVE(b, val);
+	ISC_BUFFER_PUT_RESERVE(b, val, sizeof(val));
 
 	uint8_t *cp = isc_buffer_used(b);
 	b->used += sizeof(val);
@@ -887,10 +880,8 @@ isc_buffer_peekuint16(const isc_buffer_t *restrict b, uint16_t *valp) {
 
 	uint8_t *cp = isc_buffer_current(b);
 
-	if (valp != NULL) {
-		*valp = ISC_U8TO16_BE(cp);
-	}
-	return (ISC_R_SUCCESS);
+	SET_IF_NOT_NULL(valp, ISC_U8TO16_BE(cp));
+	return ISC_R_SUCCESS;
 }
 
 static inline uint16_t
@@ -899,12 +890,12 @@ isc_buffer_getuint16(isc_buffer_t *restrict b) {
 	isc_result_t result = isc_buffer_peekuint16(b, &val);
 	ENSURE(result == ISC_R_SUCCESS);
 	b->current += sizeof(val);
-	return (val);
+	return val;
 }
 
 static inline void
 isc_buffer_putuint16(isc_buffer_t *restrict b, const uint16_t val) {
-	ISC_BUFFER_PUT_RESERVE(b, val);
+	ISC_BUFFER_PUT_RESERVE(b, val, sizeof(val));
 
 	uint8_t *cp = isc_buffer_used(b);
 	b->used += sizeof(val);
@@ -917,10 +908,8 @@ isc_buffer_peekuint32(const isc_buffer_t *restrict b, uint32_t *valp) {
 
 	uint8_t *cp = isc_buffer_current(b);
 
-	if (valp != NULL) {
-		*valp = ISC_U8TO32_BE(cp);
-	}
-	return (ISC_R_SUCCESS);
+	SET_IF_NOT_NULL(valp, ISC_U8TO32_BE(cp));
+	return ISC_R_SUCCESS;
 }
 
 uint32_t
@@ -929,12 +918,12 @@ isc_buffer_getuint32(isc_buffer_t *restrict b) {
 	isc_result_t result = isc_buffer_peekuint32(b, &val);
 	ENSURE(result == ISC_R_SUCCESS);
 	b->current += sizeof(val);
-	return (val);
+	return val;
 }
 
 static inline void
 isc_buffer_putuint32(isc_buffer_t *restrict b, const uint32_t val) {
-	ISC_BUFFER_PUT_RESERVE(b, val);
+	ISC_BUFFER_PUT_RESERVE(b, val, sizeof(val));
 
 	uint8_t *cp = isc_buffer_used(b);
 	b->used += sizeof(val);
@@ -948,10 +937,8 @@ isc_buffer_peekuint48(const isc_buffer_t *restrict b, uint64_t *valp) {
 
 	uint8_t *cp = isc_buffer_current(b);
 
-	if (valp != NULL) {
-		*valp = ISC_U8TO48_BE(cp);
-	}
-	return (ISC_R_SUCCESS);
+	SET_IF_NOT_NULL(valp, ISC_U8TO48_BE(cp));
+	return ISC_R_SUCCESS;
 }
 
 static inline uint64_t
@@ -960,12 +947,12 @@ isc_buffer_getuint48(isc_buffer_t *restrict b) {
 	isc_result_t result = isc_buffer_peekuint48(b, &val);
 	ENSURE(result == ISC_R_SUCCESS);
 	b->current += 6; /* 48-bits */
-	return (val);
+	return val;
 }
 
 static inline void
 isc_buffer_putuint48(isc_buffer_t *restrict b, const uint64_t val) {
-	ISC_BUFFER_PUT_RESERVE(b, val);
+	ISC_BUFFER_PUT_RESERVE(b, val, 6); /* 48-bits */
 
 	uint8_t *cp = isc_buffer_used(b);
 	b->used += 6;
@@ -1127,11 +1114,11 @@ isc_buffer_reserve(isc_buffer_t *restrict dbuf, const unsigned int size) {
 
 	len = dbuf->length;
 	if ((len - dbuf->used) >= size) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	if (dbuf->mctx == NULL) {
-		return (ISC_R_NOSPACE);
+		return ISC_R_NOSPACE;
 	}
 
 	/* Round to nearest buffer size increment */
@@ -1144,7 +1131,7 @@ isc_buffer_reserve(isc_buffer_t *restrict dbuf, const unsigned int size) {
 	}
 
 	if ((len - dbuf->used) < size) {
-		return (ISC_R_NOMEMORY);
+		return ISC_R_NOMEMORY;
 	}
 
 	if (!dbuf->dynamic) {
@@ -1155,12 +1142,12 @@ isc_buffer_reserve(isc_buffer_t *restrict dbuf, const unsigned int size) {
 		}
 		dbuf->dynamic = true;
 	} else {
-		dbuf->base = isc_mem_reget(dbuf->mctx, dbuf->base, dbuf->length,
-					   len);
+		dbuf->base = isc_mem_creget(dbuf->mctx, dbuf->base,
+					    dbuf->length, len, sizeof(char));
 	}
 	dbuf->length = (unsigned int)len;
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static inline void
@@ -1197,7 +1184,7 @@ isc_buffer_dup(isc_mem_t *mctx, isc_buffer_t **restrict dstp,
 	result = isc_buffer_copyregion(dst, &region);
 	RUNTIME_CHECK(result == ISC_R_SUCCESS); /* NOSPACE is impossible */
 	*dstp = dst;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static inline isc_result_t
@@ -1211,12 +1198,12 @@ isc_buffer_copyregion(isc_buffer_t *restrict b,
 	if (b->mctx) {
 		result = isc_buffer_reserve(b, r->length);
 		if (result != ISC_R_SUCCESS) {
-			return (result);
+			return result;
 		}
 	}
 
 	if (r->length > isc_buffer_availablelength(b)) {
-		return (ISC_R_NOSPACE);
+		return ISC_R_NOSPACE;
 	}
 
 	if (r->length > 0U) {
@@ -1224,7 +1211,7 @@ isc_buffer_copyregion(isc_buffer_t *restrict b,
 		b->used += r->length;
 	}
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static inline isc_result_t
@@ -1240,18 +1227,18 @@ isc_buffer_printf(isc_buffer_t *restrict b, const char *restrict format, ...) {
 	va_end(ap);
 
 	if (n < 0) {
-		return (ISC_R_FAILURE);
+		return ISC_R_FAILURE;
 	}
 
 	if (b->mctx) {
 		result = isc_buffer_reserve(b, n + 1);
 		if (result != ISC_R_SUCCESS) {
-			return (result);
+			return result;
 		}
 	}
 
 	if (isc_buffer_availablelength(b) < (unsigned int)n + 1) {
-		return (ISC_R_NOSPACE);
+		return ISC_R_NOSPACE;
 	}
 
 	va_start(ap, format);
@@ -1259,12 +1246,10 @@ isc_buffer_printf(isc_buffer_t *restrict b, const char *restrict format, ...) {
 	va_end(ap);
 
 	if (n < 0) {
-		return (ISC_R_FAILURE);
+		return ISC_R_FAILURE;
 	}
 
 	b->used += n;
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
-
-ISC_LANG_ENDDECLS

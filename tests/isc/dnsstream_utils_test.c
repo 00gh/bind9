@@ -26,6 +26,7 @@
 
 #include <isc/buffer.h>
 #include <isc/dnsstream.h>
+#include <isc/lib.h>
 #include <isc/mem.h>
 #include <isc/os.h>
 #include <isc/random.h>
@@ -40,16 +41,16 @@
 static int
 setup_test_dnsbuf(void **state) {
 	isc_buffer_t **pdnsbuf = (isc_buffer_t **)state;
-	isc_buffer_allocate(mctx, pdnsbuf, STATIC_BUFFER_SIZE);
+	isc_buffer_allocate(isc_g_mctx, pdnsbuf, STATIC_BUFFER_SIZE);
 
-	return (0);
+	return 0;
 }
 
 static int
 teardown_test_dnsbuf(void **state) {
 	isc_buffer_free((isc_buffer_t **)state);
 
-	return (0);
+	return 0;
 }
 
 static bool
@@ -60,23 +61,23 @@ dnsasm_dummy(isc_dnsstream_assembler_t *dnsasm, const isc_result_t result,
 	UNUSED(region);
 	UNUSED(cbarg);
 	UNUSED(userarg);
-	return (true);
+	return true;
 }
 
 static int
 setup_test_dnsasm(void **state) {
 	isc_dnsstream_assembler_t **pdnsasm =
 		(isc_dnsstream_assembler_t **)state;
-	*pdnsasm = isc_dnsstream_assembler_new(mctx, dnsasm_dummy, NULL);
+	*pdnsasm = isc_dnsstream_assembler_new(isc_g_mctx, dnsasm_dummy, NULL);
 
-	return (0);
+	return 0;
 }
 
 static int
 teardown_test_dnsasm(void **state) {
 	isc_dnsstream_assembler_free((isc_dnsstream_assembler_t **)state);
 
-	return (0);
+	return 0;
 }
 
 ISC_RUN_TEST_IMPL(dnsbuffer_generic_test) {
@@ -279,7 +280,7 @@ verify_dnsmsg(isc_dnsstream_assembler_t *dnsasm, const isc_result_t result,
 	}
 
 	if (result != ISC_R_SUCCESS) {
-		return (true);
+		return true;
 	}
 
 	if (vdata->verify_message != NULL &&
@@ -295,7 +296,7 @@ verify_dnsmsg(isc_dnsstream_assembler_t *dnsasm, const isc_result_t result,
 			(isc_dnsstream_assembler_t *)dnsasm);
 	}
 
-	return (vdata->cont_on_success);
+	return vdata->cont_on_success;
 }
 
 typedef struct verify_regions_cbdata {
@@ -320,7 +321,7 @@ verify_dnsmsg_regions(isc_dnsstream_assembler_t *dnsasm,
 	}
 
 	if (result != ISC_R_SUCCESS) {
-		return (true);
+		return true;
 	}
 
 	if (vdata->packets != NULL &&
@@ -333,7 +334,7 @@ verify_dnsmsg_regions(isc_dnsstream_assembler_t *dnsasm,
 
 	vdata->packets++;
 
-	return (vdata->cont_on_success);
+	return vdata->cont_on_success;
 }
 
 ISC_RUN_TEST_IMPL(dnsasm_sequence_test) {
@@ -381,7 +382,7 @@ ISC_RUN_TEST_IMPL(dnsasm_multiple_messages_test) {
 	size_t verified = 0;
 
 	isc_buffer_init(&dnsbuf, NULL, 0);
-	isc_buffer_setmctx(&dnsbuf, mctx);
+	isc_buffer_setmctx(&dnsbuf, isc_g_mctx);
 	isc_buffer_putmem(&dnsbuf, (void *)request, sizeof(request));
 	isc_buffer_putmem(&dnsbuf, (void *)response, sizeof(response));
 	isc_buffer_putmem(&dnsbuf, (void *)request_large,
@@ -463,7 +464,7 @@ ISC_RUN_TEST_IMPL(dnsasm_error_data_test) {
 	uint16_t bad_data = 0;
 
 	isc_buffer_init(&dnsbuf, NULL, 0);
-	isc_buffer_setmctx(&dnsbuf, mctx);
+	isc_buffer_setmctx(&dnsbuf, isc_g_mctx);
 
 	isc_buffer_putmem(&dnsbuf, (void *)request, sizeof(request));
 	isc_buffer_putmem(&dnsbuf, (void *)&bad_data, sizeof(bad_data));
@@ -517,7 +518,7 @@ ISC_RUN_TEST_IMPL(dnsasm_torn_randomly_test) {
 	const size_t npackets = sizeof(packets) / sizeof(packets[0]);
 
 	isc_buffer_init(&dnsbuf, NULL, 0);
-	isc_buffer_setmctx(&dnsbuf, mctx);
+	isc_buffer_setmctx(&dnsbuf, isc_g_mctx);
 
 	for (size_t i = 0; i < npackets; i++) {
 		isc_buffer_putmem(&dnsbuf, packets[i].base, packets[i].length);
@@ -599,7 +600,7 @@ ISC_RUN_TEST_IMPL(dnsasm_clear_buffer_within_cb_test) {
 	isc_buffer_t dnsbuf;
 
 	isc_buffer_init(&dnsbuf, NULL, 0);
-	isc_buffer_setmctx(&dnsbuf, mctx);
+	isc_buffer_setmctx(&dnsbuf, isc_g_mctx);
 
 	isc_buffer_putmem(&dnsbuf, (void *)request, sizeof(request));
 	isc_buffer_putmem(&dnsbuf, (void *)&response, sizeof(response));

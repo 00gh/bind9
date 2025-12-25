@@ -20,24 +20,23 @@ zone2=bad
 infile2=bad.db.in
 zonefile2=bad.db
 
-keyname11=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} -n zone $zone1)
-keyname12=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} -n zone -f KSK $zone1)
-keyname21=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} -n zone $zone2)
-keyname22=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} -n zone -f KSK $zone2)
+keyname11=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} $zone1)
+keyname12=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} -f KSK $zone1)
+keyname21=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} $zone2)
+keyname22=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} -f KSK $zone2)
 
 cat $infile1 $keyname11.key $keyname12.key >$zonefile1
 cat $infile2 $keyname21.key $keyname22.key >$zonefile2
 
-$SIGNER -P -g -o $zone1 $zonefile1 > /dev/null
-$SIGNER -P -g -o $zone2 $zonefile2 > /dev/null
+$SIGNER -P -g -o $zone1 $zonefile1 >/dev/null
+$SIGNER -P -g -o $zone2 $zonefile2 >/dev/null
 
 DSFILENAME1=dsset-${zone1}.
 DSFILENAME2=dsset-${zone2}.
-$DSFROMKEY -a SHA-256 $keyname12 > $DSFILENAME1
-$DSFROMKEY -a SHA-256 $keyname22 > $DSFILENAME2
+$DSFROMKEY -a SHA-256 $keyname12 >$DSFILENAME1
+$DSFROMKEY -a SHA-256 $keyname22 >$DSFILENAME2
 
 algo=SHA-384
 
-$DSFROMKEY -a $algo $keyname12 >> $DSFILENAME1
-$DSFROMKEY -a $algo $keyname22 > $DSFILENAME2
-
+$DSFROMKEY -a $algo $keyname12 >>$DSFILENAME1
+$DSFROMKEY -a $algo $keyname22 >$DSFILENAME2

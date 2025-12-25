@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -23,10 +24,12 @@
 #define UNIT_TESTING
 #include <cmocka.h>
 
+#include <isc/lib.h>
 #include <isc/thread.h>
 #include <isc/util.h>
 
 #include <dns/acl.h>
+#include <dns/lib.h>
 #include <dns/rcode.h>
 #include <dns/view.h>
 
@@ -42,7 +45,8 @@ check_response(isc_buffer_t *buf) {
 	char rcodebuf[20];
 	isc_buffer_t b;
 
-	dns_message_create(mctx, DNS_MESSAGE_INTENTPARSE, &message);
+	dns_message_create(isc_g_mctx, NULL, NULL, DNS_MESSAGE_INTENTPARSE,
+			   &message);
 
 	result = dns_message_parse(message, buf, 0);
 	assert_int_equal(result, ISC_R_SUCCESS);
@@ -66,15 +70,14 @@ ISC_LOOP_TEST_IMPL(notify_start) {
 	isc_buffer_t nbuf;
 	size_t nsize;
 
-	result = ns_test_getclient(NULL, false, &client);
-	assert_int_equal(result, ISC_R_SUCCESS);
+	ns_test_getclient(NULL, false, &client);
 
-	result = dns_test_makeview("view", false, &client->view);
+	result = dns_test_makeview("view", false, false, &client->inner.view);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	result = ns_test_serve_zone("example.com",
 				    TESTS_DIR "/testdata/notify/zone1.db",
-				    client->view);
+				    client->inner.view);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	/*
@@ -88,7 +91,8 @@ ISC_LOOP_TEST_IMPL(notify_start) {
 	isc_buffer_init(&nbuf, ndata, nsize);
 	isc_buffer_add(&nbuf, nsize);
 
-	dns_message_create(mctx, DNS_MESSAGE_INTENTPARSE, &nmsg);
+	dns_message_create(isc_g_mctx, NULL, NULL, DNS_MESSAGE_INTENTPARSE,
+			   &nmsg);
 
 	result = dns_message_parse(nmsg, &nbuf, 0);
 	assert_int_equal(result, ISC_R_SUCCESS);
@@ -102,20 +106,20 @@ ISC_LOOP_TEST_IMPL(notify_start) {
 	}
 	client->message = nmsg;
 	nmsg = NULL;
-	client->sendcb = check_response;
-	ns_notify_start(client, client->handle);
+	client->inner.sendcb = check_response;
+	ns_notify_start(client, client->inner.handle);
 
 	/*
 	 * Clean up
 	 */
 	ns_test_cleanup_zone();
 
-	handle = client->handle;
-	isc_nmhandle_detach(&client->handle);
+	handle = client->inner.handle;
+	isc_nmhandle_detach(&client->inner.handle);
 	isc_nmhandle_detach(&handle);
 
-	isc_loop_teardown(mainloop, shutdown_interfacemgr, NULL);
-	isc_loopmgr_shutdown(loopmgr);
+	isc_loop_teardown(isc_loop_main(), shutdown_interfacemgr, NULL);
+	isc_loopmgr_shutdown();
 }
 
 ISC_TEST_LIST_START

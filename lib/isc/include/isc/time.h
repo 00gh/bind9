@@ -15,19 +15,20 @@
 
 /*! \file */
 
+#include <inttypes.h>
 #include <time.h>
 
-#include <isc/lang.h>
 #include <isc/types.h>
 
-enum {
-	MS_PER_SEC = 1000,		 /*%< Milliseonds per second. */
-	US_PER_MS = 1000,		 /*%< Microseconds per millisecond. */
-	US_PER_SEC = 1000 * 1000,	 /*%< Microseconds per second. */
-	NS_PER_US = 1000,		 /*%< Nanoseconds per microsecond. */
-	NS_PER_MS = 1000 * 1000,	 /*%< Nanoseconds per millisecond. */
-	NS_PER_SEC = 1000 * 1000 * 1000, /*%< Nanoseconds per second. */
-};
+/*
+ * Define various time conversion constants.
+ */
+constexpr unsigned int MS_PER_SEC = 1000;
+constexpr unsigned int US_PER_MS = 1000;
+constexpr unsigned int NS_PER_US = 1000;
+constexpr unsigned int US_PER_SEC = 1000 * 1000;
+constexpr unsigned int NS_PER_MS = 1000 * 1000;
+constexpr unsigned int NS_PER_SEC = 1000 * 1000 * 1000;
 
 /*
  * ISC_FORMATHTTPTIMESTAMP_SIZE needs to be 30 in C locale and potentially
@@ -41,8 +42,6 @@ enum {
  */
 #define isc_interval_zero isc_time_epoch
 #define isc_interval_t	  isc_time_t
-
-ISC_LANG_BEGINDECLS
 
 #define isc_interval_set(i, seconds, nanoseconds) \
 	isc_time_set((isc_time_t *)i, seconds, nanoseconds)
@@ -393,20 +392,6 @@ isc_time_parsehttptimestamp(char *input, isc_time_t *t);
  */
 
 void
-isc_time_formatISO8601L(const isc_time_t *t, char *buf, unsigned int len);
-/*%<
- * Format the time 't' into the buffer 'buf' of length 'len',
- * using the ISO8601 format: "yyyy-mm-ddThh:mm:ss"
- * If the text does not fit in the buffer, the result is indeterminate,
- * but is always guaranteed to be null terminated.
- *
- *  Requires:
- *\li      'len' > 0
- *\li      'buf' points to an array of at least len chars
- *
- */
-
-void
 isc_time_formatISO8601Lms(const isc_time_t *t, char *buf, unsigned int len);
 /*%<
  * Format the time 't' into the buffer 'buf' of length 'len',
@@ -421,10 +406,10 @@ isc_time_formatISO8601Lms(const isc_time_t *t, char *buf, unsigned int len);
  */
 
 void
-isc_time_formatISO8601Lus(const isc_time_t *t, char *buf, unsigned int len);
+isc_time_formatISO8601TZms(const isc_time_t *t, char *buf, unsigned int len);
 /*%<
  * Format the time 't' into the buffer 'buf' of length 'len',
- * using the ISO8601 format: "yyyy-mm-ddThh:mm:ss.ssssss"
+ * using the ISO8601 format: "yyyy-mm-ddThh:mm:ss.sss+hhmm"
  * If the text does not fit in the buffer, the result is indeterminate,
  * but is always guaranteed to be null terminated.
  *
@@ -489,5 +474,3 @@ isc_time_formatshorttimestamp(const isc_time_t *t, char *buf, unsigned int len);
  *\li      'buf' points to an array of at least len chars
  *
  */
-
-ISC_LANG_ENDDECLS

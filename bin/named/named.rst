@@ -21,7 +21,7 @@ named - Internet domain name server
 Synopsis
 ~~~~~~~~
 
-:program:`named` [ [**-4**] | [**-6**] ] [**-c** config-file] [**-C**] [**-d** debug-level] [**-D** string] [**-E** engine-name] [**-f**] [**-g**] [**-L** logfile] [**-M** option] [**-m** flag] [**-n** #cpus] [**-p** port] [**-s**] [**-t** directory] [**-U** #listeners] [**-u** user] [**-v**] [**-V**] [**-X** lock-file]
+:program:`named` [ [**-4**] | [**-6**] ] [**-c** config-file] [**-C**] [**-d** debug-level] [**-D** string] [**-f**] [**-g**] [**-L** logfile] [**-M** option] [**-m** flag] [**-n** #cpus] [**-p** port] [**-s**] [**-t** directory] [**-u** user] [**-v**] [**-V**] ]
 
 Description
 ~~~~~~~~~~~
@@ -73,15 +73,6 @@ Options
    This option specifies a string that is used to identify a instance of :program:`named`
    in a process listing. The contents of ``string`` are not examined.
 
-.. option:: -E engine-name
-
-   When applicable, this option specifies the hardware to use for cryptographic
-   operations, such as a secure key store used for signing.
-
-   When BIND 9 is built with OpenSSL, this needs to be set to the OpenSSL
-   engine identifier that drives the cryptographic accelerator or
-   hardware service module (usually ``pkcs11``).
-
 .. option:: -f
 
    This option runs the server in the foreground (i.e., do not daemonize).
@@ -117,7 +108,7 @@ Options
 .. option:: -m flag
 
    This option turns on memory usage debugging flags. Possible flags are ``usage``,
-   ``trace``, ``record``, ``size``, and ``mctx``. These correspond to the
+   ``trace`` and ``record``. These correspond to the
    ``ISC_MEM_DEBUGXXXX`` flags described in ``<isc/mem.h>``.
 
 .. option:: -n #cpus
@@ -163,14 +154,7 @@ Options
 
 .. option:: -U #listeners
 
-   This option tells :program:`named` the number of ``#listeners`` worker threads to listen on, for incoming UDP packets on
-   each address. If not specified, :program:`named` calculates a default
-   value based on the number of detected CPUs: 1 for 1 CPU, and the
-   number of detected CPUs minus one for machines with more than 1 CPU.
-   This cannot be increased to a value higher than the number of CPUs.
-   If :option:`-n` has been set to a higher value than the number of detected
-   CPUs, then :option:`-U` may be increased as high as that value, but no
-   higher.
+   This option has been removed. Attempts to use it now result in a warning.
 
 .. option:: -u user
 
@@ -198,10 +182,7 @@ Options
 
 .. option:: -X lock-file
 
-   This option acquires a lock on the specified file at runtime; this helps to
-   prevent duplicate :program:`named` instances from running simultaneously.
-   Use of this option overrides the ``lock-file`` option in
-   :iscman:`named.conf`. If set to ``none``, the lock file check is disabled.
+   This option has been removed and using it will cause a fatal error.
 
 Signals
 ~~~~~~~

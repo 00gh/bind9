@@ -23,7 +23,6 @@
 static isc_result_t
 fromtext_amtrelay(ARGS_FROMTEXT) {
 	isc_token_t token;
-	dns_name_t name;
 	isc_buffer_t buffer;
 	unsigned int discovery;
 	unsigned int gateway;
@@ -69,11 +68,11 @@ fromtext_amtrelay(ARGS_FROMTEXT) {
 	gateway = token.value.as_ulong;
 
 	if (gateway == 0) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	if (gateway > 3) {
-		return (ISC_R_NOTIMPLEMENTED);
+		return ISC_R_NOTIMPLEMENTED;
 	}
 
 	/*
@@ -89,11 +88,11 @@ fromtext_amtrelay(ARGS_FROMTEXT) {
 		}
 		isc_buffer_availableregion(target, &region);
 		if (region.length < 4) {
-			return (ISC_R_NOSPACE);
+			return ISC_R_NOSPACE;
 		}
 		memmove(region.base, &addr, 4);
 		isc_buffer_add(target, 4);
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 
 	case 2:
 		if (inet_pton(AF_INET6, DNS_AS_STR(token), addr6) != 1) {
@@ -101,20 +100,18 @@ fromtext_amtrelay(ARGS_FROMTEXT) {
 		}
 		isc_buffer_availableregion(target, &region);
 		if (region.length < 16) {
-			return (ISC_R_NOSPACE);
+			return ISC_R_NOSPACE;
 		}
 		memmove(region.base, addr6, 16);
 		isc_buffer_add(target, 16);
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 
 	case 3:
-		dns_name_init(&name, NULL);
 		buffer_fromregion(&buffer, &token.value.as_region);
 		if (origin == NULL) {
 			origin = dns_rootname;
 		}
-		return (dns_name_fromtext(&name, &buffer, origin, options,
-					  target));
+		return dns_name_wirefromtext(&buffer, origin, options, target);
 	default:
 		UNREACHABLE();
 	}
@@ -136,7 +133,7 @@ totext_amtrelay(ARGS_TOTEXT) {
 	REQUIRE(rdata->length >= 2);
 
 	if ((rdata->data[1] & 0x7f) > 3U) {
-		return (ISC_R_NOTIMPLEMENTED);
+		return ISC_R_NOTIMPLEMENTED;
 	}
 
 	/*
@@ -166,20 +163,20 @@ totext_amtrelay(ARGS_TOTEXT) {
 	case 0:
 		break;
 	case 1:
-		return (inet_totext(AF_INET, tctx->flags, &region, target));
+		return inet_totext(AF_INET, tctx->flags, &region, target);
 
 	case 2:
-		return (inet_totext(AF_INET6, tctx->flags, &region, target));
+		return inet_totext(AF_INET6, tctx->flags, &region, target);
 
 	case 3:
-		dns_name_init(&name, NULL);
+		dns_name_init(&name);
 		dns_name_fromregion(&name, &region);
-		return (dns_name_totext(&name, false, target));
+		return dns_name_totext(&name, 0, target);
 
 	default:
 		UNREACHABLE();
 	}
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -196,40 +193,40 @@ fromwire_amtrelay(ARGS_FROMWIRE) {
 
 	isc_buffer_activeregion(source, &region);
 	if (region.length < 2) {
-		return (ISC_R_UNEXPECTEDEND);
+		return ISC_R_UNEXPECTEDEND;
 	}
 
 	switch (region.base[1] & 0x7f) {
 	case 0:
 		if (region.length != 2) {
-			return (DNS_R_FORMERR);
+			return DNS_R_FORMERR;
 		}
 		isc_buffer_forward(source, region.length);
-		return (mem_tobuffer(target, region.base, region.length));
+		return mem_tobuffer(target, region.base, region.length);
 
 	case 1:
 		if (region.length != 6) {
-			return (DNS_R_FORMERR);
+			return DNS_R_FORMERR;
 		}
 		isc_buffer_forward(source, region.length);
-		return (mem_tobuffer(target, region.base, region.length));
+		return mem_tobuffer(target, region.base, region.length);
 
 	case 2:
 		if (region.length != 18) {
-			return (DNS_R_FORMERR);
+			return DNS_R_FORMERR;
 		}
 		isc_buffer_forward(source, region.length);
-		return (mem_tobuffer(target, region.base, region.length));
+		return mem_tobuffer(target, region.base, region.length);
 
 	case 3:
 		RETERR(mem_tobuffer(target, region.base, 2));
 		isc_buffer_forward(source, 2);
-		dns_name_init(&name, NULL);
-		return (dns_name_fromwire(&name, source, dctx, target));
+		dns_name_init(&name);
+		return dns_name_fromwire(&name, source, dctx, target);
 
 	default:
 		isc_buffer_forward(source, region.length);
-		return (mem_tobuffer(target, region.base, region.length));
+		return mem_tobuffer(target, region.base, region.length);
 	}
 }
 
@@ -243,7 +240,7 @@ towire_amtrelay(ARGS_TOWIRE) {
 	UNUSED(cctx);
 
 	dns_rdata_toregion(rdata, &region);
-	return (mem_tobuffer(target, region.base, region.length));
+	return mem_tobuffer(target, region.base, region.length);
 }
 
 static int
@@ -260,7 +257,7 @@ compare_amtrelay(ARGS_COMPARE) {
 	dns_rdata_toregion(rdata1, &region1);
 	dns_rdata_toregion(rdata2, &region2);
 
-	return (isc_region_compare(&region1, &region2));
+	return isc_region_compare(&region1, &region2);
 }
 
 static isc_result_t
@@ -283,23 +280,23 @@ fromstruct_amtrelay(ARGS_FROMSTRUCT) {
 
 	switch (amtrelay->gateway_type) {
 	case 0:
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 
 	case 1:
 		n = ntohl(amtrelay->in_addr.s_addr);
-		return (uint32_tobuffer(n, target));
+		return uint32_tobuffer(n, target);
 
 	case 2:
-		return (mem_tobuffer(target, amtrelay->in6_addr.s6_addr, 16));
+		return mem_tobuffer(target, amtrelay->in6_addr.s6_addr, 16);
 		break;
 
 	case 3:
 		dns_name_toregion(&amtrelay->gateway, &region);
-		return (isc_buffer_copyregion(target, &region));
+		return isc_buffer_copyregion(target, &region);
 		break;
 
 	default:
-		return (mem_tobuffer(target, amtrelay->data, amtrelay->length));
+		return mem_tobuffer(target, amtrelay->data, amtrelay->length);
 	}
 }
 
@@ -316,12 +313,11 @@ tostruct_amtrelay(ARGS_TOSTRUCT) {
 
 	amtrelay->common.rdclass = rdata->rdclass;
 	amtrelay->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&amtrelay->common, link);
 
-	dns_name_init(&amtrelay->gateway, NULL);
+	dns_name_init(&amtrelay->gateway);
 	amtrelay->data = NULL;
 
-	dns_name_init(&name, NULL);
+	dns_name_init(&name);
 	dns_rdata_toregion(rdata, &region);
 
 	amtrelay->precedence = uint8_fromregion(&region);
@@ -361,7 +357,7 @@ tostruct_amtrelay(ARGS_TOSTRUCT) {
 		amtrelay->length = region.length;
 	}
 	amtrelay->mctx = mctx;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static void
@@ -395,7 +391,7 @@ additionaldata_amtrelay(ARGS_ADDLDATA) {
 	UNUSED(add);
 	UNUSED(arg);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -405,7 +401,7 @@ digest_amtrelay(ARGS_DIGEST) {
 	REQUIRE(rdata->type == dns_rdatatype_amtrelay);
 
 	dns_rdata_toregion(rdata, &region);
-	return ((digest)(arg, &region));
+	return (digest)(arg, &region);
 }
 
 static bool
@@ -417,7 +413,7 @@ checkowner_amtrelay(ARGS_CHECKOWNER) {
 	UNUSED(rdclass);
 	UNUSED(wildcard);
 
-	return (true);
+	return true;
 }
 
 static bool
@@ -428,7 +424,7 @@ checknames_amtrelay(ARGS_CHECKNAMES) {
 	UNUSED(owner);
 	UNUSED(bad);
 
-	return (true);
+	return true;
 }
 
 static int
@@ -450,11 +446,11 @@ casecompare_amtrelay(ARGS_COMPARE) {
 	if (memcmp(region1.base, region2.base, 2) != 0 ||
 	    (region1.base[1] & 0x7f) != 3)
 	{
-		return (isc_region_compare(&region1, &region2));
+		return isc_region_compare(&region1, &region2);
 	}
 
-	dns_name_init(&name1, NULL);
-	dns_name_init(&name2, NULL);
+	dns_name_init(&name1);
+	dns_name_init(&name2);
 
 	isc_region_consume(&region1, 2);
 	isc_region_consume(&region2, 2);
@@ -462,7 +458,7 @@ casecompare_amtrelay(ARGS_COMPARE) {
 	dns_name_fromregion(&name1, &region1);
 	dns_name_fromregion(&name2, &region2);
 
-	return (dns_name_rdatacompare(&name1, &name2));
+	return dns_name_rdatacompare(&name1, &name2);
 }
 
 #endif /* RDATA_GENERIC_AMTRELAY_260_C */

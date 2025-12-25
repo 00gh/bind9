@@ -27,17 +27,16 @@
 #include <named/log.h>
 #include <named/transportconf.h>
 
-#define create_name(id, name)                                      \
-	isc_buffer_t namesrc, namebuf;                             \
-	char namedata[DNS_NAME_FORMATSIZE + 1];                    \
-	dns_name_init(name, NULL);                                 \
-	isc_buffer_constinit(&namesrc, id, strlen(id));            \
-	isc_buffer_add(&namesrc, strlen(id));                      \
-	isc_buffer_init(&namebuf, namedata, sizeof(namedata));     \
-	result = (dns_name_fromtext(name, &namesrc, dns_rootname,  \
-				    DNS_NAME_DOWNCASE, &namebuf)); \
-	if (result != ISC_R_SUCCESS) {                             \
-		goto failure;                                      \
+#define create_name(id, name)                                     \
+	isc_buffer_t namesrc;                                     \
+	dns_fixedname_t _fn;                                      \
+	name = dns_fixedname_initname(&_fn);                      \
+	isc_buffer_constinit(&namesrc, id, strlen(id));           \
+	isc_buffer_add(&namesrc, strlen(id));                     \
+	result = (dns_name_fromtext(name, &namesrc, dns_rootname, \
+				    DNS_NAME_DOWNCASE));          \
+	if (result != ISC_R_SUCCESS) {                            \
+		goto failure;                                     \
 	}
 
 #define parse_transport_option(map, transport, name, setter)      \
@@ -56,11 +55,8 @@
 		if (obj != NULL) {                                                \
 			{                                                         \
 				uint32_t tls_protos = 0;                          \
-				const cfg_listelt_t *proto = NULL;                \
 				INSIST(obj != NULL);                              \
-				for (proto = cfg_list_first(obj); proto != 0;     \
-				     proto = cfg_list_next(proto))                \
-				{                                                 \
+				CFG_LIST_FOREACH (obj, proto) {                   \
 					const cfg_obj_t *tls_proto_obj =          \
 						cfg_listelt_value(proto);         \
 					const char *tls_sver =                    \
@@ -97,18 +93,16 @@ add_doh_transports(const cfg_obj_t *transportlist, dns_transport_list_t *list) {
 	const char *dohid = NULL;
 	isc_result_t result;
 
-	for (const cfg_listelt_t *element = cfg_list_first(transportlist);
-	     element != NULL; element = cfg_list_next(element))
-	{
-		dns_name_t dohname;
-		dns_transport_t *transport;
+	CFG_LIST_FOREACH (transportlist, element) {
+		dns_name_t *dohname = NULL;
+		dns_transport_t *transport = NULL;
 
 		doh = cfg_listelt_value(element);
 		dohid = cfg_obj_asstring(cfg_map_getname(doh));
 
-		create_name(dohid, &dohname);
+		create_name(dohid, dohname);
 
-		transport = dns_transport_new(&dohname, DNS_TRANSPORT_HTTP,
+		transport = dns_transport_new(dohname, DNS_TRANSPORT_HTTP,
 					      list);
 
 		dns_transport_set_tlsname(transport, dohid);
@@ -120,22 +114,23 @@ add_doh_transports(const cfg_obj_t *transportlist, dns_transport_list_t *list) {
 					     dns_transport_set_tls_versions);
 		parse_transport_option(doh, transport, "ciphers",
 				       dns_transport_set_ciphers);
+		parse_transport_option(doh, transport, "cipher-suites",
+				       dns_transport_set_cipher_suites);
 		parse_transport_bool_option(
 			doh, transport, "prefer-server-ciphers",
-			dns_transport_set_prefer_server_ciphers)
-			parse_transport_option(doh, transport, "ca-file",
-					       dns_transport_set_cafile);
+			dns_transport_set_prefer_server_ciphers);
+		parse_transport_option(doh, transport, "ca-file",
+				       dns_transport_set_cafile);
 		parse_transport_option(doh, transport, "remote-hostname",
 				       dns_transport_set_remote_hostname);
 	}
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 failure:
-	cfg_obj_log(doh, named_g_lctx, ISC_LOG_ERROR,
-		    "configuring DoH '%s': %s", dohid,
+	cfg_obj_log(doh, ISC_LOG_ERROR, "configuring DoH '%s': %s", dohid,
 		    isc_result_totext(result));
 
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -144,11 +139,9 @@ add_tls_transports(const cfg_obj_t *transportlist, dns_transport_list_t *list) {
 	const char *tlsid = NULL;
 	isc_result_t result;
 
-	for (const cfg_listelt_t *element = cfg_list_first(transportlist);
-	     element != NULL; element = cfg_list_next(element))
-	{
-		dns_name_t tlsname;
-		dns_transport_t *transport;
+	CFG_LIST_FOREACH (transportlist, element) {
+		dns_name_t *tlsname = NULL;
+		dns_transport_t *transport = NULL;
 
 		tls = cfg_listelt_value(element);
 		tlsid = cfg_obj_asstring(cfg_map_getname(tls));
@@ -158,10 +151,9 @@ add_tls_transports(const cfg_obj_t *transportlist, dns_transport_list_t *list) {
 			goto failure;
 		}
 
-		create_name(tlsid, &tlsname);
+		create_name(tlsid, tlsname);
 
-		transport = dns_transport_new(&tlsname, DNS_TRANSPORT_TLS,
-					      list);
+		transport = dns_transport_new(tlsname, DNS_TRANSPORT_TLS, list);
 
 		dns_transport_set_tlsname(transport, tlsid);
 		parse_transport_option(tls, transport, "key-file",
@@ -172,22 +164,23 @@ add_tls_transports(const cfg_obj_t *transportlist, dns_transport_list_t *list) {
 					     dns_transport_set_tls_versions);
 		parse_transport_option(tls, transport, "ciphers",
 				       dns_transport_set_ciphers);
+		parse_transport_option(tls, transport, "cipher-suites",
+				       dns_transport_set_cipher_suites);
 		parse_transport_bool_option(
 			tls, transport, "prefer-server-ciphers",
-			dns_transport_set_prefer_server_ciphers)
-			parse_transport_option(tls, transport, "ca-file",
-					       dns_transport_set_cafile);
+			dns_transport_set_prefer_server_ciphers);
+		parse_transport_option(tls, transport, "ca-file",
+				       dns_transport_set_cafile);
 		parse_transport_option(tls, transport, "remote-hostname",
 				       dns_transport_set_remote_hostname);
 	}
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 failure:
-	cfg_obj_log(tls, named_g_lctx, ISC_LOG_ERROR,
-		    "configuring tls '%s': %s", tlsid,
+	cfg_obj_log(tls, ISC_LOG_ERROR, "configuring tls '%s': %s", tlsid,
 		    isc_result_totext(result));
 
-	return (result);
+	return result;
 }
 
 #define CHECK(f)                             \
@@ -214,18 +207,18 @@ transport_list_fromconfig(const cfg_obj_t *config, dns_transport_list_t *list) {
 		obj = NULL;
 	}
 
-	return (result);
+	return result;
 }
 
 static void
 transport_list_add_ephemeral(dns_transport_list_t *list) {
 	isc_result_t result;
-	dns_name_t tlsname;
+	dns_name_t *tlsname = NULL;
 	dns_transport_t *transport;
 
-	create_name("ephemeral", &tlsname);
+	create_name("ephemeral", tlsname);
 
-	transport = dns_transport_new(&tlsname, DNS_TRANSPORT_TLS, list);
+	transport = dns_transport_new(tlsname, DNS_TRANSPORT_TLS, list);
 	dns_transport_set_tlsname(transport, "ephemeral");
 
 	return;
@@ -256,8 +249,8 @@ named_transports_fromconfig(const cfg_obj_t *config, const cfg_obj_t *vconfig,
 	}
 
 	*listp = list;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 failure:
 	dns_transport_list_detach(&list);
-	return (result);
+	return result;
 }

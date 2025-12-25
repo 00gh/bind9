@@ -12,6 +12,7 @@
  */
 
 #include <fcntl.h>
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -24,6 +25,7 @@
 
 #include <isc/atomic.h>
 #include <isc/file.h>
+#include <isc/lib.h>
 #include <isc/mem.h>
 #include <isc/mutex.h>
 #include <isc/os.h>
@@ -33,6 +35,8 @@
 #include <isc/thread.h>
 #include <isc/time.h>
 #include <isc/util.h>
+
+#include "thread_p.h"
 
 #include <tests/isc.h>
 
@@ -53,7 +57,7 @@ setup_env(void **unused __attribute__((__unused__))) {
 	}
 	assert_int_not_equal(delay_loop, 0);
 
-	return (0);
+	return 0;
 }
 
 ISC_RUN_TEST_IMPL(isc_mutex) {
@@ -94,7 +98,7 @@ pthread_mutex_thread(void *arg) {
 		isc_pause_n(cont);
 	}
 
-	return (NULL);
+	return NULL;
 }
 
 static void *
@@ -110,16 +114,19 @@ isc_mutex_thread(void *arg) {
 		isc_pause_n(cont);
 	}
 
-	return (NULL);
+	return NULL;
 }
 
 ISC_RUN_TEST_IMPL(isc_mutex_benchmark) {
-	isc_thread_t *threads = isc_mem_get(mctx, sizeof(*threads) * workers);
+	isc_thread_t *threads = isc_mem_cget(isc_g_mctx, workers,
+					     sizeof(*threads));
 	isc_time_t ts1, ts2;
 	double t;
 	int dc;
 	size_t cont;
 	int r;
+
+	isc_thread_setstacksize(THREAD_MINSTACKSIZE);
 
 	memset(threads, 0, sizeof(*threads) * workers);
 
@@ -200,7 +207,7 @@ ISC_RUN_TEST_IMPL(isc_mutex_benchmark) {
 
 	isc_mutex_destroy(&lock);
 
-	isc_mem_put(mctx, threads, sizeof(*threads) * workers);
+	isc_mem_cput(isc_g_mctx, threads, workers, sizeof(*threads));
 }
 
 ISC_TEST_LIST_START

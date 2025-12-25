@@ -66,19 +66,9 @@ create_zone(sample_instance_t *const inst, dns_name_t *const name,
 
 	zone_argv[0] = inst->db_name;
 
-	result = dns_zone_create(&raw, inst->mctx, 0); /* FIXME */
-	if (result != ISC_R_SUCCESS) {
-		log_write(ISC_LOG_ERROR, "create_zone: dns_zone_create -> %s\n",
-			  isc_result_totext(result));
-		goto cleanup;
-	}
-	result = dns_zone_setorigin(raw, name);
-	if (result != ISC_R_SUCCESS) {
-		log_write(ISC_LOG_ERROR,
-			  "create_zone: dns_zone_setorigin -> %s\n",
-			  isc_result_totext(result));
-		goto cleanup;
-	}
+	dns_zone_create(&raw, inst->mctx, 0); /* FIXME: all zones are assigned
+						 to loop 0 */
+	dns_zone_setorigin(raw, name);
 	dns_zone_setclass(raw, dns_rdataclass_in);
 	dns_zone_settype(raw, dns_zone_primary);
 	dns_zone_setdbtype(raw, 1, zone_argv);
@@ -104,7 +94,7 @@ create_zone(sample_instance_t *const inst, dns_name_t *const name,
 	dns_acl_detach(&acl_any);
 
 	*rawp = raw;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 
 cleanup:
 	dns_name_format(name, zone_name, DNS_NAME_FORMATSIZE);
@@ -120,7 +110,7 @@ cleanup:
 		dns_acl_detach(&acl_any);
 	}
 
-	return (result);
+	return result;
 }
 
 /*
@@ -139,7 +129,7 @@ publish_zone(sample_instance_t *inst, dns_zone_t *zone) {
 
 	/* Return success if the zone is already in the view as expected. */
 	result = dns_view_findzone(inst->view, dns_zone_getorigin(zone),
-				   &zone_in_view);
+				   DNS_ZTFIND_EXACT, &zone_in_view);
 	if (result != ISC_R_SUCCESS && result != ISC_R_NOTFOUND) {
 		goto cleanup;
 	}
@@ -192,7 +182,7 @@ cleanup:
 		dns_view_freeze(inst->view);
 	}
 
-	return (result);
+	return result;
 }
 
 /*
@@ -223,11 +213,11 @@ load_zone(dns_zone_t *zone) {
 	dns_zone_log(zone, ISC_LOG_INFO, "loaded serial %u", serial);
 
 	if (zone_dynamic) {
-		dns_zone_notify(zone);
+		dns_zone_notify(zone, false);
 	}
 
 cleanup:
-	return (result);
+	return result;
 }
 
 /*
@@ -257,5 +247,5 @@ activate_zone(sample_instance_t *inst, dns_zone_t *raw) {
 	}
 
 cleanup:
-	return (result);
+	return result;
 }

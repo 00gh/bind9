@@ -47,14 +47,15 @@
 #include <inttypes.h>
 #include <stdbool.h>
 
-#include <isc/lang.h>
 #include <isc/magic.h>
 #include <isc/stdtime.h>
 
+#include <dns/rdataslab.h>
 #include <dns/rdatastruct.h>
 #include <dns/types.h>
 
-ISC_LANG_BEGINDECLS
+#define DNS_RDATASET_MAXADDITIONAL 13
+#define DNS_RDATASET_LENGTH	   2;
 
 typedef enum {
 	dns_rdatasetadditional_fromauth,
@@ -62,7 +63,7 @@ typedef enum {
 	dns_rdatasetadditional_fromglue
 } dns_rdatasetadditional_t;
 
-typedef struct dns_rdatasetmethods {
+struct dns_rdatasetmethods {
 	void (*disassociate)(dns_rdataset_t *rdataset DNS__DB_FLARG);
 	isc_result_t (*first)(dns_rdataset_t *rdataset);
 	isc_result_t (*next)(dns_rdataset_t *rdataset);
@@ -70,13 +71,11 @@ typedef struct dns_rdatasetmethods {
 	void (*clone)(dns_rdataset_t	    *source,
 		      dns_rdataset_t *target DNS__DB_FLARG);
 	unsigned int (*count)(dns_rdataset_t *rdataset);
-	isc_result_t (*addnoqname)(dns_rdataset_t   *rdataset,
-				   const dns_name_t *name);
+	isc_result_t (*addnoqname)(dns_rdataset_t *rdataset, dns_name_t *name);
 	isc_result_t (*getnoqname)(dns_rdataset_t *rdataset, dns_name_t *name,
 				   dns_rdataset_t	 *neg,
 				   dns_rdataset_t *negsig DNS__DB_FLARG);
-	isc_result_t (*addclosest)(dns_rdataset_t   *rdataset,
-				   const dns_name_t *name);
+	isc_result_t (*addclosest)(dns_rdataset_t *rdataset, dns_name_t *name);
 	isc_result_t (*getclosest)(dns_rdataset_t *rdataset, dns_name_t *name,
 				   dns_rdataset_t	 *neg,
 				   dns_rdataset_t *negsig DNS__DB_FLARG);
@@ -87,7 +86,10 @@ typedef struct dns_rdatasetmethods {
 	void (*getownercase)(const dns_rdataset_t *rdataset, dns_name_t *name);
 	isc_result_t (*addglue)(dns_rdataset_t	*rdataset,
 				dns_dbversion_t *version, dns_message_t *msg);
-} dns_rdatasetmethods_t;
+	dns_slabheader_t *(*getheader)(const dns_rdataset_t *rdataset);
+	bool (*equals)(const dns_rdataset_t *rdataset1,
+		       const dns_rdataset_t *rdataset2);
+};
 
 #define DNS_RDATASET_MAGIC	ISC_MAGIC('D', 'N', 'S', 'R')
 #define DNS_RDATASET_VALID(set) ISC_MAGIC_VALID(set, DNS_RDATASET_MAGIC)
@@ -115,10 +117,35 @@ struct dns_rdataset {
 	dns_trust_t	trust;
 	dns_rdatatype_t covers;
 
-	/*
-	 * attributes
-	 */
-	unsigned int attributes;
+	struct {
+		bool question	 : 1;
+		bool rendered	 : 1; /*%< message.c: was rendered */
+		bool answered	 : 1; /*%< server. */
+		bool cache	 : 1; /*%< resolver. */
+		bool answer	 : 1; /*%< resolver. */
+		bool answersig	 : 1; /*%< resolver. */
+		bool external	 : 1; /*%< resolver. */
+		bool ncache	 : 1; /*%< resolver. */
+		bool chaining	 : 1; /*%< resolver. */
+		bool ttladjusted : 1; /*%< message.c: data had differing TTL
+		       values, and the rdataset->ttl holds the smallest */
+		bool	       chase	    : 1; /*%< Used by resolver. */
+		bool	       nxdomain	    : 1;
+		bool	       noqname	    : 1;
+		bool	       checknames   : 1; /*%< Used by resolver. */
+		bool	       required	    : 1;
+		bool	       resign	    : 1;
+		bool	       closest	    : 1;
+		bool	       optout	    : 1; /*%< OPTOUT proof */
+		bool	       negative	    : 1;
+		bool	       prefetch	    : 1;
+		bool	       stale	    : 1;
+		bool	       ancient	    : 1;
+		bool	       stale_window : 1;
+		bool	       keepcase	    : 1;
+		bool	       staticstub   : 1;
+		dns_orderopt_t order	    : 2;
+	} attributes;
 
 	/*%
 	 * the counter provides the starting point in the "cyclic" order.
@@ -130,80 +157,99 @@ struct dns_rdataset {
 
 	/*
 	 * This RRSIG RRset should be re-generated around this time.
-	 * Only valid if DNS_RDATASETATTR_RESIGN is set in attributes.
+	 * Only valid if 'resign' attribute is set.
 	 */
-	isc_stdtime_t resign;
+	union {
+		isc_stdtime_t resign;
+		isc_stdtime_t expire;
+	};
 
-	/*@{*/
 	/*%
-	 * These are for use by the rdataset implementation, and MUST NOT
-	 * be changed by clients.
+	 * Extra fields used by various rdataset implementations, that is, by
+	 * the code referred to in the rdataset methods table. The names of
+	 * the structures roughly correspond to the file containing the
+	 * implementation, except that `rdlist` is used by `rdatalist.c`,
+	 * and `sdlz.c`, and `slab` by `rdataslab.c`.
+	 *
+	 * Pointers in these structs use incomplete structure types,
+	 * because the structure definitions and corresponding typedef
+	 * names might not be in scope in this header.
 	 */
-	void	    *private1;
-	void	    *private2;
-	void	    *private3;
-	unsigned int privateuint4;
-	void	    *private5;
-	const void  *private6;
-	const void  *private7;
 	/*@}*/
+	union {
+		struct {
+			struct dns_keynode *node;
+			dns_rdata_t	   *iter;
+		} keytable;
+
+		/*
+		 * An ncache rdataset is a view of memory held elsewhere:
+		 * raw can point to either a buffer on the stack or to an
+		 * rdataslab, such as in an rbtdb database.
+		 */
+		struct {
+			unsigned char *raw;
+			unsigned char *iter_pos;
+			unsigned int   iter_count;
+		} ncache;
+
+		/*
+		 * A slab rdataset provides access to an rdataslab. In
+		 * a QP database, 'raw' will generally point to the
+		 * memory immediately following a slabheader. (There
+		 * is an exception in the case of rdatasets returned by
+		 * the `getnoqname` and `getclosest` methods; see
+		 * comments in rdataslab.c for details.)
+		 */
+		struct {
+			struct dns_db	       *db;
+			dns_dbnode_t	       *node;
+			unsigned char	       *raw;
+			unsigned char	       *iter_pos;
+			unsigned int		iter_count;
+			dns_slabheader_proof_t *noqname, *closest;
+		} slab;
+
+		/*
+		 * A simple rdatalist, plus an optional dbnode used by
+		 * builtin and sdlz.
+		 */
+		struct {
+			struct dns_rdatalist *list;
+			struct dns_rdata     *iter;
+
+			/*
+			 * These refer to names passed in by the caller of
+			 * dns_rdataset_addnoqname() and _addclosest()
+			 */
+			struct dns_name *noqname, *closest;
+			dns_dbnode_t	*node;
+		} rdlist;
+	};
 };
 
 #define DNS_RDATASET_COUNT_UNDEFINED UINT32_MAX
 
-#define DNS_RDATASET_INIT                                                  \
-	{                                                                  \
-		.magic = DNS_RDATASET_MAGIC, .link = ISC_LINK_INITIALIZER, \
-		.count = DNS_RDATASET_COUNT_UNDEFINED                      \
-	}
+#define DNS_RDATASET_INIT               \
+	{ .magic = DNS_RDATASET_MAGIC,  \
+	  .link = ISC_LINK_INITIALIZER, \
+	  .count = DNS_RDATASET_COUNT_UNDEFINED }
 
-/*!
- * \def DNS_RDATASETATTR_RENDERED
- *	Used by message.c to indicate that the rdataset was rendered.
- *
- * \def DNS_RDATASETATTR_TTLADJUSTED
- *	Used by message.c to indicate that the rdataset's rdata had differing
- *	TTL values, and the rdataset->ttl holds the smallest.
- *
- * \def DNS_RDATASETATTR_LOADORDER
- *	Output the RRset in load order.
- *
- * \def DNS_RDATASETATTR_STALE_ADDED
- *	Set on rdatasets that were added during a stale-answer-client-timeout
- *	lookup. In other words, the RRset was added during a lookup of stale
- *	data and does not necessarily mean that the rdataset itself is stale.
+/* clang-format off */
+/*
+ * This is a hack to build a unique variable name to
+ * replace 'res' below. (Two layers of macro indirection are
+ * needed to make the line number be part of the variable
+ * name; otherwise it would just be "x__LINE__".)
  */
-
-#define DNS_RDATASETATTR_NONE	      0x00000000 /*%< No ordering. */
-#define DNS_RDATASETATTR_QUESTION     0x00000001
-#define DNS_RDATASETATTR_RENDERED     0x00000002 /*%< Used by message.c */
-#define DNS_RDATASETATTR_ANSWERED     0x00000004 /*%< Used by server. */
-#define DNS_RDATASETATTR_CACHE	      0x00000008 /*%< Used by resolver. */
-#define DNS_RDATASETATTR_ANSWER	      0x00000010 /*%< Used by resolver. */
-#define DNS_RDATASETATTR_ANSWERSIG    0x00000020 /*%< Used by resolver. */
-#define DNS_RDATASETATTR_EXTERNAL     0x00000040 /*%< Used by resolver. */
-#define DNS_RDATASETATTR_NCACHE	      0x00000080 /*%< Used by resolver. */
-#define DNS_RDATASETATTR_CHAINING     0x00000100 /*%< Used by resolver. */
-#define DNS_RDATASETATTR_TTLADJUSTED  0x00000200 /*%< Used by message.c */
-#define DNS_RDATASETATTR_FIXEDORDER   0x00000400 /*%< Fixed ordering. */
-#define DNS_RDATASETATTR_RANDOMIZE    0x00000800 /*%< Random ordering. */
-#define DNS_RDATASETATTR_CHASE	      0x00001000 /*%< Used by resolver. */
-#define DNS_RDATASETATTR_NXDOMAIN     0x00002000
-#define DNS_RDATASETATTR_NOQNAME      0x00004000
-#define DNS_RDATASETATTR_CHECKNAMES   0x00008000 /*%< Used by resolver. */
-#define DNS_RDATASETATTR_REQUIRED     0x00010000
-#define DNS_RDATASETATTR_REQUIREDGLUE DNS_RDATASETATTR_REQUIRED
-#define DNS_RDATASETATTR_LOADORDER    0x00020000
-#define DNS_RDATASETATTR_RESIGN	      0x00040000
-#define DNS_RDATASETATTR_CLOSEST      0x00080000
-#define DNS_RDATASETATTR_OPTOUT	      0x00100000 /*%< OPTOUT proof */
-#define DNS_RDATASETATTR_NEGATIVE     0x00200000
-#define DNS_RDATASETATTR_PREFETCH     0x00400000
-#define DNS_RDATASETATTR_CYCLIC	      0x00800000 /*%< Cyclic ordering. */
-#define DNS_RDATASETATTR_STALE	      0x01000000
-#define DNS_RDATASETATTR_ANCIENT      0x02000000
-#define DNS_RDATASETATTR_STALE_WINDOW 0x04000000
-#define DNS_RDATASETATTR_STALE_ADDED  0x08000000
+#define DNS__RDATASET_CONNECT(x,y) x##y
+#define DNS__RDATASET_CONCAT(x,y) DNS__RDATASET_CONNECT(x,y)
+#define DNS_RDATASET_FOREACH_RES(rds, res)                         \
+	for (isc_result_t res = dns_rdataset_first((rds));       \
+	     res == ISC_R_SUCCESS; res = dns_rdataset_next((rds)))
+#define DNS_RDATASET_FOREACH(rds)               \
+	DNS_RDATASET_FOREACH_RES(rds, DNS__RDATASET_CONCAT(x, __LINE__))
+/* clang-format on */
 
 /*%
  * _OMITDNSSEC:
@@ -324,6 +370,9 @@ dns_rdataset_first(dns_rdataset_t *rdataset);
  * Returns:
  *\li	#ISC_R_SUCCESS
  *\li	#ISC_R_NOMORE			There are no rdata in the set.
+ *
+ * Ensures:
+ *\li	No other value is returned.
  */
 
 isc_result_t
@@ -337,6 +386,9 @@ dns_rdataset_next(dns_rdataset_t *rdataset);
  * Returns:
  *\li	#ISC_R_SUCCESS
  *\li	#ISC_R_NOMORE			There are no more rdata in the set.
+ *
+ * Ensures:
+ *\li	No other value is returned.
  */
 
 void
@@ -420,30 +472,12 @@ dns_rdataset_towire(dns_rdataset_t *rdataset, const dns_name_t *owner_name,
  */
 
 isc_result_t
-dns_rdataset_towiresorted(dns_rdataset_t   *rdataset,
-			  const dns_name_t *owner_name, dns_compress_t *cctx,
-			  isc_buffer_t *target, dns_rdatasetorderfunc_t order,
-			  const void *order_arg, unsigned int options,
-			  unsigned int *countp);
-/*%<
- * Like dns_rdataset_towire(), but sorting the rdatasets according to
- * the integer value returned by 'order' when called with the rdataset
- * and 'order_arg' as arguments.
- *
- * Requires:
- *\li	All the requirements of dns_rdataset_towire(), and
- *	that order_arg is NULL if and only if order is NULL.
- */
-
-isc_result_t
 dns_rdataset_towirepartial(dns_rdataset_t   *rdataset,
 			   const dns_name_t *owner_name, dns_compress_t *cctx,
-			   isc_buffer_t *target, dns_rdatasetorderfunc_t order,
-			   const void *order_arg, unsigned int options,
+			   isc_buffer_t *target, unsigned int options,
 			   unsigned int *countp, void **state);
 /*%<
- * Like dns_rdataset_towiresorted() except that a partial rdataset
- * may be written.
+ * Like dns_rdataset_towire() except that a partial rdataset may be written.
  *
  * Requires:
  *\li	All the requirements of dns_rdataset_towiresorted().
@@ -462,7 +496,8 @@ dns_rdataset_towirepartial(dns_rdataset_t   *rdataset,
 isc_result_t
 dns_rdataset_additionaldata(dns_rdataset_t	    *rdataset,
 			    const dns_name_t	    *owner_name,
-			    dns_additionaldatafunc_t add, void *arg);
+			    dns_additionaldatafunc_t add, void *arg,
+			    size_t limit);
 /*%<
  * For each rdata in rdataset, call 'add' for each name and type in the
  * rdata which is subject to additional section processing.
@@ -481,9 +516,14 @@ dns_rdataset_additionaldata(dns_rdataset_t	    *rdataset,
  *\li	If a call to dns_rdata_additionaldata() is not successful, the
  *	result returned will be the result of dns_rdataset_additionaldata().
  *
+ *\li	If the 'limit' is non-zero and the number of the rdatasets is larger
+ *	than the 'limit', no additional data will be generated.
+ *
  * Returns:
  *
  *\li	#ISC_R_SUCCESS
+ *
+ *\li	#DNS_R_TOOMANYRECORDS in case rdataset count is larger than 'limit'
  *
  *\li	Any error that dns_rdata_additionaldata() can return.
  */
@@ -498,7 +538,7 @@ dns__rdataset_getnoqname(dns_rdataset_t *rdataset, dns_name_t *name,
  * Return the noqname proof for this record.
  *
  * Requires:
- *\li	'rdataset' to be valid and #DNS_RDATASETATTR_NOQNAME to be set.
+ *\li	'rdataset' to be valid and 'noqname' attribute to be set.
  *\li	'name' to be valid.
  *\li	'neg' and 'negsig' to be valid and not associated.
  */
@@ -507,12 +547,12 @@ isc_result_t
 dns_rdataset_addnoqname(dns_rdataset_t *rdataset, dns_name_t *name);
 /*%<
  * Associate a noqname proof with this record.
- * Sets #DNS_RDATASETATTR_NOQNAME if successful.
+ * Sets 'noqname' attribute if successful.
  * Adjusts the 'rdataset->ttl' to minimum of the 'rdataset->ttl' and
  * the 'nsec'/'nsec3' and 'rrsig(nsec)'/'rrsig(nsec3)' ttl.
  *
  * Requires:
- *\li	'rdataset' to be valid and #DNS_RDATASETATTR_NOQNAME to be set.
+ *\li	'rdataset' to be valid and 'noqname' attribute to be set.
  *\li	'name' to be valid and have NSEC or NSEC3 and associated RRSIG
  *	 rdatasets.
  */
@@ -527,21 +567,21 @@ dns__rdataset_getclosest(dns_rdataset_t *rdataset, dns_name_t *name,
  * Return the closest encloser for this record.
  *
  * Requires:
- *\li	'rdataset' to be valid and #DNS_RDATASETATTR_CLOSEST to be set.
+ *\li	'rdataset' to be valid and 'closest' attribute to be set.
  *\li	'name' to be valid.
  *\li	'nsec' and 'nsecsig' to be valid and not associated.
  */
 
 isc_result_t
-dns_rdataset_addclosest(dns_rdataset_t *rdataset, const dns_name_t *name);
+dns_rdataset_addclosest(dns_rdataset_t *rdataset, dns_name_t *name);
 /*%<
  * Associate a closest encloset proof with this record.
- * Sets #DNS_RDATASETATTR_CLOSEST if successful.
+ * Sets 'closest' attribute if successful.
  * Adjusts the 'rdataset->ttl' to minimum of the 'rdataset->ttl' and
  * the 'nsec' and 'rrsig(nsec)' ttl.
  *
  * Requires:
- *\li	'rdataset' to be valid and #DNS_RDATASETATTR_CLOSEST to be set.
+ *\li	'rdataset' to be valid and 'closest' attribute to be set.
  *\li	'name' to be valid and have NSEC3 and RRSIG(NSEC3) rdatasets.
  */
 
@@ -587,28 +627,6 @@ dns_rdataset_getownercase(const dns_rdataset_t *rdataset, dns_name_t *name);
  * according to it. If CASESET is not set, do nothing.
  */
 
-isc_result_t
-dns_rdataset_addglue(dns_rdataset_t *rdataset, dns_dbversion_t *version,
-		     dns_message_t *msg);
-/*%<
- * Add glue records for rdataset to the additional section of message in
- * 'msg'. 'rdataset' must be of type NS.
- *
- * In case a successful result is not returned, the caller should try to
- * add glue directly to the message by iterating for additional data.
- *
- * Requires:
- * \li	'rdataset' is a valid NS rdataset.
- * \li	'version' is the DB version.
- * \li	'msg' is the DNS message to which the glue should be added.
- *
- * Returns:
- *\li	#ISC_R_SUCCESS
- *\li	#ISC_R_NOTIMPLEMENTED
- *\li	#ISC_R_FAILURE
- *\li	Any error that dns_rdata_additionaldata() can return.
- */
-
 void
 dns_rdataset_trimttl(dns_rdataset_t *rdataset, dns_rdataset_t *sigrdataset,
 		     dns_rdata_rrsig_t *rrsig, isc_stdtime_t now,
@@ -634,4 +652,51 @@ dns_trust_totext(dns_trust_t trust);
  * Display trust in textual form.
  */
 
-ISC_LANG_ENDDECLS
+dns_slabheader_t *
+dns_rdataset_getheader(const dns_rdataset_t *rdataset);
+/*%<
+ * Return a pointer to the slabheader for a slab rdataset. If 'rdataset'
+ * is not a slab rdataset or if the slab is raw (lacking a header), return
+ * NULL.
+ *
+ * Requires:
+ * \li	'rdataset' is a valid rdataset.
+ */
+
+bool
+dns_rdataset_equals(const dns_rdataset_t *rdataset1,
+		    const dns_rdataset_t *rdataset2);
+/*%<
+ * Returns true if the rdata in the rdataset is equal.
+ *
+ * Requires:
+ * \li	'rdataset1' is a valid rdataset.
+ * \li	'rdataset2' is a valid rdataset.
+ */
+
+/*%
+ * Returns true if the rdataset is of type 'type', or type RRSIG
+ * and covers 'type'.
+ */
+static inline bool
+dns_rdataset_matchestype(const dns_rdataset_t *rdataset,
+			 const dns_rdatatype_t type) {
+	REQUIRE(DNS_RDATASET_VALID(rdataset));
+
+	return rdataset->type == type ||
+	       (rdataset->type == dns_rdatatype_rrsig &&
+		rdataset->covers == type);
+}
+
+/*%
+ * Returns true if the rdataset is of type 'type', or type RRSIG
+ * and covers 'type'.
+ */
+static inline bool
+dns_rdataset_issigtype(const dns_rdataset_t *rdataset,
+		       const dns_rdatatype_t type) {
+	REQUIRE(DNS_RDATASET_VALID(rdataset));
+
+	return rdataset->type == dns_rdatatype_rrsig &&
+	       rdataset->covers == type;
+}

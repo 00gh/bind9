@@ -31,48 +31,61 @@
  * Definitions shared between the configuration parser
  * and the grammars; not visible to users of the parser.
  */
+enum {
+	/*% A configuration option that was not configured at compile time. */
+	CFG_CLAUSEFLAG_NOTCONFIGURED = 1 << 0,
 
-/*% Clause may occur multiple times (e.g., "zone") */
-#define CFG_CLAUSEFLAG_MULTI 0x00000001
-/*% Clause is obsolete (logs a warning, but is not a fatal error) */
-#define CFG_CLAUSEFLAG_OBSOLETE 0x00000002
-/* obsolete: #define CFG_CLAUSEFLAG_NOTIMP 0x00000004 */
-/* obsolete: #define CFG_CLAUSEFLAG_NYI 0x00000008 */
-/* obsolete: #define CFG_CLAUSEFLAG_NEWDEFAULT 0x00000010 */
-/*%
- * Clause needs to be interpreted during parsing
- * by calling a callback function, like the
- * "directory" option.
- */
-#define CFG_CLAUSEFLAG_CALLBACK 0x00000020
-/*% An option that is only used in testing. */
-#define CFG_CLAUSEFLAG_TESTONLY 0x00000040
-/*% A configuration option that was not configured at compile time. */
-#define CFG_CLAUSEFLAG_NOTCONFIGURED 0x00000080
-/*% An option for an experimental feature. */
-#define CFG_CLAUSEFLAG_EXPERIMENTAL 0x00000100
-/*% An option that should be omited from the documentation */
-#define CFG_CLAUSEFLAG_NODOC 0x00000200
-/*% Clause will be obsolete in a future release (logs a warning) */
-#define CFG_CLAUSEFLAG_DEPRECATED 0x00000400
-/*% Clause has been obsolete so long that it's now a fatal error */
-#define CFG_CLAUSEFLAG_ANCIENT 0x00000800
+	/*%
+	 * A configuration option that *is* configured, but could be
+	 * disabled at compile time in some builds.
+	 */
+	CFG_CLAUSEFLAG_OPTIONAL = 1 << 1,
+
+	/*% Clause may occur multiple times (e.g., "zone") */
+	CFG_CLAUSEFLAG_MULTI = 1 << 2,
+
+	/*% Clause is obsolete (logs a warning, but is not a fatal error) */
+	CFG_CLAUSEFLAG_OBSOLETE = 1 << 3,
+
+	/*%
+	 * Clause needs to be interpreted during parsing by calling a
+	 * callback function, like the "directory" option.
+	 */
+	CFG_CLAUSEFLAG_CALLBACK = 1 << 4,
+
+	/*% Clause that is only used in testing. */
+	CFG_CLAUSEFLAG_TESTONLY = 1 << 5,
+
+	/*% An option for an experimental feature. */
+	CFG_CLAUSEFLAG_EXPERIMENTAL = 1 << 6,
+
+	/*% An option that should be omited from the documentation */
+	CFG_CLAUSEFLAG_NODOC = 1 << 7,
+
+	/*% Clause will be obsolete in a future release (logs a warning) */
+	CFG_CLAUSEFLAG_DEPRECATED = 1 << 8,
+
+	/*% Clause has been obsolete so long that it's now a fatal error */
+	CFG_CLAUSEFLAG_ANCIENT = 1 << 9,
+};
 
 /*%
  * Zone types for which a clause is valid:
  * These share space with CFG_CLAUSEFLAG values, but count
- * down from the top.
+ * down from the most significant bit, instead of up from
+ * the least.
  */
-#define CFG_ZONE_PRIMARY    0x80000000
-#define CFG_ZONE_SECONDARY  0x40000000
-#define CFG_ZONE_STUB	    0x20000000
-#define CFG_ZONE_HINT	    0x10000000
-#define CFG_ZONE_FORWARD    0x08000000
-#define CFG_ZONE_STATICSTUB 0x04000000
-#define CFG_ZONE_REDIRECT   0x02000000
-#define CFG_ZONE_DELEGATION 0x01000000
-#define CFG_ZONE_INVIEW	    0x00800000
-#define CFG_ZONE_MIRROR	    0x00400000
+enum {
+	CFG_ZONE_PRIMARY = 1 << 31,
+	CFG_ZONE_SECONDARY = 1 << 30,
+	CFG_ZONE_STUB = 1 << 29,
+	CFG_ZONE_HINT = 1 << 28,
+	CFG_ZONE_FORWARD = 1 << 27,
+	CFG_ZONE_STATICSTUB = 1 << 26,
+	CFG_ZONE_REDIRECT = 1 << 25,
+	CFG_ZONE_INVIEW = 1 << 24,
+	CFG_ZONE_MIRROR = 1 << 23,
+};
 
 typedef struct cfg_clausedef	 cfg_clausedef_t;
 typedef struct cfg_tuplefielddef cfg_tuplefielddef_t;
@@ -199,7 +212,6 @@ struct cfg_listelt {
 /*% The parser object. */
 struct cfg_parser {
 	isc_mem_t   *mctx;
-	isc_log_t   *lctx;
 	isc_lex_t   *lexer;
 	unsigned int errors;
 	unsigned int warnings;
@@ -258,8 +270,11 @@ struct cfg_parser {
 };
 
 /* Parser context flags */
-#define CFG_PCTX_SKIP	      0x1
-#define CFG_PCTX_NODEPRECATED 0x2
+#define CFG_PCTX_SKIP		(1 << 0)
+#define CFG_PCTX_NODEPRECATED	(1 << 1)
+#define CFG_PCTX_NOOBSOLETE	(1 << 2)
+#define CFG_PCTX_NOEXPERIMENTAL (1 << 3)
+#define CFG_PCTX_ALLCONFIGS	(1 << 4)
 
 /*@{*/
 /*%
@@ -271,6 +286,7 @@ struct cfg_parser {
 #define CFG_ADDR_WILDOK	    0x00000008
 #define CFG_ADDR_PORTOK	    0x00000010
 #define CFG_ADDR_TLSOK	    0x00000020
+#define CFG_ADDR_TRAILINGOK 0x00000040
 #define CFG_ADDR_MASK	    (CFG_ADDR_V6OK | CFG_ADDR_V4OK)
 /*@}*/
 
@@ -376,6 +392,9 @@ cfg_lookingat_netaddr(cfg_parser_t *pctx, unsigned int flags);
 isc_result_t
 cfg_parse_rawport(cfg_parser_t *pctx, unsigned int flags, in_port_t *port);
 
+isc_result_t
+cfg_parse_sockaddr_generic(cfg_parser_t *pctx, cfg_type_t *klass,
+			   const cfg_type_t *type, cfg_obj_t **ret);
 isc_result_t
 cfg_parse_sockaddr(cfg_parser_t *pctx, const cfg_type_t *type, cfg_obj_t **ret);
 

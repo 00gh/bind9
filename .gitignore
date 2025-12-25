@@ -5,6 +5,7 @@
 *.la
 *.lo
 *.log
+*.log.txt
 *.o
 *.orig
 *.plist/ # ccc-analyzer store its results in .plist directories
@@ -74,6 +75,7 @@ doc/man/dnssec-importkey.8in
 doc/man/dnssec-keyfromlabel.8in
 doc/man/dnssec-keygen.8in
 doc/man/dnssec-keymgr.8in
+doc/man/dnssec-ksr.8in
 doc/man/dnssec-revoke.8in
 doc/man/dnssec-settime.8in
 doc/man/dnssec-signzone.8in
@@ -94,6 +96,7 @@ doc/man/pkcs11-tokens.8in
 /GPATH
 /GRTAGS
 /GTAGS
+TAGS
 # Emacs specific files
 \.dir-locals-2.el
 /emacs.desktop

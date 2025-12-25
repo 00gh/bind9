@@ -42,7 +42,7 @@ back to plain DNS queries without EDNS.
 Such workarounds cause unnecessary resolution delays, increase code
 complexity, and prevent deployment of new DNS features. In February
 2019, all major DNS software vendors removed these
-workarounds; see https://dnsflagday.net/2019 for further details. This change
+workarounds; see https://www.dnsflagday.net/2019/ for further details. This change
 was implemented in BIND as of release 9.14.0.
 
 As a result, some domains may be non-resolvable without manual
@@ -151,7 +151,7 @@ peer user support. In addition, ISC maintains a Knowledgebase of helpful article
 at https://kb.isc.org.
 
 Internet Systems Consortium (ISC) offers annual support agreements
-for BIND 9, ISC DHCP, and Kea DHCP. 
+for BIND 9, ISC DHCP, and Kea DHCP.
 All paid support contracts include advance security notifications; some levels include
 service level agreements (SLAs), premium software features, and increased priority on bug fixes
 and feature requests.

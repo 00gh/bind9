@@ -25,8 +25,9 @@ options {
 	listen-on-v6 { none; };
 	allow-recursion { 10.53.0.1; };
 	notify yes;
-	dnssec-validation yes;
+	dnssec-validation no;
 };
+
 
 zone "." {
 	type primary;
@@ -53,5 +54,3 @@ zone "." {
 	file "redirect.db";
 	allow-query { !10.53.0.2; !10.53.0.4; any; };
 };
-
-// include "trusted.conf";

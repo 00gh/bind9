@@ -22,6 +22,8 @@
 #include <isc/commandline.h>
 #include <isc/dir.h>
 #include <isc/hash.h>
+#include <isc/lib.h>
+#include <isc/log.h>
 #include <isc/mem.h>
 #include <isc/result.h>
 #include <isc/string.h>
@@ -33,7 +35,7 @@
 #include <dns/ds.h>
 #include <dns/fixedname.h>
 #include <dns/keyvalues.h>
-#include <dns/log.h>
+#include <dns/lib.h>
 #include <dns/master.h>
 #include <dns/name.h>
 #include <dns/rdata.h>
@@ -46,14 +48,12 @@
 
 #include "dnssectool.h"
 
-const char *program = "dnssec-dsfromkey";
-
 static dns_rdataclass_t rdclass;
 static dns_fixedname_t fixed;
 static dns_name_t *name = NULL;
-static isc_mem_t *mctx = NULL;
 static uint32_t ttl;
 static bool emitttl = false;
+static unsigned int split_width = 0;
 
 static isc_result_t
 initname(char *setname) {
@@ -64,8 +64,8 @@ initname(char *setname) {
 
 	isc_buffer_init(&buf, setname, strlen(setname));
 	isc_buffer_add(&buf, strlen(setname));
-	result = dns_name_fromtext(name, &buf, dns_rootname, 0, NULL);
-	return (result);
+	result = dns_name_fromtext(name, &buf, dns_rootname, 0);
+	return result;
 }
 
 static void
@@ -80,7 +80,7 @@ db_load_from_stream(dns_db_t *db, FILE *fp) {
 	}
 
 	result = dns_master_loadstream(fp, name, name, rdclass, 0, &callbacks,
-				       mctx);
+				       isc_g_mctx);
 	if (result != ISC_R_SUCCESS) {
 		fatal("can't load from input: %s", isc_result_totext(result));
 	}
@@ -100,8 +100,8 @@ loadset(const char *filename, dns_rdataset_t *rdataset) {
 
 	dns_name_format(name, setname, sizeof(setname));
 
-	result = dns_db_create(mctx, "rbt", name, dns_dbtype_zone, rdclass, 0,
-			       NULL, &db);
+	result = dns_db_create(isc_g_mctx, ZONEDB_DEFAULT, name,
+			       dns_dbtype_zone, rdclass, 0, NULL, &db);
 	if (result != ISC_R_SUCCESS) {
 		fatal("can't create database");
 	}
@@ -137,7 +137,7 @@ loadset(const char *filename, dns_rdataset_t *rdataset) {
 	if (db != NULL) {
 		dns_db_detach(&db);
 	}
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -152,7 +152,7 @@ loadkeyset(char *dirname, dns_rdataset_t *rdataset) {
 	if (dirname != NULL) {
 		/* allow room for a trailing slash */
 		if (strlen(dirname) >= isc_buffer_availablelength(&buf)) {
-			return (ISC_R_NOSPACE);
+			return ISC_R_NOSPACE;
 		}
 		isc_buffer_putstr(&buf, dirname);
 		if (dirname[strlen(dirname) - 1] != '/') {
@@ -161,18 +161,18 @@ loadkeyset(char *dirname, dns_rdataset_t *rdataset) {
 	}
 
 	if (isc_buffer_availablelength(&buf) < 7) {
-		return (ISC_R_NOSPACE);
+		return ISC_R_NOSPACE;
 	}
 	isc_buffer_putstr(&buf, "keyset-");
 
 	result = dns_name_tofilenametext(name, false, &buf);
 	check_result(result, "dns_name_tofilenametext()");
 	if (isc_buffer_availablelength(&buf) == 0) {
-		return (ISC_R_NOSPACE);
+		return ISC_R_NOSPACE;
 	}
 	isc_buffer_putuint8(&buf, 0);
 
-	return (loadset(filename, rdataset));
+	return loadset(filename, rdataset);
 }
 
 static void
@@ -187,8 +187,8 @@ loadkey(char *filename, unsigned char *key_buf, unsigned int key_buf_size,
 
 	isc_buffer_init(&keyb, key_buf, key_buf_size);
 
-	result = dst_key_fromnamedfile(filename, NULL, DST_TYPE_PUBLIC, mctx,
-				       &key);
+	result = dst_key_fromnamedfile(filename, NULL, DST_TYPE_PUBLIC,
+				       isc_g_mctx, &key);
 	if (result != ISC_R_SUCCESS) {
 		fatal("can't load %s.key: %s", filename,
 		      isc_result_totext(result));
@@ -198,7 +198,7 @@ loadkey(char *filename, unsigned char *key_buf, unsigned int key_buf_size,
 		char keystr[DST_KEY_FORMATSIZE];
 
 		dst_key_format(key, keystr, sizeof(keystr));
-		fprintf(stderr, "%s: %s\n", program, keystr);
+		fprintf(stderr, "%s: %s\n", isc_commandline_progname, keystr);
 	}
 
 	result = dst_key_todns(key, &keyb);
@@ -227,13 +227,13 @@ logkey(dns_rdata_t *rdata) {
 
 	isc_buffer_init(&buf, rdata->data, rdata->length);
 	isc_buffer_add(&buf, rdata->length);
-	result = dst_key_fromdns(name, rdclass, &buf, mctx, &key);
+	result = dst_key_fromdns(name, rdclass, &buf, isc_g_mctx, &key);
 	if (result != ISC_R_SUCCESS) {
 		return;
 	}
 
 	dst_key_format(key, keystr, sizeof(keystr));
-	fprintf(stderr, "%s: %s\n", program, keystr);
+	fprintf(stderr, "%s: %s\n", isc_commandline_progname, keystr);
 
 	dst_key_free(&key);
 }
@@ -269,18 +269,18 @@ emit(dns_dsdigest_t dt, bool showall, bool cds, dns_rdata_t *rdata) {
 		return;
 	}
 
-	result = dns_ds_buildrdata(name, rdata, dt, buf, &ds);
+	result = dns_ds_buildrdata(name, rdata, dt, buf, sizeof(buf), &ds);
 	if (result != ISC_R_SUCCESS) {
 		fatal("can't build record");
 	}
 
-	result = dns_name_totext(name, false, &nameb);
+	result = dns_name_totext(name, 0, &nameb);
 	if (result != ISC_R_SUCCESS) {
 		fatal("can't print name");
 	}
 
-	result = dns_rdata_tofmttext(&ds, (dns_name_t *)NULL, 0, 0, 0, "",
-				     &textb);
+	result = dns_rdata_tofmttext(&ds, (dns_name_t *)NULL, 0, 0, split_width,
+				     "", &textb);
 
 	if (result != ISC_R_SUCCESS) {
 		fatal("can't print rdata");
@@ -317,28 +317,36 @@ emits(bool showall, bool cds, dns_rdata_t *rdata) {
 
 	n = sizeof(dtype) / sizeof(dtype[0]);
 	for (i = 0; i < n; i++) {
+		if (dtype[i] == DNS_DSDIGEST_SHA1) {
+			fprintf(stderr,
+				"WARNING: DS digest type %u is deprecated\n",
+				i);
+		}
 		if (dtype[i] != 0) {
 			emit(dtype[i], showall, cds, rdata);
 		}
 	}
 }
 
-noreturn static void
+ISC_NORETURN static void
 usage(void);
 
 static void
 usage(void) {
 	fprintf(stderr, "Usage:\n");
-	fprintf(stderr, "    %s [options] keyfile\n\n", program);
-	fprintf(stderr, "    %s [options] -f zonefile [zonename]\n\n", program);
-	fprintf(stderr, "    %s [options] -s dnsname\n\n", program);
-	fprintf(stderr, "    %s [-h|-V]\n\n", program);
+	fprintf(stderr, "    %s [options] keyfile\n\n",
+		isc_commandline_progname);
+	fprintf(stderr, "    %s [options] -f zonefile [zonename]\n\n",
+		isc_commandline_progname);
+	fprintf(stderr, "    %s [options] -s dnsname\n\n",
+		isc_commandline_progname);
+	fprintf(stderr, "    %s [-h|-V]\n\n", isc_commandline_progname);
 	fprintf(stderr, "Version: %s\n", PACKAGE_VERSION);
 	fprintf(stderr, "Options:\n"
-			"    -1: digest algorithm SHA-1\n"
+			"    -1: digest algorithm SHA-1 (deprecated)\n"
 			"    -2: digest algorithm SHA-256\n"
-			"    -a algorithm: digest algorithm (SHA-1, SHA-256 or "
-			"SHA-384)\n"
+			"    -a algorithm: digest algorithm (SHA-1 "
+			"(deprecated), SHA-256 or SHA-384)\n"
 			"    -A: include all keys in DS set, not just KSKs (-f "
 			"only)\n"
 			"    -c class: rdata class for DS set (default IN) (-f "
@@ -347,13 +355,14 @@ usage(void) {
 			"    -f zonefile: read keys from a zone file\n"
 			"    -h: print help information\n"
 			"    -K directory: where to find key or keyset files\n"
+			"    -w split base64 rdata text into chunks\n"
 			"    -s: read keys from keyset-<dnsname> file\n"
 			"    -T: TTL of output records (omitted by default)\n"
 			"    -v level: verbosity\n"
 			"    -V: print version information\n");
 	fprintf(stderr, "Output: DS or CDS RRs\n");
 
-	exit(-1);
+	exit(EXIT_FAILURE);
 }
 
 int
@@ -366,21 +375,17 @@ main(int argc, char **argv) {
 	bool usekeyset = false;
 	bool showall = false;
 	isc_result_t result;
-	isc_log_t *log = NULL;
 	dns_rdataset_t rdataset;
-	dns_rdata_t rdata;
-
-	dns_rdata_init(&rdata);
 
 	if (argc == 1) {
 		usage();
 	}
 
-	isc_mem_create(&mctx);
+	isc_commandline_init(argc, argv);
 
 	isc_commandline_errprint = false;
 
-#define OPTIONS "12Aa:Cc:d:Ff:K:l:sT:v:hV"
+#define OPTIONS "12Aa:Cc:d:Ff:K:sT:v:whV"
 	while ((ch = isc_commandline_parse(argc, argv, OPTIONS)) != -1) {
 		switch (ch) {
 		case '1':
@@ -405,7 +410,7 @@ main(int argc, char **argv) {
 			fprintf(stderr,
 				"%s: the -d option is deprecated; "
 				"use -K\n",
-				program);
+				isc_commandline_progname);
 		/* fall through */
 		case 'K':
 			dir = isc_commandline_argument;
@@ -415,9 +420,6 @@ main(int argc, char **argv) {
 			break;
 		case 'f':
 			filename = isc_commandline_argument;
-			break;
-		case 'l':
-			fatal("-l option (DLV lookaside) is obsolete");
 			break;
 		case 's':
 			usekeyset = true;
@@ -432,13 +434,17 @@ main(int argc, char **argv) {
 				fatal("-v must be followed by a number");
 			}
 			break;
+		case 'w':
+			split_width = UINT_MAX;
+			break;
 		case 'F':
 			/* Reserved for FIPS mode */
 			FALLTHROUGH;
 		case '?':
 			if (isc_commandline_option != '?') {
 				fprintf(stderr, "%s: invalid argument -%c\n",
-					program, isc_commandline_option);
+					isc_commandline_progname,
+					isc_commandline_option);
 			}
 			FALLTHROUGH;
 		case 'h':
@@ -447,12 +453,13 @@ main(int argc, char **argv) {
 
 		case 'V':
 			/* Does not return. */
-			version(program);
+			version(isc_commandline_progname);
 
 		default:
-			fprintf(stderr, "%s: unhandled option -%c\n", program,
+			fprintf(stderr, "%s: unhandled option -%c\n",
+				isc_commandline_progname,
 				isc_commandline_option);
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 	}
 
@@ -484,13 +491,7 @@ main(int argc, char **argv) {
 		fatal("extraneous arguments");
 	}
 
-	result = dst_lib_init(mctx, NULL);
-	if (result != ISC_R_SUCCESS) {
-		fatal("could not initialize dst: %s",
-		      isc_result_totext(result));
-	}
-
-	setup_logging(mctx, &log);
+	setup_logging();
 
 	dns_rdataset_init(&rdataset);
 
@@ -519,11 +520,8 @@ main(int argc, char **argv) {
 			      isc_result_totext(result));
 		}
 
-		for (result = dns_rdataset_first(&rdataset);
-		     result == ISC_R_SUCCESS;
-		     result = dns_rdataset_next(&rdataset))
-		{
-			dns_rdata_init(&rdata);
+		DNS_RDATASET_FOREACH (&rdataset) {
+			dns_rdata_t rdata = DNS_RDATA_INIT;
 			dns_rdataset_current(&rdataset, &rdata);
 
 			if (verbose > 2) {
@@ -534,6 +532,7 @@ main(int argc, char **argv) {
 		}
 	} else {
 		unsigned char key_buf[DST_KEY_MAXSIZE];
+		dns_rdata_t rdata = DNS_RDATA_INIT;
 
 		loadkey(arg1, key_buf, DST_KEY_MAXSIZE, &rdata);
 
@@ -543,18 +542,15 @@ main(int argc, char **argv) {
 	if (dns_rdataset_isassociated(&rdataset)) {
 		dns_rdataset_disassociate(&rdataset);
 	}
-	cleanup_logging(&log);
-	dst_lib_destroy();
 	if (verbose > 10) {
-		isc_mem_stats(mctx, stdout);
+		isc_mem_stats(isc_g_mctx, stdout);
 	}
-	isc_mem_destroy(&mctx);
 
 	fflush(stdout);
 	if (ferror(stdout)) {
 		fprintf(stderr, "write error\n");
-		return (1);
+		return 1;
 	} else {
-		return (0);
+		return 0;
 	}
 }

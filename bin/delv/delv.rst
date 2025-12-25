@@ -21,7 +21,7 @@ delv - DNS lookup and validation utility
 Synopsis
 ~~~~~~~~
 
-:program:`delv` [@server] [ [**-4**] | [**-6**] ] [**-a** anchor-file] [**-b** address] [**-c** class] [**-d** level] [**-i**] [**-m**] [**-p** port#] [**-q** name] [**-t** type] [**-x** addr] [name] [type] [class] [queryopt...]
+:program:`delv` [@server] [ [**-4**] | [**-6**] ] [**-a** anchor-file] [**-b** address] [**-c** class] [**-d** level] [**-F**] [**-i**] [**-m**] [**-p** port#] [**-q** name] [**-t** type] [**-x** addr] [name] [type] [class] [queryopt...]
 
 :program:`delv` [**-h**]
 
@@ -137,6 +137,10 @@ Options
    :program:`delv` become more verbose as the debug level increases. See the
    :option:`+mtrace`, :option:`+rtrace`, and :option:`+vtrace` options below for
    additional debugging details.
+
+.. option:: -F
+
+   This option enables FIPS mode if supported by the cryptographic library in use.
 
 .. option:: -h
 
@@ -293,7 +297,7 @@ assign values to options like the timeout interval. They have the form
 
    This option toggles logging of messages sent. This produces a detailed
    dump of the queries sent by :program:`delv` in the process of carrying
-   out the resolution and validation process. Turning on this option 
+   out the resolution and validation process. Turning on this option
    also activates ``+mtrace``.
 
    This is equivalent to setting the debug level to 11 for the "packets"
@@ -336,6 +340,23 @@ assign values to options like the timeout interval. They have the form
    common failures. The default is to display the fields. When omitted,
    they are replaced by the string ``[omitted]`` or, in the DNSKEY case, the
    key ID is displayed as the replacement, e.g. ``[ key id = value ]``.
+
+.. option:: +restarts
+
+   When name server mode (``delv +ns``) is in use, this option sets the
+   maximum number of CNAME queries to follow before terminating resolution.
+   This prevents ``delv`` from hanging in the event of a CNAME loop.
+   The default is 11.
+
+.. option:: +maxqueries
+
+   This option specifies the maximum number of queries to send to resolve
+   a name before giving up. The default is 50.
+
+.. option:: +maxtotalqueries
+
+   This option specifies the maximum number of queries to send to resolve
+   a client request before giving up. The default is 200.
 
 .. option:: +trust, +notrust
 

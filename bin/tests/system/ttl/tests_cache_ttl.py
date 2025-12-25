@@ -11,9 +11,7 @@
 
 import pytest
 
-pytest.importorskip("dns")
-import dns.message
-import dns.query
+import isctest
 
 
 @pytest.mark.parametrize(
@@ -25,8 +23,8 @@ import dns.query
         ("max-example.", "MX", 60),
     ],
 )
-def test_cache_ttl(qname, rdtype, expected_ttl, named_port):
-    msg = dns.message.make_query(qname, rdtype)
-    response = dns.query.udp(msg, "10.53.0.2", timeout=10, port=named_port)
+def test_cache_ttl(qname, rdtype, expected_ttl):
+    msg = isctest.query.create(qname, rdtype)
+    response = isctest.query.udp(msg, "10.53.0.2")
     for rr in response.answer + response.authority:
         assert rr.ttl == expected_ttl

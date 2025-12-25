@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -29,36 +30,22 @@
 #define UNIT_TESTING
 #include <cmocka.h>
 
+#include <isc/crypto.h>
 #include <isc/file.h>
 #include <isc/hex.h>
+#include <isc/lib.h>
 #include <isc/result.h>
 #include <isc/stdio.h>
 #include <isc/string.h>
 #include <isc/util.h>
+
+#include <dns/lib.h>
 
 #include <dst/dst.h>
 
 #include "dst_internal.h"
 
 #include <tests/dns.h>
-
-static int
-setup_test(void **state) {
-	UNUSED(state);
-
-	dst_lib_init(mctx, NULL);
-
-	return (0);
-}
-
-static int
-teardown_test(void **state) {
-	UNUSED(state);
-
-	dst_lib_destroy();
-
-	return (0);
-}
 
 /* Read sig in file at path to buf. Check signature ineffability */
 static isc_result_t
@@ -76,7 +63,7 @@ sig_fromfile(const char *path, isc_buffer_t *buf) {
 	result = isc_file_getsizefd(fileno(fp), &size);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
-	data = isc_mem_get(mctx, (size + 1));
+	data = isc_mem_get(isc_g_mctx, size + 1);
 	assert_non_null(data);
 
 	len = (size_t)size;
@@ -126,8 +113,8 @@ sig_fromfile(const char *path, isc_buffer_t *buf) {
 	result = ISC_R_SUCCESS;
 
 err:
-	isc_mem_put(mctx, data, size + 1);
-	return (result);
+	isc_mem_put(isc_g_mctx, data, size + 1);
+	return result;
 }
 
 static void
@@ -157,7 +144,7 @@ check_sig(const char *datapath, const char *sigpath, const char *keyname,
 	result = isc_file_getsizefd(fileno(fp), &size);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
-	data = isc_mem_get(mctx, (size + 1));
+	data = isc_mem_get(isc_g_mctx, size + 1);
 	assert_non_null(data);
 
 	p = data;
@@ -176,10 +163,10 @@ check_sig(const char *datapath, const char *sigpath, const char *keyname,
 	name = dns_fixedname_initname(&fname);
 	isc_buffer_constinit(&b, keyname, strlen(keyname));
 	isc_buffer_add(&b, strlen(keyname));
-	result = dns_name_fromtext(name, &b, dns_rootname, 0, NULL);
+	result = dns_name_fromtext(name, &b, dns_rootname, 0);
 	assert_int_equal(result, ISC_R_SUCCESS);
 	result = dst_key_fromfile(name, id, alg, type,
-				  TESTS_DIR "/testdata/dst", mctx, &key);
+				  TESTS_DIR "/testdata/dst", isc_g_mctx, &key);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	isc_buffer_init(&databuf, data, (unsigned int)size);
@@ -200,8 +187,8 @@ check_sig(const char *datapath, const char *sigpath, const char *keyname,
 	 */
 	isc_buffer_remainingregion(&sigbuf, &sigreg);
 
-	result = dst_context_create(key, mctx, DNS_LOGCATEGORY_GENERAL, false,
-				    0, &ctx);
+	result = dst_context_create(key, isc_g_mctx, DNS_LOGCATEGORY_GENERAL,
+				    false, &ctx);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	result = dst_context_adddata(ctx, &datareg);
@@ -218,8 +205,8 @@ check_sig(const char *datapath, const char *sigpath, const char *keyname,
 		isc_result_t result2;
 
 		dst_context_destroy(&ctx);
-		result2 = dst_context_create(key, mctx, DNS_LOGCATEGORY_GENERAL,
-					     false, 0, &ctx);
+		result2 = dst_context_create(
+			key, isc_g_mctx, DNS_LOGCATEGORY_GENERAL, false, &ctx);
 		assert_int_equal(result2, ISC_R_SUCCESS);
 
 		result2 = dst_context_adddata(ctx, &datareg);
@@ -244,7 +231,7 @@ check_sig(const char *datapath, const char *sigpath, const char *keyname,
 		fprintf(stderr, "# %s:\n# %s\n", sigpath, hexbuf);
 	}
 
-	isc_mem_put(mctx, data, size + 1);
+	isc_mem_put(isc_g_mctx, data, size + 1);
 	dst_context_destroy(&ctx);
 	dst_key_free(&key);
 
@@ -311,10 +298,10 @@ check_cmp(const char *key1_name, dns_keytag_t key1_id, const char *key2_name,
 	name1 = dns_fixedname_initname(&fname1);
 	isc_buffer_constinit(&b1, key1_name, strlen(key1_name));
 	isc_buffer_add(&b1, strlen(key1_name));
-	result = dns_name_fromtext(name1, &b1, dns_rootname, 0, NULL);
+	result = dns_name_fromtext(name1, &b1, dns_rootname, 0);
 	assert_int_equal(result, ISC_R_SUCCESS);
 	result = dst_key_fromfile(name1, key1_id, alg, type,
-				  TESTS_DIR "/comparekeys", mctx, &key1);
+				  TESTS_DIR "/comparekeys", isc_g_mctx, &key1);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	/*
@@ -323,10 +310,10 @@ check_cmp(const char *key1_name, dns_keytag_t key1_id, const char *key2_name,
 	name2 = dns_fixedname_initname(&fname2);
 	isc_buffer_constinit(&b2, key2_name, strlen(key2_name));
 	isc_buffer_add(&b2, strlen(key2_name));
-	result = dns_name_fromtext(name2, &b2, dns_rootname, 0, NULL);
+	result = dns_name_fromtext(name2, &b2, dns_rootname, 0);
 	assert_int_equal(result, ISC_R_SUCCESS);
 	result = dst_key_fromfile(name2, key2_id, alg, type,
-				  TESTS_DIR "/comparekeys", mctx, &key2);
+				  TESTS_DIR "/comparekeys", isc_g_mctx, &key2);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	/*
@@ -438,9 +425,71 @@ ISC_RUN_TEST_IMPL(cmp_test) {
 	}
 }
 
+ISC_RUN_TEST_IMPL(ecdsa_determinism_test) {
+	isc_result_t result;
+	isc_buffer_t *sigbuf1 = NULL, *sigbuf2 = NULL;
+	isc_buffer_t databuf, keybuf;
+	isc_region_t datareg;
+	dns_fixedname_t fname;
+	dns_name_t *name = NULL;
+	dst_key_t *key = NULL;
+	dst_context_t *ctx = NULL;
+	unsigned int siglen;
+
+	const char *data = "these are some bytes to sign";
+
+	isc_buffer_constinit(&databuf, data, strlen(data));
+	isc_buffer_add(&databuf, strlen(data));
+	isc_buffer_region(&databuf, &datareg);
+
+	name = dns_fixedname_initname(&fname);
+	isc_buffer_constinit(&keybuf, "example.", strlen("example."));
+	isc_buffer_add(&keybuf, strlen("example."));
+	result = dns_name_fromtext(name, &keybuf, dns_rootname, 0);
+	assert_int_equal(result, ISC_R_SUCCESS);
+	result = dst_key_fromfile(name, 19786, DST_ALG_ECDSA256,
+				  DST_TYPE_PUBLIC | DST_TYPE_PRIVATE,
+				  TESTS_DIR "/comparekeys", isc_g_mctx, &key);
+	assert_int_equal(result, ISC_R_SUCCESS);
+	result = dst_key_sigsize(key, &siglen);
+	assert_int_equal(result, ISC_R_SUCCESS);
+
+	isc_buffer_allocate(isc_g_mctx, &sigbuf1, siglen);
+	result = dst_context_create(key, isc_g_mctx, DNS_LOGCATEGORY_GENERAL,
+				    true, &ctx);
+	assert_int_equal(result, ISC_R_SUCCESS);
+	result = dst_context_sign(ctx, sigbuf1);
+	assert_int_equal(result, ISC_R_SUCCESS);
+	dst_context_destroy(&ctx);
+
+	isc_buffer_allocate(isc_g_mctx, &sigbuf2, siglen);
+	result = dst_context_create(key, isc_g_mctx, DNS_LOGCATEGORY_GENERAL,
+				    true, &ctx);
+	assert_int_equal(result, ISC_R_SUCCESS);
+	result = dst_context_sign(ctx, sigbuf2);
+	assert_int_equal(result, ISC_R_SUCCESS);
+	dst_context_destroy(&ctx);
+
+#if OPENSSL_VERSION_NUMBER >= 0x30200000L
+	if (isc_crypto_fips_mode()) {
+		assert_memory_not_equal(sigbuf1->base, sigbuf2->base, siglen);
+	} else {
+		assert_memory_equal(sigbuf1->base, sigbuf2->base, siglen);
+	}
+#else
+	assert_memory_not_equal(sigbuf1->base, sigbuf2->base, siglen);
+#endif
+
+	isc_buffer_free(&sigbuf1);
+	isc_buffer_free(&sigbuf2);
+
+	dst_key_free(&key);
+}
+
 ISC_TEST_LIST_START
-ISC_TEST_ENTRY_CUSTOM(sig_test, setup_test, teardown_test)
-ISC_TEST_ENTRY_CUSTOM(cmp_test, setup_test, teardown_test)
+ISC_TEST_ENTRY(sig_test)
+ISC_TEST_ENTRY(cmp_test)
+ISC_TEST_ENTRY(ecdsa_determinism_test)
 ISC_TEST_LIST_END
 
 ISC_TEST_MAIN

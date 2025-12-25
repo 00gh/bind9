@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -24,12 +25,14 @@
 #include <cmocka.h>
 
 #include <isc/dir.h>
+#include <isc/lib.h>
 #include <isc/string.h>
 #include <isc/util.h>
 
 #include <dns/cache.h>
 #include <dns/callbacks.h>
 #include <dns/db.h>
+#include <dns/lib.h>
 #include <dns/master.h>
 #include <dns/masterdump.h>
 #include <dns/name.h>
@@ -52,9 +55,9 @@ nullmsg(dns_rdatacallbacks_t *cb, const char *fmt, ...) {
 static dns_masterrawheader_t header;
 static bool headerset;
 
-dns_name_t dns_origin;
+dns_fixedname_t dns_fixed;
+dns_name_t *dns_origin = NULL;
 char origin[sizeof(TEST_ORIGIN)];
-unsigned char name_buf[BUFLEN];
 dns_rdatacallbacks_t callbacks;
 char *include_file = NULL;
 
@@ -72,7 +75,7 @@ add_callback(void *arg, const dns_name_t *owner,
 
 	isc_buffer_init(&target, buf, BIGBUFLEN);
 	result = dns_rdataset_totext(dataset, owner, false, false, &target);
-	return (result);
+	return result;
 }
 
 static void
@@ -88,21 +91,18 @@ setup_master(void (*warn)(struct dns_rdatacallbacks *, const char *, ...),
 	isc_result_t result;
 	int len;
 	isc_buffer_t source;
-	isc_buffer_t target;
 
+	dns_origin = dns_fixedname_initname(&dns_fixed);
 	strlcpy(origin, TEST_ORIGIN, sizeof(origin));
 	len = strlen(origin);
 	isc_buffer_init(&source, origin, len);
 	isc_buffer_add(&source, len);
 	isc_buffer_setactive(&source, len);
-	isc_buffer_init(&target, name_buf, BUFLEN);
-	dns_name_init(&dns_origin, NULL);
 	dns_master_initrawheader(&header);
 
-	result = dns_name_fromtext(&dns_origin, &source, dns_rootname, 0,
-				   &target);
+	result = dns_name_fromtext(dns_origin, &source, dns_rootname, 0);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	dns_rdatacallbacks_init_stdio(&callbacks);
@@ -116,7 +116,7 @@ setup_master(void (*warn)(struct dns_rdatacallbacks *, const char *, ...),
 		callbacks.error = error;
 	}
 	headerset = false;
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -128,7 +128,7 @@ test_master(const char *workdir, const char *testfile,
 
 	result = setup_master(warn, error);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	dns_rdatacallbacks_init_stdio(&callbacks);
@@ -145,21 +145,21 @@ test_master(const char *workdir, const char *testfile,
 	if (workdir != NULL) {
 		result = isc_dir_chdir(workdir);
 		if (result != ISC_R_SUCCESS) {
-			return (result);
+			return result;
 		}
 	}
 
-	result = dns_master_loadfile(testfile, &dns_origin, &dns_origin,
+	result = dns_master_loadfile(testfile, dns_origin, dns_origin,
 				     dns_rdataclass_in, true, 0, &callbacks,
-				     NULL, NULL, mctx, format, 0);
+				     NULL, NULL, isc_g_mctx, format, 0);
 
-	return (result);
+	return result;
 }
 
 static void
 include_callback(const char *filename, void *arg) {
 	char **argp = (char **)arg;
-	*argp = isc_mem_strdup(mctx, filename);
+	*argp = isc_mem_strdup(isc_g_mctx, filename);
 }
 
 /*
@@ -324,15 +324,16 @@ ISC_RUN_TEST_IMPL(master_includelist) {
 	result = isc_dir_chdir(SRCDIR);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
-	result = dns_master_loadfile(
-		TESTS_DIR "/testdata/master/master8.data", &dns_origin,
-		&dns_origin, dns_rdataclass_in, 0, true, &callbacks,
-		include_callback, &filename, mctx, dns_masterformat_text, 0);
+	result = dns_master_loadfile(TESTS_DIR "/testdata/master/master8.data",
+				     dns_origin, dns_origin, dns_rdataclass_in,
+				     0, true, &callbacks, include_callback,
+				     &filename, isc_g_mctx,
+				     dns_masterformat_text, 0);
 	assert_int_equal(result, DNS_R_SEENINCLUDE);
 	assert_non_null(filename);
 	if (filename != NULL) {
 		assert_string_equal(filename, "testdata/master/master6.data");
-		isc_mem_free(mctx, filename);
+		isc_mem_free(isc_g_mctx, filename);
 	}
 }
 
@@ -452,27 +453,15 @@ ISC_RUN_TEST_IMPL(dumpraw) {
 	isc_result_t result;
 	dns_db_t *db = NULL;
 	dns_dbversion_t *version = NULL;
-	char myorigin[sizeof(TEST_ORIGIN)];
-	dns_name_t dnsorigin;
-	isc_buffer_t source, target;
-	unsigned char namebuf[BUFLEN];
-	int len;
 
 	UNUSED(state);
 
-	strlcpy(myorigin, TEST_ORIGIN, sizeof(myorigin));
-	len = strlen(myorigin);
-	isc_buffer_init(&source, myorigin, len);
-	isc_buffer_add(&source, len);
-	isc_buffer_setactive(&source, len);
-	isc_buffer_init(&target, namebuf, BUFLEN);
-	dns_name_init(&dnsorigin, NULL);
-	result = dns_name_fromtext(&dnsorigin, &source, dns_rootname, 0,
-				   &target);
+	result = setup_master(nullmsg, nullmsg);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
-	result = dns_db_create(mctx, "rbt", &dnsorigin, dns_dbtype_zone,
-			       dns_rdataclass_in, 0, NULL, &db);
+	result = dns_db_create(isc_g_mctx, ZONEDB_DEFAULT, dns_origin,
+			       dns_dbtype_zone, dns_rdataclass_in, 0, NULL,
+			       &db);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	result = isc_dir_chdir(SRCDIR);
@@ -487,8 +476,9 @@ ISC_RUN_TEST_IMPL(dumpraw) {
 
 	dns_db_currentversion(db, &version);
 
-	result = dns_master_dump(mctx, db, version, &dns_master_style_default,
-				 "test.dump", dns_masterformat_raw, NULL);
+	result = dns_master_dump(isc_g_mctx, db, version,
+				 &dns_master_style_default, "test.dump",
+				 dns_masterformat_raw, NULL);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	result = test_master(NULL, "test.dump", dns_masterformat_raw, nullmsg,
@@ -502,8 +492,9 @@ ISC_RUN_TEST_IMPL(dumpraw) {
 	header.flags |= DNS_MASTERRAW_SOURCESERIALSET;
 
 	unlink("test.dump");
-	result = dns_master_dump(mctx, db, version, &dns_master_style_default,
-				 "test.dump", dns_masterformat_raw, &header);
+	result = dns_master_dump(isc_g_mctx, db, version,
+				 &dns_master_style_default, "test.dump",
+				 dns_masterformat_raw, &header);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	result = test_master(NULL, "test.dump", dns_masterformat_raw, nullmsg,

@@ -51,7 +51,8 @@ main() {
 	unsigned int siglen = sizeof(buf);
 
 	if (e == NULL || n == NULL || ctx == NULL || evp_md_ctx == NULL) {
-		return (1);
+		ERR_clear_error();
+		return 1;
 	}
 
 	BN_set_bit(e, 0);
@@ -62,12 +63,14 @@ main() {
 	    EVP_PKEY_CTX_set1_rsa_keygen_pubexp(ctx, e) != 1 ||
 	    EVP_PKEY_keygen(ctx, &pkey) != 1 || pkey == NULL)
 	{
-		return (1);
+		ERR_clear_error();
+		return 1;
 	}
 
 	EVP_PKEY_get_bn_param(pkey, OSSL_PKEY_PARAM_RSA_N, &n);
 	if (n == NULL) {
-		return (1);
+		ERR_clear_error();
+		return 1;
 	}
 
 	bytes = BN_num_bytes(e);
@@ -90,7 +93,8 @@ main() {
 	    EVP_DigestUpdate(evp_md_ctx, "test", 4) != 1 ||
 	    EVP_SignFinal(evp_md_ctx, buf, &siglen, pkey) != 1)
 	{
-		return (1);
+		ERR_clear_error();
+		return 1;
 	}
 	bytes = siglen;
 	printf("unsigned char sha1_sig[] = \"");
@@ -103,7 +107,8 @@ main() {
 	    EVP_DigestUpdate(evp_md_ctx, "test", 4) != 1 ||
 	    EVP_SignFinal(evp_md_ctx, buf, &siglen, pkey) != 1)
 	{
-		return (1);
+		ERR_clear_error();
+		return 1;
 	}
 	bytes = siglen;
 	printf("unsigned char sha256_sig[] = \"");
@@ -116,7 +121,8 @@ main() {
 	    EVP_DigestUpdate(evp_md_ctx, "test", 4) != 1 ||
 	    EVP_SignFinal(evp_md_ctx, buf, &siglen, pkey) != 1)
 	{
-		return (1);
+		ERR_clear_error();
+		return 1;
 	}
 	bytes = siglen;
 	printf("unsigned char sha512_sig[] = \"");
@@ -125,5 +131,8 @@ main() {
 	}
 	printf("\";\n\n");
 
-	return (0);
+	EVP_MD_CTX_free(evp_md_ctx);
+	EVP_PKEY_free(pkey);
+
+	return 0;
 }

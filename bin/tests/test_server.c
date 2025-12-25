@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <strings.h>
 
+#include <isc/lib.h>
 #include <isc/managers.h>
 #include <isc/mem.h>
 #include <isc/netaddr.h>
@@ -31,10 +32,6 @@
 typedef enum { UDP, TCP, DOT, HTTPS, HTTP } protocol_t;
 
 static const char *protocols[] = { "udp", "tcp", "dot", "https", "http-plain" };
-
-static isc_mem_t *mctx = NULL;
-static isc_loopmgr_t *loopmgr = NULL;
-static isc_nm_t *netmgr = NULL;
 
 static protocol_t protocol;
 static in_port_t port;
@@ -56,12 +53,12 @@ parse_port(const char *input) {
 	long val = strtol(input, &endptr, 10);
 
 	if ((*endptr != '\0') || (val <= 0) || (val >= 65536)) {
-		return (ISC_R_BADNUMBER);
+		return ISC_R_BADNUMBER;
 	}
 
 	port = (in_port_t)val;
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -69,11 +66,11 @@ parse_protocol(const char *input) {
 	for (size_t i = 0; i < ARRAY_SIZE(protocols); i++) {
 		if (!strcasecmp(input, protocols[i])) {
 			protocol = i;
-			return (ISC_R_SUCCESS);
+			return ISC_R_SUCCESS;
 		}
 	}
 
-	return (ISC_R_BADNUMBER);
+	return ISC_R_BADNUMBER;
 }
 
 static isc_result_t
@@ -83,15 +80,15 @@ parse_address(const char *input) {
 
 	if (inet_pton(AF_INET6, input, &in6) == 1) {
 		isc_netaddr_fromin6(&netaddr, &in6);
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	if (inet_pton(AF_INET, input, &in) == 1) {
 		isc_netaddr_fromin(&netaddr, &in);
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
-	return (ISC_R_BADADDRESSFORM);
+	return ISC_R_BADADDRESSFORM;
 }
 
 static int
@@ -100,12 +97,12 @@ parse_workers(const char *input) {
 	long val = strtol(input, &endptr, 10);
 
 	if ((*endptr != '\0') || (val <= 0) || (val >= 128)) {
-		return (ISC_R_BADNUMBER);
+		return ISC_R_BADNUMBER;
 	}
 
 	workers = val;
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static void
@@ -167,7 +164,7 @@ parse_options(int argc, char **argv) {
 
 static void
 setup(void) {
-	isc_managers_create(&mctx, workers, &loopmgr, &netmgr);
+	isc_managers_create(workers);
 }
 
 static void
@@ -176,7 +173,7 @@ teardown(void) {
 		isc_tlsctx_free(&tls_ctx);
 	}
 
-	isc_managers_destroy(&mctx, &loopmgr, &netmgr);
+	isc_managers_destroy();
 }
 
 static void
@@ -209,7 +206,7 @@ read_cb(isc_nmhandle_t *handle, isc_result_t eresult, isc_region_t *region,
 		((uint8_t *)region->base)[2] ^= 0x80;
 	}
 
-	reply = isc_mem_get(mctx, sizeof(isc_region_t) + region->length);
+	reply = isc_mem_get(isc_g_mctx, sizeof(isc_region_t) + region->length);
 	reply->length = region->length;
 	reply->base = (uint8_t *)reply + sizeof(isc_region_t);
 	memmove(reply->base, region->base, region->length);
@@ -225,7 +222,7 @@ send_cb(isc_nmhandle_t *handle, isc_result_t eresult, void *cbarg) {
 	REQUIRE(handle != NULL);
 	REQUIRE(eresult == ISC_R_SUCCESS);
 
-	isc_mem_put(mctx, cbarg, sizeof(isc_region_t) + reply->length);
+	isc_mem_put(isc_g_mctx, cbarg, sizeof(isc_region_t) + reply->length);
 }
 
 static isc_result_t
@@ -234,7 +231,7 @@ accept_cb(isc_nmhandle_t *handle, isc_result_t eresult, void *cbarg) {
 	REQUIRE(eresult == ISC_R_SUCCESS);
 	UNUSED(cbarg);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static void
@@ -244,20 +241,20 @@ run(void) {
 
 	switch (protocol) {
 	case UDP:
-		result = isc_nm_listenudp(netmgr, ISC_NM_LISTEN_ALL, &sockaddr,
-					  read_cb, NULL, &sock);
+		result = isc_nm_listenudp(ISC_NM_LISTEN_ALL, &sockaddr, read_cb,
+					  NULL, &sock);
 		break;
 	case TCP:
 		result = isc_nm_listenstreamdns(
-			netmgr, ISC_NM_LISTEN_ALL, &sockaddr, read_cb, NULL,
-			accept_cb, NULL, 0, NULL, NULL, &sock);
+			ISC_NM_LISTEN_ALL, &sockaddr, read_cb, NULL, accept_cb,
+			NULL, 0, NULL, NULL, ISC_NM_PROXY_NONE, &sock);
 		break;
 	case DOT: {
 		isc_tlsctx_createserver(NULL, NULL, &tls_ctx);
 
 		result = isc_nm_listenstreamdns(
-			netmgr, ISC_NM_LISTEN_ALL, &sockaddr, read_cb, NULL,
-			accept_cb, NULL, 0, NULL, tls_ctx, &sock);
+			ISC_NM_LISTEN_ALL, &sockaddr, read_cb, NULL, accept_cb,
+			NULL, 0, NULL, tls_ctx, ISC_NM_PROXY_NONE, &sock);
 		break;
 	}
 #if HAVE_LIBNGHTTP2
@@ -268,14 +265,14 @@ run(void) {
 		if (is_https) {
 			isc_tlsctx_createserver(NULL, NULL, &tls_ctx);
 		}
-		eps = isc_nm_http_endpoints_new(mctx);
+		eps = isc_nm_http_endpoints_new(isc_g_mctx);
 		result = isc_nm_http_endpoints_add(
 			eps, ISC_NM_HTTP_DEFAULT_PATH, read_cb, NULL);
 
 		if (result == ISC_R_SUCCESS) {
-			result = isc_nm_listenhttp(netmgr, ISC_NM_LISTEN_ALL,
-						   &sockaddr, 0, NULL, tls_ctx,
-						   eps, 0, &sock);
+			result = isc_nm_listenhttp(ISC_NM_LISTEN_ALL, &sockaddr,
+						   0, NULL, tls_ctx, eps, 0,
+						   ISC_NM_PROXY_NONE, &sock);
 		}
 		isc_nm_http_endpoints_detach(&eps);
 	} break;
@@ -301,5 +298,5 @@ main(int argc, char **argv) {
 
 	teardown();
 
-	exit(EXIT_SUCCESS);
+	return EXIT_SUCCESS;
 }

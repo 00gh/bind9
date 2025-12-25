@@ -21,10 +21,11 @@
 #include <isc/refcount.h>
 #include <isc/region.h>
 #include <isc/result.h>
+#include <isc/sockaddr.h>
 #include <isc/tls.h>
 #include <isc/types.h>
 
-#undef ISC_NETMGR_TRACE
+/* Add -DISC_NETMGR_TRACE=1 to CFLAGS for detailed reference tracing */
 
 #if defined(SO_REUSEPORT_LB) || (defined(SO_REUSEPORT) && defined(__linux__))
 #define HAVE_SO_REUSEPORT_LB 1
@@ -87,24 +88,45 @@ typedef void (*isc_nm_opaquecb_t)(void *arg);
  * callbacks.
  */
 
+typedef struct isc_nm_proxyheader_info {
+	bool complete;
+	union {
+		isc_region_t complete_header; /* complete header data */
+		struct {
+			isc_sockaddr_t src_addr;
+			isc_sockaddr_t dst_addr;
+			isc_region_t   tlv_data;
+		} proxy_info; /* information to put into the new header */
+	};
+} isc_nm_proxyheader_info_t;
+/*%<
+ * Information to put into the PROXYv2 header when establishing a connection.
+ */
+
+typedef enum isc_nm_proxy_type {
+	ISC_NM_PROXY_NONE = 0,
+	ISC_NM_PROXY_PLAIN = 1,
+	ISC_NM_PROXY_ENCRYPTED = 2
+} isc_nm_proxy_type_t;
+/*%<
+ * PROXYv2 support type:
+ *
+ * - ISC_NM_PROXY_NONE - no PROXY headers are expected;
+ * - ISC_NM_PROXY_PLAIN - PROXY headers are sent ahead of any encryption, right
+ *                        after TCP connection establishment;
+ * - ISC_NM_PROXY_ENCRYPTED - PROXY headers are sent after TLS handshakes.
+ */
+
 void
-isc_netmgr_create(isc_mem_t *mctx, isc_loopmgr_t *loopmgr, isc_nm_t **netgmrp);
+isc_netmgr_create(isc_mem_t *mctx);
 /*%<
  * Creates a new network manager and starts it running when loopmgr is started.
  */
 
 void
-isc_netmgr_destroy(isc_nm_t **netmgrp);
+isc_netmgr_destroy(void);
 /*%<
- * Similar to isc_nm_detach(), but requires all other references to be gone.
- */
-
-void
-isc_nm_attach(isc_nm_t *mgr, isc_nm_t **dst);
-void
-isc_nm_detach(isc_nm_t **mgr0);
-/*%<
- * Attach/detach a network manager. When all references have been
+ * Destroy a network manager. When all references have been
  * released, the network manager is shut down, freeing all resources.
  */
 
@@ -229,15 +251,32 @@ isc_nmhandle_localaddr(isc_nmhandle_t *handle);
  * Return the local address for the given handle.
  */
 
-isc_nm_t *
-isc_nmhandle_netmgr(isc_nmhandle_t *handle);
+isc_sockaddr_t
+isc_nmhandle_real_peeraddr(isc_nmhandle_t *handle);
 /*%<
- * Return a pointer to the netmgr object for the given handle.
+ * Return the real (as seen by the OS) peer address for the given
+ * handle even when PROXY protocol is used.
+ *
+ * NOTE: This function is intended mostly for a) implementing PROXYv2
+ * access control facilities and b) logging. Using it for anything
+ * else WILL break PROXYv2 support. Please consider using
+ * 'isc_nmhandle_peeraddr()' instead.
+ */
+isc_sockaddr_t
+isc_nmhandle_real_localaddr(isc_nmhandle_t *handle);
+/*%<
+ * Return the real (as seen by the OS) local address for the given
+ * handle even when PROXY protocol is used.
+ *
+ * NOTE: This function is intended mostly for a) implementing PROXYv2
+ * access control facilities and b) logging. Using it for anything
+ * else WILL break PROXYv2 support. Please consider using
+ * 'isc_nmhandle_localaddr()' instead.
  */
 
 isc_result_t
-isc_nm_listenudp(isc_nm_t *mgr, uint32_t workers, isc_sockaddr_t *iface,
-		 isc_nm_recv_cb_t cb, void *cbarg, isc_nmsocket_t **sockp);
+isc_nm_listenudp(uint32_t workers, isc_sockaddr_t *iface, isc_nm_recv_cb_t cb,
+		 void *cbarg, isc_nmsocket_t **sockp);
 /*%<
  * Start listening for UDP packets on interface 'iface' using net manager
  * 'mgr'.
@@ -249,8 +288,8 @@ isc_nm_listenudp(isc_nm_t *mgr, uint32_t workers, isc_sockaddr_t *iface,
  */
 
 void
-isc_nm_udpconnect(isc_nm_t *mgr, isc_sockaddr_t *local, isc_sockaddr_t *peer,
-		  isc_nm_cb_t cb, void *cbarg, unsigned int timeout);
+isc_nm_udpconnect(isc_sockaddr_t *local, isc_sockaddr_t *peer, isc_nm_cb_t cb,
+		  void *cbarg, unsigned int timeout);
 /*%<
  * Open a UDP socket, bind to 'local' and connect to 'peer', and
  * immediately call 'cb' with a handle so that the caller can begin
@@ -263,7 +302,7 @@ isc_nm_udpconnect(isc_nm_t *mgr, isc_sockaddr_t *local, isc_sockaddr_t *peer,
  */
 
 isc_result_t
-isc_nm_routeconnect(isc_nm_t *mgr, isc_nm_cb_t cb, void *cbarg);
+isc_nm_routeconnect(isc_nm_cb_t cb, void *cbarg);
 /*%<
  * Open a route/netlink socket and call 'cb', so the caller can be
  * begin listening for interface changes.  This behaves similarly to
@@ -271,6 +310,25 @@ isc_nm_routeconnect(isc_nm_t *mgr, isc_nm_cb_t cb, void *cbarg);
  *
  * Returns ISC_R_NOTIMPLEMENTED on systems where route/netlink sockets
  * are not supported.
+ */
+
+isc_result_t
+isc_nm_listenproxyudp(uint32_t workers, isc_sockaddr_t *iface,
+		      isc_nm_recv_cb_t cb, void *cbarg, isc_nmsocket_t **sockp);
+/*%<
+ * The same as `isc_nm_listenudp()`, but PROXYv2 headers are
+ * expected at the beginning of the received datagrams.
+ */
+
+void
+isc_nm_proxyudpconnect(isc_sockaddr_t *local, isc_sockaddr_t *peer,
+		       isc_nm_cb_t cb, void *cbarg, unsigned int timeout,
+		       isc_nm_proxyheader_info_t *proxy_info);
+/*%<
+ * The same as `isc_nm_udpconnect()`, but PROXYv2 headers are added
+ * at the beginning of each sent datagram. The PROXYv2 headers are
+ * created using the data from the `proxy_info` object. If the
+ * object is omitted, then LOCAL PROXYv2 headers are used.
  */
 
 void
@@ -328,7 +386,7 @@ isc_nm_send(isc_nmhandle_t *handle, isc_region_t *region, isc_nm_cb_t cb,
  */
 
 isc_result_t
-isc_nm_listentcp(isc_nm_t *mgr, uint32_t workers, isc_sockaddr_t *iface,
+isc_nm_listentcp(uint32_t workers, isc_sockaddr_t *iface,
 		 isc_nm_accept_cb_t accept_cb, void *accept_cbarg, int backlog,
 		 isc_quota_t *quota, isc_nmsocket_t **sockp);
 /*%<
@@ -347,7 +405,7 @@ isc_nm_listentcp(isc_nm_t *mgr, uint32_t workers, isc_sockaddr_t *iface,
  */
 
 void
-isc_nm_tcpconnect(isc_nm_t *mgr, isc_sockaddr_t *local, isc_sockaddr_t *peer,
+isc_nm_tcpconnect(isc_sockaddr_t *local, isc_sockaddr_t *peer,
 		  isc_nm_cb_t connect_cb, void *connect_cbarg,
 		  unsigned int timeout);
 /*%<
@@ -364,11 +422,11 @@ isc_nm_tcpconnect(isc_nm_t *mgr, isc_sockaddr_t *local, isc_sockaddr_t *peer,
  */
 
 isc_result_t
-isc_nm_listenstreamdns(isc_nm_t *mgr, uint32_t workers, isc_sockaddr_t *iface,
+isc_nm_listenstreamdns(uint32_t workers, isc_sockaddr_t *iface,
 		       isc_nm_recv_cb_t recv_cb, void *recv_cbarg,
 		       isc_nm_accept_cb_t accept_cb, void *accept_cbarg,
 		       int backlog, isc_quota_t *quota, isc_tlsctx_t *tlsctx,
-		       isc_nmsocket_t **sockp);
+		       isc_nm_proxy_type_t proxy_type, isc_nmsocket_t **sockp);
 /*%<
  * Start listening for DNS messages over the TCP interface 'iface', using
  * net manager 'mgr'.
@@ -388,25 +446,128 @@ isc_nm_listenstreamdns(isc_nm_t *mgr, uint32_t workers, isc_sockaddr_t *iface,
  * Passing a non-NULL value as 'tlsctx' instructs the underlying code
  * to create a DNS over TLS listener.
  *
+ * Passing 'proxy == true' instruct the code that a PROXY header is
+ * sent before any data after the connection is accepted.
+ *
  * 'quota' is passed to isc_nm_listentcp() when opening the raw TCP socket.
  */
 
-void
-isc_nm_settimeouts(isc_nm_t *mgr, uint32_t init, uint32_t idle,
-		   uint32_t keepalive, uint32_t advertised);
+isc_result_t
+isc_nm_listenproxystream(uint32_t workers, isc_sockaddr_t *iface,
+			 isc_nm_accept_cb_t accept_cb, void *accept_cbarg,
+			 int backlog, isc_quota_t *quota, isc_tlsctx_t *tlsctx,
+			 isc_nmsocket_t **sockp);
 /*%<
- * Sets the initial, idle, and keepalive timeout values (in milliseconds) to use
- * for TCP connections, and the timeout value to advertise in responses using
- * the EDNS TCP Keepalive option (which should ordinarily be the same
- * as 'keepalive'), in milliseconds.
+ * Start listening for data preceded by a PROXYv2 header over the
+ * TCP or TLS on interface 'iface', using net manager 'mgr'.
+ *
+ * On success, 'sockp' will be updated to contain a new listening TCP
+ * socket.
+ *
+ * When connection is accepted on the socket, 'accept_cb' will be called with
+ * 'accept_cbarg' as its argument. The callback is expected to start a read.
+ *
+ * If 'quota' is not NULL, then the socket is attached to the specified
+ * quota. This allows us to enforce TCP client quota limits.
+ *
+ * If 'tlsctx' is not NULL, then listen for TLS connections. In that
+ * case PROXYv2 headers are expected to be sent encrypted right after
+ * the TLS handshake.
+ */
+
+void
+isc_nm_proxystreamconnect(isc_sockaddr_t *local, isc_sockaddr_t *peer,
+			  isc_nm_cb_t cb, void *cbarg, unsigned int timeout,
+			  isc_tlsctx_t *tlsctx, const char *sni_hostname,
+			  isc_tlsctx_client_session_cache_t *client_sess_cache,
+			  isc_nm_proxyheader_info_t	    *proxy_info);
+/*%<
+ * Create a TCP socket using netmgr 'mgr', bind it to the address
+ * 'local', and connect it to the address 'peer'. Right after the
+ * connection has been established, send PROXYv2 header using the
+ * information provided via the 'proxy_info' to the remote peer. Then
+ * the connection is considered established.
+ *
+ * If 'proxy_info' is omitted, then a LOCAL PROXYv2 header is sent.
+ *
+ * When the connection is established or has timed out, call 'cb' with
+ * argument 'cbarg'.
+ *
+ * 'timeout' specifies the timeout interval in milliseconds.
+ *
+ * The connected socket can only be accessed via the handle passed to
+ * 'cb'.
+ */
+
+void
+isc_nm_proxyheader_info_init(isc_nm_proxyheader_info_t *restrict info,
+			     isc_sockaddr_t *restrict src_addr,
+			     isc_sockaddr_t *restrict dst_addr,
+			     isc_region_t *restrict tlv_data);
+/*%<
+ * Initialize a 'isc_nm_proxyheader_info_t' object with user
+ * provided addresses and a TLVs blob, that can be omitted (the rest
+ * of the data is REQUIRE()d).
+ */
+
+void
+isc_nm_proxyheader_info_init_complete(isc_nm_proxyheader_info_t *restrict info,
+				      isc_region_t *restrict header_data);
+/*%<
+ * Initialize a 'isc_nm_proxyheader_info_t' with user provided data
+ * blob (e.g. a pre-rendered PROXYv2 header for forwarding or
+ * testing).
+ */
+
+void
+isc_nm_setinitialtimeout(uint32_t timeout_ms);
+/*%<
+ * Sets the initial TCP timeout value (in milliseconds).
  *
  * Requires:
  * \li	'mgr' is a valid netmgr.
  */
 
 void
-isc_nm_setnetbuffers(isc_nm_t *mgr, int32_t recv_tcp, int32_t send_tcp,
-		     int32_t recv_udp, int32_t send_udp);
+isc_nm_setprimariestimeout(uint32_t timeout_ms);
+/*%<
+ * Sets the primary servers connect TCP timeout value (in milliseconds).
+ *
+ * Requires:
+ * \li	'mgr' is a valid netmgr.
+ */
+
+void
+isc_nm_setidletimeout(uint32_t timeout_ms);
+/*%<
+ * Sets the idle TCP timeout value (in milliseconds).
+ *
+ * Requires:
+ * \li	'mgr' is a valid netmgr.
+ */
+
+void
+isc_nm_setkeepalivetimeout(uint32_t timeout_ms);
+/*%<
+ * Sets the keepalive TCP timeout value (in milliseconds), and the timeout value
+ * to advertise in responses using the EDNS TCP Keepalive option.
+ *
+ * Requires:
+ * \li	'mgr' is a valid netmgr.
+ */
+
+void
+isc_nm_setadvertisedtimeout(uint32_t timeout_ms);
+/*%<
+ * Sets the advertised TCP timeout value (in milliseconds).
+ *
+ * Requires:
+ * \li	'mgr' is a valid netmgr.
+ */
+
+void
+isc_nm_setnetbuffers(int32_t recv_tcp, int32_t send_tcp, int32_t recv_udp,
+		     int32_t send_udp);
 /*%<
  * If not 0, sets the SO_RCVBUF and SO_SNDBUF socket options for TCP and UDP
  * respectively.
@@ -416,9 +577,9 @@ isc_nm_setnetbuffers(isc_nm_t *mgr, int32_t recv_tcp, int32_t send_tcp,
  */
 
 bool
-isc_nm_getloadbalancesockets(isc_nm_t *mgr);
+isc_nm_getloadbalancesockets(void);
 void
-isc_nm_setloadbalancesockets(isc_nm_t *mgr, bool enabled);
+isc_nm_setloadbalancesockets(bool enabled);
 /*%<
  * Get and set value of load balancing of the sockets.
  *
@@ -426,29 +587,60 @@ isc_nm_setloadbalancesockets(isc_nm_t *mgr, bool enabled);
  * \li	'mgr' is a valid netmgr.
  */
 
-void
-isc_nm_gettimeouts(isc_nm_t *mgr, uint32_t *initial, uint32_t *idle,
-		   uint32_t *keepalive, uint32_t *advertised);
+uint32_t
+isc_nm_getinitialtimeout(void);
 /*%<
- * Gets the initial, idle, keepalive, or advertised timeout values,
- * in milliseconds.
+ * Gets the initial TCP timeout value in milliseconds.
  *
- * Any integer pointer parameter not set to NULL will be updated to
- * contain the corresponding timeout value.
+ * Requires:
+ * \li	'mgr' is a valid netmgr.
+ */
+
+uint32_t
+isc_nm_getprimariestimeout(void);
+/*%<
+ * Gets the primary servers connect TCP timeout value in milliseconds.
+ *
+ * Requires:
+ * \li	'mgr' is a valid netmgr.
+ */
+
+uint32_t
+isc_nm_getidletimeout(void);
+/*%<
+ * Gets the idle TCP timeout value in milliseconds.
+ *
+ * Requires:
+ * \li	'mgr' is a valid netmgr.
+ */
+
+uint32_t
+isc_nm_getkeepalivetimeout(void);
+/*%<
+ * Gets the keepalive TCP timeout value in milliseconds.
+ *
+ * Requires:
+ * \li	'mgr' is a valid netmgr.
+ */
+
+uint32_t
+isc_nm_getadvertisedtimeout(void);
+/*%<
+ * Gets the advertised TCP timeout value in milliseconds.
  *
  * Requires:
  * \li	'mgr' is a valid netmgr.
  */
 
 void
-isc_nm_maxudp(isc_nm_t *mgr, uint32_t maxudp);
+isc_nm_maxudp(uint32_t maxudp);
 /*%<
  * Simulate a broken firewall that blocks UDP messages larger than a given
  * size.
  */
 
 void
-isc_nm_setstats(isc_nm_t *mgr, isc_stats_t *stats);
+isc_nm_setstats(isc_stats_t *stats);
 /*%<
  * Set a socket statistics counter set 'stats' for 'mgr'.
  *
@@ -470,10 +662,12 @@ isc_nm_checkaddr(const isc_sockaddr_t *addr, isc_socktype_t type);
  */
 
 void
-isc_nm_streamdnsconnect(isc_nm_t *mgr, isc_sockaddr_t *local,
-			isc_sockaddr_t *peer, isc_nm_cb_t cb, void *cbarg,
-			unsigned int timeout, isc_tlsctx_t *sslctx,
-			isc_tlsctx_client_session_cache_t *client_sess_cache);
+isc_nm_streamdnsconnect(isc_sockaddr_t *local, isc_sockaddr_t *peer,
+			isc_nm_cb_t cb, void *cbarg, unsigned int timeout,
+			isc_tlsctx_t *tlsctx, const char *sni_hostname,
+			isc_tlsctx_client_session_cache_t *client_sess_cache,
+			isc_nm_proxy_type_t		   proxy_type,
+			isc_nm_proxyheader_info_t	  *proxy_info);
 /*%<
  * Establish a DNS client connection via a TCP or TLS connection, bound to
  * the address 'local' and connected to the address 'peer'.
@@ -499,35 +693,56 @@ isc_nm_is_http_handle(isc_nmhandle_t *handle);
  * 'isc_nm_httpsocket'.
  */
 
+bool
+isc_nm_is_proxy_unspec(isc_nmhandle_t *handle);
+/*%<
+ * Returns 'true' iff 'handle' is associated with a peer who send
+ * a PROXYv2 header with unsupported address type.
+ */
+
+bool
+isc_nm_is_proxy_handle(isc_nmhandle_t *handle);
+/*%< Returns 'true' iff 'handle' is associated is with a PROXYv2
+ * connection.
+ */
+
+isc_nm_proxy_type_t
+isc_nmhandle_proxy_type(isc_nmhandle_t *handle);
+/*%<
+ * Returns the PROXYv2 type associated with 'handle'.
+ */
+
 isc_result_t
-isc_nm_listentls(isc_nm_t *mgr, uint32_t workers, isc_sockaddr_t *iface,
+isc_nm_listentls(uint32_t workers, isc_sockaddr_t *iface,
 		 isc_nm_accept_cb_t accept_cb, void *accept_cbarg, int backlog,
-		 isc_quota_t *quota, isc_tlsctx_t *sslctx,
+		 isc_quota_t *quota, isc_tlsctx_t *sslctx, bool proxy,
 		 isc_nmsocket_t **sockp);
 
 void
-isc_nm_tlsconnect(isc_nm_t *mgr, isc_sockaddr_t *local, isc_sockaddr_t *peer,
+isc_nm_tlsconnect(isc_sockaddr_t *local, isc_sockaddr_t *peer,
 		  isc_nm_cb_t connect_cb, void *connect_cbarg,
-		  isc_tlsctx_t			    *ctx,
+		  isc_tlsctx_t *ctx, const char *sni_hostname,
 		  isc_tlsctx_client_session_cache_t *client_sess_cache,
-		  unsigned int			     timeout);
+		  unsigned int timeout, bool proxy,
+		  isc_nm_proxyheader_info_t *proxy_info);
 
 #if HAVE_LIBNGHTTP2
 
 #define ISC_NM_HTTP_DEFAULT_PATH "/dns-query"
 
 void
-isc_nm_httpconnect(isc_nm_t *mgr, isc_sockaddr_t *local, isc_sockaddr_t *peer,
-		   const char *uri, bool POST, isc_nm_cb_t cb, void *cbarg,
-		   isc_tlsctx_t			     *ctx,
+isc_nm_httpconnect(isc_sockaddr_t *local, isc_sockaddr_t *peer, const char *uri,
+		   bool POST, isc_nm_cb_t cb, void *cbarg, isc_tlsctx_t *ctx,
+		   const char			     *sni_hostname,
 		   isc_tlsctx_client_session_cache_t *client_sess_cache,
-		   unsigned int			      timeout);
+		   unsigned int timeout, isc_nm_proxy_type_t proxy_type,
+		   isc_nm_proxyheader_info_t *proxy_info);
 
 isc_result_t
-isc_nm_listenhttp(isc_nm_t *mgr, uint32_t workers, isc_sockaddr_t *iface,
-		  int backlog, isc_quota_t *quota, isc_tlsctx_t *ctx,
+isc_nm_listenhttp(uint32_t workers, isc_sockaddr_t *iface, int backlog,
+		  isc_quota_t *quota, isc_tlsctx_t *ctx,
 		  isc_nm_http_endpoints_t *eps, uint32_t max_concurrent_streams,
-		  isc_nmsocket_t **sockp);
+		  isc_nm_proxy_type_t proxy_type, isc_nmsocket_t **sockp);
 
 isc_nm_http_endpoints_t *
 isc_nm_http_endpoints_new(isc_mem_t *mctx);
@@ -685,7 +900,7 @@ isc_nm_verify_tls_peer_result_string(const isc_nmhandle_t *handle);
  */
 
 void
-isc__nm_force_tid(int tid);
+isc__nm_force_tid(isc_tid_t tid);
 /*%<
  * Force the thread ID to 'tid'. This is STRICTLY for use in unit
  * tests and should not be used in any production code.

@@ -33,7 +33,6 @@
 #include <dns/db.h>
 #include <dns/dbiterator.h>
 #include <dns/fixedname.h>
-#include <dns/log.h>
 #include <dns/name.h>
 #include <dns/rdata.h>
 #include <dns/rdataclass.h>
@@ -42,10 +41,6 @@
 #include <dns/rdatatype.h>
 #include <dns/types.h>
 #include <dns/zone.h>
-
-#include <isccfg/log.h>
-
-#include <ns/log.h>
 
 #include "check-tool.h"
 
@@ -73,7 +68,7 @@
 #define ERR_IS_MXCNAME	   6
 #define ERR_IS_SRVCNAME	   7
 
-static const char *dbtype[] = { "rbt" };
+static const char *dbtype[] = { ZONEDB_DEFAULT };
 
 int debug = 0;
 const char *journal = NULL;
@@ -88,6 +83,7 @@ bool dochecksrv = false;
 bool docheckns = false;
 #endif /* if CHECK_LOCAL */
 dns_zoneopt_t zone_options = DNS_ZONEOPT_CHECKNS | DNS_ZONEOPT_CHECKMX |
+			     DNS_ZONEOPT_CHECKDUPRR | DNS_ZONEOPT_CHECKSPF |
 			     DNS_ZONEOPT_MANYERRORS | DNS_ZONEOPT_CHECKNAMES |
 			     DNS_ZONEOPT_CHECKINTEGRITY |
 #if CHECK_SIBLING
@@ -96,15 +92,7 @@ dns_zoneopt_t zone_options = DNS_ZONEOPT_CHECKNS | DNS_ZONEOPT_CHECKMX |
 			     DNS_ZONEOPT_CHECKSVCB | DNS_ZONEOPT_CHECKWILDCARD |
 			     DNS_ZONEOPT_WARNMXCNAME | DNS_ZONEOPT_WARNSRVCNAME;
 
-/*
- * This needs to match the list in bin/named/log.c.
- */
-static isc_logcategory_t categories[] = { { "", 0 },
-					  { "unmatched", 0 },
-					  { NULL, 0 } };
-
 static isc_symtab_t *symtab = NULL;
-static isc_mem_t *sym_mctx;
 
 static void
 freekey(char *key, unsigned int type, isc_symvalue_t value, void *userarg) {
@@ -118,25 +106,18 @@ add(char *key, int value) {
 	isc_result_t result;
 	isc_symvalue_t symvalue;
 
-	if (sym_mctx == NULL) {
-		isc_mem_create(&sym_mctx);
-	}
-
 	if (symtab == NULL) {
-		result = isc_symtab_create(sym_mctx, 100, freekey, sym_mctx,
-					   false, &symtab);
-		if (result != ISC_R_SUCCESS) {
-			return;
-		}
+		isc_symtab_create(isc_g_mctx, freekey, isc_g_mctx, false,
+				  &symtab);
 	}
 
-	key = isc_mem_strdup(sym_mctx, key);
+	key = isc_mem_strdup(isc_g_mctx, key);
 
 	symvalue.as_pointer = NULL;
 	result = isc_symtab_define(symtab, key, value, symvalue,
 				   isc_symexists_reject);
 	if (result != ISC_R_SUCCESS) {
-		isc_mem_free(sym_mctx, key);
+		isc_mem_free(isc_g_mctx, key);
 	}
 }
 
@@ -145,22 +126,105 @@ logged(char *key, int value) {
 	isc_result_t result;
 
 	if (symtab == NULL) {
-		return (false);
+		return false;
 	}
 
 	result = isc_symtab_lookup(symtab, key, value, NULL);
 	if (result == ISC_R_SUCCESS) {
-		return (true);
+		return true;
 	}
-	return (false);
+	return false;
+}
+
+static bool
+checkisservedby(dns_zone_t *zone, dns_rdatatype_t type,
+		const dns_name_t *name) {
+	char namebuf[DNS_NAME_FORMATSIZE + 1];
+	char ownerbuf[DNS_NAME_FORMATSIZE + 1];
+	/*
+	 * Not all getaddrinfo implementations distinguish NODATA
+	 * from NXDOMAIN with PF_INET6 so use PF_UNSPEC and look at
+	 * the returned ai_family values.
+	 */
+	struct addrinfo hints = {
+		.ai_flags = AI_CANONNAME,
+		.ai_family = PF_UNSPEC,
+		.ai_socktype = SOCK_STREAM,
+		.ai_protocol = IPPROTO_TCP,
+	};
+	struct addrinfo *ai = NULL, *cur;
+	bool has_type = false;
+	int eai;
+
+	dns_name_format(name, namebuf, sizeof(namebuf) - 1);
+	/*
+	 * Turn off search.
+	 */
+	if (dns_name_countlabels(name) > 1U) {
+		strlcat(namebuf, ".", sizeof(namebuf));
+	}
+	eai = getaddrinfo(namebuf, NULL, &hints, &ai);
+
+	switch (eai) {
+	case 0:
+		cur = ai;
+		while (cur != NULL) {
+			if (cur->ai_family == AF_INET &&
+			    type == dns_rdatatype_a)
+			{
+				has_type = true;
+				break;
+			}
+			if (cur->ai_family == AF_INET6 &&
+			    type == dns_rdatatype_aaaa)
+			{
+				has_type = true;
+				break;
+			}
+			cur = cur->ai_next;
+		}
+		freeaddrinfo(ai);
+		return has_type;
+#if defined(EAI_NODATA) && (EAI_NODATA != EAI_NONAME)
+	case EAI_NODATA:
+#endif /* if defined(EAI_NODATA) && (EAI_NODATA != EAI_NONAME) */
+	case EAI_NONAME:
+		if (!logged(namebuf, ERR_NO_ADDRESSES)) {
+			dns_name_format(dns_zone_getorigin(zone), ownerbuf,
+					sizeof(ownerbuf));
+			dns_name_format(name, namebuf, sizeof(namebuf) - 1);
+			dns_zone_log(zone, ISC_LOG_ERROR,
+				     "%s/NS '%s' (out of zone) "
+				     "has no addresses records (A or AAAA)",
+				     ownerbuf, namebuf);
+			add(namebuf, ERR_NO_ADDRESSES);
+		}
+		return false;
+	default:
+		if (!logged(namebuf, ERR_LOOKUP_FAILURE)) {
+			dns_name_format(dns_zone_getorigin(zone), ownerbuf,
+					sizeof(ownerbuf));
+			dns_name_format(name, namebuf, sizeof(namebuf) - 1);
+			dns_zone_log(zone, ISC_LOG_WARNING,
+				     "getaddrinfo(%s) failed: %s", namebuf,
+				     gai_strerror(eai));
+			add(namebuf, ERR_LOOKUP_FAILURE);
+		}
+		return true;
+	}
 }
 
 static bool
 checkns(dns_zone_t *zone, const dns_name_t *name, const dns_name_t *owner,
 	dns_rdataset_t *a, dns_rdataset_t *aaaa) {
 	dns_rdataset_t *rdataset;
-	dns_rdata_t rdata = DNS_RDATA_INIT;
-	struct addrinfo hints, *ai, *cur;
+	struct addrinfo hints = {
+		.ai_flags = AI_CANONNAME,
+		.ai_family = PF_UNSPEC,
+		.ai_socktype = SOCK_STREAM,
+		.ai_protocol = IPPROTO_TCP,
+	};
+	struct addrinfo *ai = NULL, *cur;
 	char namebuf[DNS_NAME_FORMATSIZE + 1];
 	char ownerbuf[DNS_NAME_FORMATSIZE];
 	char addrbuf[sizeof("xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:123.123.123.123")];
@@ -168,7 +232,7 @@ checkns(dns_zone_t *zone, const dns_name_t *name, const dns_name_t *owner,
 	bool match;
 	const char *type;
 	void *ptr = NULL;
-	int result;
+	int eai;
 
 	REQUIRE(a == NULL || !dns_rdataset_isassociated(a) ||
 		a->type == dns_rdatatype_a);
@@ -176,14 +240,8 @@ checkns(dns_zone_t *zone, const dns_name_t *name, const dns_name_t *owner,
 		aaaa->type == dns_rdatatype_aaaa);
 
 	if (a == NULL || aaaa == NULL) {
-		return (answer);
+		return answer;
 	}
-
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_flags = AI_CANONNAME;
-	hints.ai_family = PF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_protocol = IPPROTO_TCP;
 
 	dns_name_format(name, namebuf, sizeof(namebuf) - 1);
 	/*
@@ -194,9 +252,9 @@ checkns(dns_zone_t *zone, const dns_name_t *name, const dns_name_t *owner,
 	}
 	dns_name_format(owner, ownerbuf, sizeof(ownerbuf));
 
-	result = getaddrinfo(namebuf, NULL, &hints, &ai);
+	eai = getaddrinfo(namebuf, NULL, &hints, &ai);
 	dns_name_format(name, namebuf, sizeof(namebuf) - 1);
-	switch (result) {
+	switch (eai) {
 	case 0:
 		/*
 		 * Work around broken getaddrinfo() implementations that
@@ -233,16 +291,16 @@ checkns(dns_zone_t *zone, const dns_name_t *name, const dns_name_t *owner,
 			add(namebuf, ERR_NO_ADDRESSES);
 		}
 		/* XXX950 make fatal for 9.5.0 */
-		return (true);
+		return true;
 
 	default:
 		if (!logged(namebuf, ERR_LOOKUP_FAILURE)) {
 			dns_zone_log(zone, ISC_LOG_WARNING,
 				     "getaddrinfo(%s) failed: %s", namebuf,
-				     gai_strerror(result));
+				     gai_strerror(eai));
 			add(namebuf, ERR_LOOKUP_FAILURE);
 		}
-		return (true);
+		return true;
 	}
 
 	/*
@@ -251,8 +309,9 @@ checkns(dns_zone_t *zone, const dns_name_t *name, const dns_name_t *owner,
 	if (!dns_rdataset_isassociated(a)) {
 		goto checkaaaa;
 	}
-	result = dns_rdataset_first(a);
-	while (result == ISC_R_SUCCESS) {
+
+	DNS_RDATASET_FOREACH (a) {
+		dns_rdata_t rdata = DNS_RDATA_INIT;
 		dns_rdataset_current(a, &rdata);
 		match = false;
 		for (cur = ai; cur != NULL; cur = cur->ai_next) {
@@ -276,16 +335,14 @@ checkns(dns_zone_t *zone, const dns_name_t *name, const dns_name_t *owner,
 			/* XXX950 make fatal for 9.5.0 */
 			/* answer = false; */
 		}
-		dns_rdata_reset(&rdata);
-		result = dns_rdataset_next(a);
 	}
 
 checkaaaa:
 	if (!dns_rdataset_isassociated(aaaa)) {
 		goto checkmissing;
 	}
-	result = dns_rdataset_first(aaaa);
-	while (result == ISC_R_SUCCESS) {
+	DNS_RDATASET_FOREACH (aaaa) {
+		dns_rdata_t rdata = DNS_RDATA_INIT;
 		dns_rdataset_current(aaaa, &rdata);
 		match = false;
 		for (cur = ai; cur != NULL; cur = cur->ai_next) {
@@ -310,8 +367,6 @@ checkaaaa:
 			/* XXX950 make fatal for 9.5.0. */
 			/* answer = false; */
 		}
-		dns_rdata_reset(&rdata);
-		result = dns_rdataset_next(aaaa);
 	}
 
 checkmissing:
@@ -339,19 +394,18 @@ checkmissing:
 			}
 			match = false;
 			if (dns_rdataset_isassociated(rdataset)) {
-				result = dns_rdataset_first(rdataset);
-			} else {
-				result = ISC_R_FAILURE;
-			}
-			while (result == ISC_R_SUCCESS && !match) {
-				dns_rdataset_current(rdataset, &rdata);
-				if (memcmp(ptr, rdata.data, rdata.length) == 0)
-				{
-					match = true;
+				DNS_RDATASET_FOREACH (rdataset) {
+					dns_rdata_t rdata = DNS_RDATA_INIT;
+					dns_rdataset_current(rdataset, &rdata);
+					if (memcmp(ptr, rdata.data,
+						   rdata.length) == 0)
+					{
+						match = true;
+						break;
+					}
 				}
-				dns_rdata_reset(&rdata);
-				result = dns_rdataset_next(rdataset);
 			}
+
 			if (!match) {
 				dns_zone_log(zone, ISC_LOG_ERROR,
 					     "%s/NS '%s' "
@@ -369,24 +423,26 @@ checkmissing:
 			add(namebuf, ERR_MISSING_GLUE);
 		}
 	}
-	freeaddrinfo(ai);
-	return (answer);
+	if (ai != NULL) {
+		freeaddrinfo(ai);
+	}
+	return answer;
 }
 
 static bool
 checkmx(dns_zone_t *zone, const dns_name_t *name, const dns_name_t *owner) {
-	struct addrinfo hints, *ai, *cur;
+	struct addrinfo hints = {
+		.ai_flags = AI_CANONNAME,
+		.ai_family = PF_UNSPEC,
+		.ai_socktype = SOCK_STREAM,
+		.ai_protocol = IPPROTO_TCP,
+	};
+	struct addrinfo *ai = NULL, *cur;
 	char namebuf[DNS_NAME_FORMATSIZE + 1];
 	char ownerbuf[DNS_NAME_FORMATSIZE];
-	int result;
+	int eai;
 	int level = ISC_LOG_ERROR;
 	bool answer = true;
-
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_flags = AI_CANONNAME;
-	hints.ai_family = PF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_protocol = IPPROTO_TCP;
 
 	dns_name_format(name, namebuf, sizeof(namebuf) - 1);
 	/*
@@ -397,9 +453,9 @@ checkmx(dns_zone_t *zone, const dns_name_t *name, const dns_name_t *owner) {
 	}
 	dns_name_format(owner, ownerbuf, sizeof(ownerbuf));
 
-	result = getaddrinfo(namebuf, NULL, &hints, &ai);
+	eai = getaddrinfo(namebuf, NULL, &hints, &ai);
 	dns_name_format(name, namebuf, sizeof(namebuf) - 1);
-	switch (result) {
+	switch (eai) {
 	case 0:
 		/*
 		 * Work around broken getaddrinfo() implementations that
@@ -432,8 +488,10 @@ checkmx(dns_zone_t *zone, const dns_name_t *name, const dns_name_t *owner) {
 				}
 			}
 		}
-		freeaddrinfo(ai);
-		return (answer);
+		if (ai != NULL) {
+			freeaddrinfo(ai);
+		}
+		return answer;
 
 	case EAI_NONAME:
 #if defined(EAI_NODATA) && (EAI_NODATA != EAI_NONAME)
@@ -447,33 +505,33 @@ checkmx(dns_zone_t *zone, const dns_name_t *name, const dns_name_t *owner) {
 			add(namebuf, ERR_NO_ADDRESSES);
 		}
 		/* XXX950 make fatal for 9.5.0. */
-		return (true);
+		return true;
 
 	default:
 		if (!logged(namebuf, ERR_LOOKUP_FAILURE)) {
 			dns_zone_log(zone, ISC_LOG_WARNING,
 				     "getaddrinfo(%s) failed: %s", namebuf,
-				     gai_strerror(result));
+				     gai_strerror(eai));
 			add(namebuf, ERR_LOOKUP_FAILURE);
 		}
-		return (true);
+		return true;
 	}
 }
 
 static bool
 checksrv(dns_zone_t *zone, const dns_name_t *name, const dns_name_t *owner) {
-	struct addrinfo hints, *ai, *cur;
+	struct addrinfo hints = {
+		.ai_flags = AI_CANONNAME,
+		.ai_family = PF_UNSPEC,
+		.ai_socktype = SOCK_STREAM,
+		.ai_protocol = IPPROTO_TCP,
+	};
+	struct addrinfo *ai = NULL, *cur;
 	char namebuf[DNS_NAME_FORMATSIZE + 1];
 	char ownerbuf[DNS_NAME_FORMATSIZE];
-	int result;
+	int eai;
 	int level = ISC_LOG_ERROR;
 	bool answer = true;
-
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_flags = AI_CANONNAME;
-	hints.ai_family = PF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_protocol = IPPROTO_TCP;
 
 	dns_name_format(name, namebuf, sizeof(namebuf) - 1);
 	/*
@@ -484,9 +542,9 @@ checksrv(dns_zone_t *zone, const dns_name_t *name, const dns_name_t *owner) {
 	}
 	dns_name_format(owner, ownerbuf, sizeof(ownerbuf));
 
-	result = getaddrinfo(namebuf, NULL, &hints, &ai);
+	eai = getaddrinfo(namebuf, NULL, &hints, &ai);
 	dns_name_format(name, namebuf, sizeof(namebuf) - 1);
-	switch (result) {
+	switch (eai) {
 	case 0:
 		/*
 		 * Work around broken getaddrinfo() implementations that
@@ -519,8 +577,10 @@ checksrv(dns_zone_t *zone, const dns_name_t *name, const dns_name_t *owner) {
 				}
 			}
 		}
-		freeaddrinfo(ai);
-		return (answer);
+		if (ai != NULL) {
+			freeaddrinfo(ai);
+		}
+		return answer;
 
 	case EAI_NONAME:
 #if defined(EAI_NODATA) && (EAI_NODATA != EAI_NONAME)
@@ -534,45 +594,28 @@ checksrv(dns_zone_t *zone, const dns_name_t *name, const dns_name_t *owner) {
 			add(namebuf, ERR_NO_ADDRESSES);
 		}
 		/* XXX950 make fatal for 9.5.0. */
-		return (true);
+		return true;
 
 	default:
 		if (!logged(namebuf, ERR_LOOKUP_FAILURE)) {
 			dns_zone_log(zone, ISC_LOG_WARNING,
 				     "getaddrinfo(%s) failed: %s", namebuf,
-				     gai_strerror(result));
+				     gai_strerror(eai));
 			add(namebuf, ERR_LOOKUP_FAILURE);
 		}
-		return (true);
+		return true;
 	}
 }
 
 isc_result_t
-setup_logging(isc_mem_t *mctx, FILE *errout, isc_log_t **logp) {
-	isc_logdestination_t destination;
-	isc_logconfig_t *logconfig = NULL;
-	isc_log_t *log = NULL;
+setup_logging(FILE *errout) {
+	isc_logconfig_t *logconfig = isc_logconfig_get();
+	isc_log_createandusechannel(
+		logconfig, "default_stderr", ISC_LOG_TOFILEDESC,
+		ISC_LOG_DYNAMIC, ISC_LOGDESTINATION_FILE(errout), 0,
+		ISC_LOGCATEGORY_DEFAULT, ISC_LOGMODULE_DEFAULT);
 
-	isc_log_create(mctx, &log, &logconfig);
-	isc_log_registercategories(log, categories);
-	isc_log_setcontext(log);
-	dns_log_init(log);
-	dns_log_setcontext(log);
-	cfg_log_init(log);
-	ns_log_init(log);
-
-	destination.file.stream = errout;
-	destination.file.name = NULL;
-	destination.file.versions = ISC_LOG_ROLLNEVER;
-	destination.file.maximum_size = 0;
-	isc_log_createchannel(logconfig, "stderr", ISC_LOG_TOFILEDESC,
-			      ISC_LOG_DYNAMIC, &destination, 0);
-
-	RUNTIME_CHECK(isc_log_usechannel(logconfig, "stderr", NULL, NULL) ==
-		      ISC_R_SUCCESS);
-
-	*logp = log;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 /*% load the zone */
@@ -595,25 +638,25 @@ load_zone(isc_mem_t *mctx, const char *zonename, const char *filename,
 			zonename, filename, classname);
 	}
 
-	CHECK(dns_zone_create(&zone, mctx, 0));
+	dns_zone_create(&zone, mctx, 0);
 
 	dns_zone_settype(zone, dns_zone_primary);
 
 	isc_buffer_constinit(&buffer, zonename, strlen(zonename));
 	isc_buffer_add(&buffer, strlen(zonename));
 	origin = dns_fixedname_initname(&fixorigin);
-	CHECK(dns_name_fromtext(origin, &buffer, dns_rootname, 0, NULL));
-	CHECK(dns_zone_setorigin(zone, origin));
+	CHECK(dns_name_fromtext(origin, &buffer, dns_rootname, 0));
+	dns_zone_setorigin(zone, origin);
 	dns_zone_setdbtype(zone, 1, (const char *const *)dbtype);
 	if (strcmp(filename, "-") == 0) {
-		CHECK(dns_zone_setstream(zone, stdin, fileformat,
-					 &dns_master_style_default));
+		dns_zone_setstream(zone, stdin, fileformat,
+				   &dns_master_style_default);
 	} else {
-		CHECK(dns_zone_setfile(zone, filename, fileformat,
-				       &dns_master_style_default));
+		dns_zone_setfile(zone, filename, NULL, fileformat,
+				 &dns_master_style_default);
 	}
 	if (journal != NULL) {
-		CHECK(dns_zone_setjournal(zone, journal));
+		dns_zone_setjournal(zone, journal);
 	}
 
 	region.base = UNCONST(classname);
@@ -631,6 +674,7 @@ load_zone(isc_mem_t *mctx, const char *zonename, const char *filename,
 	}
 	if (docheckns) {
 		dns_zone_setcheckns(zone, checkns);
+		dns_zone_setcheckisservedby(zone, checkisservedby);
 	}
 	if (dochecksrv) {
 		dns_zone_setchecksrv(zone, checksrv);
@@ -647,7 +691,7 @@ cleanup:
 	if (zone != NULL) {
 		dns_zone_detach(&zone);
 	}
-	return (result);
+	return result;
 }
 
 /*% dump the zone */
@@ -678,7 +722,7 @@ dump_zone(const char *zonename, dns_zone_t *zone, const char *filename,
 				"could not open output "
 				"file \"%s\" for writing\n",
 				filename);
-			return (ISC_R_FAILURE);
+			return ISC_R_FAILURE;
 		}
 	}
 
@@ -688,5 +732,5 @@ dump_zone(const char *zonename, dns_zone_t *zone, const char *filename,
 		(void)isc_stdio_close(output);
 	}
 
-	return (result);
+	return result;
 }

@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -22,10 +23,12 @@
 #define UNIT_TESTING
 #include <cmocka.h>
 
+#include <isc/lib.h>
 #include <isc/string.h>
 #include <isc/util.h>
 
 #include <dns/db.h>
+#include <dns/lib.h>
 #include <dns/nsec3.h>
 
 #include <tests/dns.h>
@@ -114,11 +117,11 @@ nsec3param_salttotext_test(const nsec3param_salttotext_test_params_t *params) {
 ISC_RUN_TEST_IMPL(max_iterations) {
 	UNUSED(state);
 
-	iteration_test(TESTS_DIR "/testdata/nsec3/1024.db", 150);
-	iteration_test(TESTS_DIR "/testdata/nsec3/2048.db", 150);
-	iteration_test(TESTS_DIR "/testdata/nsec3/4096.db", 150);
-	iteration_test(TESTS_DIR "/testdata/nsec3/min-1024.db", 150);
-	iteration_test(TESTS_DIR "/testdata/nsec3/min-2048.db", 150);
+	iteration_test(TESTS_DIR "/testdata/nsec3/1024.db", 50);
+	iteration_test(TESTS_DIR "/testdata/nsec3/2048.db", 50);
+	iteration_test(TESTS_DIR "/testdata/nsec3/4096.db", 50);
+	iteration_test(TESTS_DIR "/testdata/nsec3/min-1024.db", 50);
+	iteration_test(TESTS_DIR "/testdata/nsec3/min-2048.db", 50);
 }
 
 /* check dns_nsec3param_salttotext() */

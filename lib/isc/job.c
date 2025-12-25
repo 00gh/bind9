@@ -17,7 +17,6 @@
 
 #include <isc/atomic.h>
 #include <isc/barrier.h>
-#include <isc/condition.h>
 #include <isc/job.h>
 #include <isc/list.h>
 #include <isc/loop.h>
@@ -35,6 +34,7 @@
 
 #include "job_p.h"
 #include "loop_p.h"
+#include "probes.h"
 
 /*
  * Public: #include <isc/job.h>
@@ -48,6 +48,7 @@ isc_job_run(isc_loop_t *loop, isc_job_t *job, isc_job_cb cb, void *cbarg) {
 
 	job->cb = cb;
 	job->cbarg = cbarg;
+	ISC_LINK_INIT(job, link);
 
 	ISC_LIST_APPEND(loop->run_jobs, job, link);
 }
@@ -63,14 +64,13 @@ isc__job_cb(uv_idle_t *handle) {
 
 	ISC_LIST_MOVE(jobs, loop->run_jobs);
 
-	isc_job_t *job, *next;
-	for (job = ISC_LIST_HEAD(jobs),
-	    next = (job != NULL) ? ISC_LIST_NEXT(job, link) : NULL;
-	     job != NULL;
-	     job = next, next = job ? ISC_LIST_NEXT(job, link) : NULL)
-	{
+	ISC_LIST_FOREACH (jobs, job, link) {
+		isc_job_cb cb = job->cb;
+		void *cbarg = job->cbarg;
 		ISC_LIST_UNLINK(jobs, job, link);
-		job->cb(job->cbarg);
+		LIBISC_JOB_CB_BEFORE(job, cb, cbarg);
+		cb(cbarg);
+		LIBISC_JOB_CB_AFTER(job, cb, cbarg);
 	}
 
 	if (ISC_LIST_EMPTY(loop->run_jobs)) {

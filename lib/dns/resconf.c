@@ -72,7 +72,6 @@
  */
 
 #define RESCONFMAXNAMESERVERS 3U   /*%< max 3 "nameserver" entries */
-#define RESCONFMAXSEARCH      8U   /*%< max 8 domains in "search" entry */
 #define RESCONFMAXLINELEN     256U /*%< max size of a line */
 #define RESCONFMAXSORTLIST    10U  /*%< max 10 */
 
@@ -99,7 +98,6 @@ struct irs_resconf {
 	unsigned int numns; /*%< number of configured servers */
 
 	char *domainname;
-	char *search[RESCONFMAXSEARCH];
 	uint8_t searchnxt; /*%< index for next free slot */
 
 	irs_resconf_searchlist_t searchlist;
@@ -139,12 +137,11 @@ static int
 eatline(FILE *fp) {
 	int ch;
 
-	ch = fgetc(fp);
-	while (ch != '\n' && ch != EOF) {
+	do {
 		ch = fgetc(fp);
-	}
+	} while (ch != '\n' && ch != EOF);
 
-	return (ch);
+	return ch;
 }
 
 /*!
@@ -156,16 +153,15 @@ static int
 eatwhite(FILE *fp) {
 	int ch;
 
-	ch = fgetc(fp);
-	while (ch != '\n' && ch != EOF && isspace((unsigned char)ch)) {
+	do {
 		ch = fgetc(fp);
-	}
+	} while (ch != EOF && ch != '\n' && isspace((unsigned char)ch));
 
 	if (ch == ';' || ch == '#') {
 		ch = eatline(fp);
 	}
 
-	return (ch);
+	return ch;
 }
 
 /*!
@@ -186,25 +182,24 @@ getword(FILE *fp, char *buffer, size_t size) {
 	*p = '\0';
 
 	ch = eatwhite(fp);
-
 	if (ch == EOF) {
-		return (EOF);
+		return EOF;
 	}
 
 	do {
 		*p = '\0';
 
-		if (ch == EOF || isspace((unsigned char)ch)) {
+		if (isspace((unsigned char)ch)) {
 			break;
 		} else if ((size_t)(p - buffer) == size - 1) {
-			return (EOF); /* Not enough space. */
+			return EOF; /* Not enough space. */
 		}
 
 		*p++ = (char)ch;
 		ch = fgetc(fp);
-	} while (1);
+	} while (ch != EOF);
 
-	return (ch);
+	return ch;
 }
 
 static isc_result_t
@@ -223,19 +218,7 @@ add_server(isc_mem_t *mctx, const char *address_str,
 	hints.ai_flags = AI_NUMERICHOST;
 	error = getaddrinfo(address_str, "53", &hints, &res);
 	if (error != 0) {
-		return (ISC_R_BADADDRESSFORM);
-	}
-
-	/* XXX: special case: treat all-0 IPv4 address as loopback */
-	if (res->ai_family == AF_INET) {
-		struct in_addr *v4;
-		unsigned char zeroaddress[] = { 0, 0, 0, 0 };
-		unsigned char loopaddress[] = { 127, 0, 0, 1 };
-
-		v4 = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
-		if (memcmp(v4, zeroaddress, 4) == 0) {
-			memmove(v4, loopaddress, 4);
-		}
+		return ISC_R_BADADDRESSFORM;
 	}
 
 	address = isc_mem_get(mctx, sizeof(*address));
@@ -244,15 +227,36 @@ add_server(isc_mem_t *mctx, const char *address_str,
 		result = ISC_R_RANGE;
 		goto cleanup;
 	}
+
+	if (res->ai_family == AF_INET) {
+		struct in_addr *v4;
+		unsigned char zeroaddress[] = { 0, 0, 0, 0 };
+		unsigned char loopaddress[] = { 127, 0, 0, 1 };
+
+		/* XXX: special case: treat all-0 IPv4 address as loopback */
+		v4 = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
+		if (memcmp(v4, zeroaddress, 4) == 0) {
+			memmove(v4, loopaddress, 4);
+		}
+		memmove(&address->type.sin, res->ai_addr, res->ai_addrlen);
+	} else if (res->ai_family == AF_INET6) {
+		memmove(&address->type.sin6, res->ai_addr, res->ai_addrlen);
+	} else {
+		isc_mem_put(mctx, address, sizeof(*address));
+		UNEXPECTED_ERROR("ai_family (%d) not INET nor INET6",
+				 res->ai_family);
+		result = ISC_R_UNEXPECTED;
+		goto cleanup;
+	}
 	address->length = (unsigned int)res->ai_addrlen;
-	memmove(&address->type.ss, res->ai_addr, res->ai_addrlen);
+
 	ISC_LINK_INIT(address, link);
 	ISC_LIST_APPEND(*nameservers, address, link);
 
 cleanup:
 	freeaddrinfo(res);
 
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -276,10 +280,10 @@ create_addr(const char *buffer, isc_netaddr_t *addr, int convert_zero) {
 		memmove(&addr->type.in6, &v6, NS_IN6ADDRSZ);
 		addr->zone = 0;
 	} else {
-		return (ISC_R_BADADDRESSFORM); /* Unrecognised format. */
+		return ISC_R_BADADDRESSFORM; /* Unrecognised format. */
 	}
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -288,45 +292,44 @@ resconf_parsenameserver(irs_resconf_t *conf, FILE *fp) {
 	int cp;
 	isc_result_t result;
 
-	if (conf->numns == RESCONFMAXNAMESERVERS) {
-		return (ISC_R_SUCCESS);
-	}
-
 	cp = getword(fp, word, sizeof(word));
-	if (strlen(word) == 0U) {
-		return (ISC_R_UNEXPECTEDEND); /* Nothing on line. */
+	if (cp == EOF || strlen(word) == 0U) {
+		return ISC_R_UNEXPECTEDEND; /* Nothing on line. */
 	} else if (cp == ' ' || cp == '\t') {
 		cp = eatwhite(fp);
 	}
 
 	if (cp != EOF && cp != '\n') {
-		return (ISC_R_UNEXPECTEDTOKEN); /* Extra junk on line. */
+		return ISC_R_UNEXPECTEDTOKEN; /* Extra junk on line. */
+	}
+
+	if (conf->numns == RESCONFMAXNAMESERVERS) {
+		return ISC_R_SUCCESS;
 	}
 
 	result = add_server(conf->mctx, word, &conf->nameservers);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 	conf->numns++;
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
 resconf_parsedomain(irs_resconf_t *conf, FILE *fp) {
 	char word[RESCONFMAXLINELEN];
 	int res;
-	unsigned int i;
 
 	res = getword(fp, word, sizeof(word));
-	if (strlen(word) == 0U) {
-		return (ISC_R_UNEXPECTEDEND); /* Nothing else on line. */
+	if (res == EOF || strlen(word) == 0U) {
+		return ISC_R_UNEXPECTEDEND; /* Nothing else on line. */
 	} else if (res == ' ' || res == '\t') {
 		res = eatwhite(fp);
 	}
 
 	if (res != EOF && res != '\n') {
-		return (ISC_R_UNEXPECTEDTOKEN); /* Extra junk on line. */
+		return ISC_R_UNEXPECTEDTOKEN; /* Extra junk on line. */
 	}
 
 	if (conf->domainname != NULL) {
@@ -335,70 +338,82 @@ resconf_parsedomain(irs_resconf_t *conf, FILE *fp) {
 
 	/*
 	 * Search and domain are mutually exclusive.
+	 * Search is cleared later.
 	 */
-	for (i = 0; i < RESCONFMAXSEARCH; i++) {
-		if (conf->search[i] != NULL) {
-			isc_mem_free(conf->mctx, conf->search[i]);
-			conf->search[i] = NULL;
-		}
-	}
-	conf->searchnxt = 0;
 
 	conf->domainname = isc_mem_strdup(conf->mctx, word);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
+}
+
+static void
+free_search(irs_resconf_t *conf) {
+	ISC_LIST_FOREACH (conf->searchlist, searchentry, link) {
+		ISC_LIST_UNLINK(conf->searchlist, searchentry, link);
+		isc_mem_free(conf->mctx, searchentry->domain);
+		isc_mem_put(conf->mctx, searchentry, sizeof(*searchentry));
+	}
+}
+
+/*!
+ * Append new search entry to searchlist.
+ *
+ * Always copy domain name passed.
+ */
+static isc_result_t
+add_search(irs_resconf_t *conf, char *domain) {
+	irs_resconf_search_t *entry = NULL;
+
+	entry = isc_mem_get(conf->mctx, sizeof(*entry));
+	*entry = (irs_resconf_search_t){
+		.domain = isc_mem_strdup(conf->mctx, domain),
+		.link = ISC_LINK_INITIALIZER,
+	};
+
+	ISC_LIST_APPEND(conf->searchlist, entry, link);
+
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
 resconf_parsesearch(irs_resconf_t *conf, FILE *fp) {
 	int delim;
-	unsigned int idx;
 	char word[RESCONFMAXLINELEN];
+	isc_result_t result;
 
 	if (conf->domainname != NULL) {
 		/*
 		 * Search and domain are mutually exclusive.
 		 */
 		isc_mem_free(conf->mctx, conf->domainname);
-		conf->domainname = NULL;
 	}
 
 	/*
 	 * Remove any previous search definitions.
 	 */
-	for (idx = 0; idx < RESCONFMAXSEARCH; idx++) {
-		if (conf->search[idx] != NULL) {
-			isc_mem_free(conf->mctx, conf->search[idx]);
-			conf->search[idx] = NULL;
-		}
-	}
-	conf->searchnxt = 0;
+	free_search(conf);
 
 	delim = getword(fp, word, sizeof(word));
-	if (strlen(word) == 0U) {
-		return (ISC_R_UNEXPECTEDEND); /* Nothing else on line. */
+	if (delim == EOF || strlen(word) == 0U) {
+		return ISC_R_UNEXPECTEDEND; /* Nothing else on line. */
 	}
-
-	idx = 0;
-	while (strlen(word) > 0U) {
-		if (conf->searchnxt == RESCONFMAXSEARCH) {
-			goto ignore; /* Too many domains. */
+	do {
+		result = add_search(conf, word);
+		if (result != ISC_R_SUCCESS) {
+			return result;
 		}
 
-		INSIST(idx < sizeof(conf->search) / sizeof(conf->search[0]));
-		conf->search[idx] = isc_mem_strdup(conf->mctx, word);
-		idx++;
-		conf->searchnxt++;
-
-	ignore:
-		if (delim == EOF || delim == '\n') {
+		if (delim == '\n') {
 			break;
-		} else {
-			delim = getword(fp, word, sizeof(word));
 		}
-	}
 
-	return (ISC_R_SUCCESS);
+		delim = getword(fp, word, sizeof(word));
+		if (delim == EOF) {
+			return ISC_R_UNEXPECTEDEND;
+		}
+	} while (strlen(word) > 0U);
+
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -409,13 +424,13 @@ resconf_parsesortlist(irs_resconf_t *conf, FILE *fp) {
 	char *p;
 
 	delim = getword(fp, word, sizeof(word));
-	if (strlen(word) == 0U) {
-		return (ISC_R_UNEXPECTEDEND); /* Empty line after keyword. */
+	if (delim == EOF || strlen(word) == 0U) {
+		return ISC_R_UNEXPECTEDEND; /* Empty line after keyword. */
 	}
 
-	while (strlen(word) > 0U) {
+	while (delim != EOF && strlen(word) > 0U) {
 		if (conf->sortlistnxt == RESCONFMAXSORTLIST) {
-			return (ISC_R_QUOTA); /* Too many values. */
+			return ISC_R_QUOTA; /* Too many values. */
 		}
 
 		p = strchr(word, '/');
@@ -428,13 +443,13 @@ resconf_parsesortlist(irs_resconf_t *conf, FILE *fp) {
 		       sizeof(conf->sortlist) / sizeof(conf->sortlist[0]));
 		res = create_addr(word, &conf->sortlist[idx].addr, 1);
 		if (res != ISC_R_SUCCESS) {
-			return (res);
+			return res;
 		}
 
 		if (p != NULL) {
 			res = create_addr(p, &conf->sortlist[idx].mask, 0);
 			if (res != ISC_R_SUCCESS) {
-				return (res);
+				return res;
 			}
 		} else {
 			/*
@@ -454,7 +469,7 @@ resconf_parsesortlist(irs_resconf_t *conf, FILE *fp) {
 		}
 	}
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -464,13 +479,13 @@ resconf_optionnumber(const char *word, uint8_t *number) {
 
 	n = strtol(word, &p, 10);
 	if (*p != '\0') { /* Bad string. */
-		return (ISC_R_UNEXPECTEDTOKEN);
+		return ISC_R_UNEXPECTEDTOKEN;
 	}
 	if (n < 0 || n > 0xff) { /* Out of range. */
-		return (ISC_R_RANGE);
+		return ISC_R_RANGE;
 	}
 	*number = n;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -481,7 +496,7 @@ resconf_parseoption(irs_resconf_t *conf, FILE *fp) {
 
 	delim = getword(fp, word, sizeof(word));
 	if (strlen(word) == 0U) {
-		return (ISC_R_UNEXPECTEDEND); /* Empty line after keyword. */
+		return ISC_R_UNEXPECTEDEND; /* Empty line after keyword. */
 	}
 
 	while (strlen(word) > 0U) {
@@ -503,20 +518,7 @@ resconf_parseoption(irs_resconf_t *conf, FILE *fp) {
 	}
 
 cleanup:
-	return (result);
-}
-
-static isc_result_t
-add_search(irs_resconf_t *conf, char *domain) {
-	irs_resconf_search_t *entry;
-
-	entry = isc_mem_get(conf->mctx, sizeof(*entry));
-
-	entry->domain = domain;
-	ISC_LINK_INIT(entry, link);
-	ISC_LIST_APPEND(conf->searchlist, entry, link);
-
-	return (ISC_R_SUCCESS);
+	return result;
 }
 
 /*% parses a file and fills in the data structure. */
@@ -526,8 +528,7 @@ irs_resconf_load(isc_mem_t *mctx, const char *filename, irs_resconf_t **confp) {
 	char word[256];
 	isc_result_t rval, ret = ISC_R_SUCCESS;
 	irs_resconf_t *conf;
-	unsigned int i;
-	int stopchar;
+	int stopchar = EOF;
 
 	REQUIRE(mctx != NULL);
 	REQUIRE(filename != NULL);
@@ -535,29 +536,24 @@ irs_resconf_load(isc_mem_t *mctx, const char *filename, irs_resconf_t **confp) {
 	REQUIRE(confp != NULL && *confp == NULL);
 
 	conf = isc_mem_get(mctx, sizeof(*conf));
-
-	conf->mctx = mctx;
-	ISC_LIST_INIT(conf->nameservers);
-	ISC_LIST_INIT(conf->searchlist);
-	conf->numns = 0;
-	conf->domainname = NULL;
-	conf->searchnxt = 0;
-	conf->sortlistnxt = 0;
-	conf->resdebug = 0;
-	conf->ndots = 1;
-	conf->attempts = 3;
-	conf->timeout = 0;
-	for (i = 0; i < RESCONFMAXSEARCH; i++) {
-		conf->search[i] = NULL;
-	}
+	*conf = (irs_resconf_t){
+		.mctx = mctx,
+		.nameservers = ISC_LIST_INITIALIZER,
+		.searchlist = ISC_LIST_INITIALIZER,
+		.ndots = 1,
+		.attempts = 3,
+	};
 
 	errno = 0;
 	if ((fp = fopen(filename, "r")) != NULL) {
-		do {
+		while (!feof(fp) && !ferror(fp)) {
 			stopchar = getword(fp, word, sizeof(word));
 			if (stopchar == EOF) {
-				rval = ISC_R_SUCCESS;
-				POST(rval);
+				if (strlen(word) != 0) {
+					if (ret == ISC_R_SUCCESS) {
+						ret = ISC_R_UNEXPECTEDEND;
+					}
+				}
 				break;
 			}
 
@@ -574,17 +570,18 @@ irs_resconf_load(isc_mem_t *mctx, const char *filename, irs_resconf_t **confp) {
 			} else if (strcmp(word, "options") == 0) {
 				rval = resconf_parseoption(conf, fp);
 			} else {
-				/* unrecognised word. Ignore entire line */
+				/* Unrecognised word. Ignore entire line. */
 				rval = ISC_R_SUCCESS;
-				stopchar = eatline(fp);
-				if (stopchar == EOF) {
-					break;
+				if (stopchar != '\n') {
+					if (eatline(fp) == EOF) {
+						break;
+					}
 				}
 			}
 			if (ret == ISC_R_SUCCESS && rval != ISC_R_SUCCESS) {
 				ret = rval;
 			}
-		} while (1);
+		}
 
 		fclose(fp);
 	} else {
@@ -593,7 +590,7 @@ irs_resconf_load(isc_mem_t *mctx, const char *filename, irs_resconf_t **confp) {
 			break;
 		default:
 			isc_mem_put(mctx, conf, sizeof(*conf));
-			return (ISC_R_INVALIDFILE);
+			return ISC_R_INVALIDFILE;
 		}
 	}
 
@@ -603,17 +600,11 @@ irs_resconf_load(isc_mem_t *mctx, const char *filename, irs_resconf_t **confp) {
 
 	/*
 	 * Construct unified search list from domain or configured
-	 * search list
+	 * search list. Last specified is used.
 	 */
 	if (conf->domainname != NULL) {
+		free_search(conf);
 		ret = add_search(conf, conf->domainname);
-	} else if (conf->searchnxt > 0) {
-		for (i = 0; i < conf->searchnxt; i++) {
-			ret = add_search(conf, conf->search[i]);
-			if (ret != ISC_R_SUCCESS) {
-				break;
-			}
-		}
 	}
 
 	/* If we don't find a nameserver fall back to localhost */
@@ -637,39 +628,27 @@ error:
 		*confp = conf;
 	}
 
-	return (ret);
+	return ret;
 }
 
 void
 irs_resconf_destroy(irs_resconf_t **confp) {
-	irs_resconf_t *conf;
-	isc_sockaddr_t *address;
-	irs_resconf_search_t *searchentry;
-	unsigned int i;
+	irs_resconf_t *conf = NULL;
 
 	REQUIRE(confp != NULL);
 	conf = *confp;
 	*confp = NULL;
 	REQUIRE(IRS_RESCONF_VALID(conf));
 
-	while ((searchentry = ISC_LIST_HEAD(conf->searchlist)) != NULL) {
-		ISC_LIST_UNLINK(conf->searchlist, searchentry, link);
-		isc_mem_put(conf->mctx, searchentry, sizeof(*searchentry));
-	}
+	free_search(conf);
 
-	while ((address = ISC_LIST_HEAD(conf->nameservers)) != NULL) {
+	ISC_LIST_FOREACH (conf->nameservers, address, link) {
 		ISC_LIST_UNLINK(conf->nameservers, address, link);
 		isc_mem_put(conf->mctx, address, sizeof(*address));
 	}
 
 	if (conf->domainname != NULL) {
 		isc_mem_free(conf->mctx, conf->domainname);
-	}
-
-	for (i = 0; i < RESCONFMAXSEARCH; i++) {
-		if (conf->search[i] != NULL) {
-			isc_mem_free(conf->mctx, conf->search[i]);
-		}
 	}
 
 	isc_mem_put(conf->mctx, conf, sizeof(*conf));
@@ -679,33 +658,33 @@ isc_sockaddrlist_t *
 irs_resconf_getnameservers(irs_resconf_t *conf) {
 	REQUIRE(IRS_RESCONF_VALID(conf));
 
-	return (&conf->nameservers);
+	return &conf->nameservers;
 }
 
 irs_resconf_searchlist_t *
 irs_resconf_getsearchlist(irs_resconf_t *conf) {
 	REQUIRE(IRS_RESCONF_VALID(conf));
 
-	return (&conf->searchlist);
+	return &conf->searchlist;
 }
 
 unsigned int
 irs_resconf_getndots(irs_resconf_t *conf) {
 	REQUIRE(IRS_RESCONF_VALID(conf));
 
-	return ((unsigned int)conf->ndots);
+	return (unsigned int)conf->ndots;
 }
 
 unsigned int
 irs_resconf_getattempts(irs_resconf_t *conf) {
 	REQUIRE(IRS_RESCONF_VALID(conf));
 
-	return ((unsigned int)conf->attempts);
+	return (unsigned int)conf->attempts;
 }
 
 unsigned int
 irs_resconf_gettimeout(irs_resconf_t *conf) {
 	REQUIRE(IRS_RESCONF_VALID(conf));
 
-	return ((unsigned int)conf->timeout);
+	return (unsigned int)conf->timeout;
 }

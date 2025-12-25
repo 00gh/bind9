@@ -37,9 +37,7 @@
  *** Functions
  ***/
 
-ISC_LANG_BEGINDECLS
-
-isc_result_t
+void
 isc_portset_create(isc_mem_t *mctx, isc_portset_t **portsetp);
 /*%<
  * Create a port set and initialize it as an empty set.
@@ -47,10 +45,6 @@ isc_portset_create(isc_mem_t *mctx, isc_portset_t **portsetp);
  * Requires:
  *\li	'mctx' to be valid.
  *\li	'portsetp' to be non NULL and '*portsetp' to be NULL;
- *
- * Returns:
- *\li	#ISC_R_SUCCESS
- *\li	#ISC_R_NOMEMORY
  */
 
 void
@@ -131,5 +125,3 @@ isc_portset_removerange(isc_portset_t *portset, in_port_t port_lo,
  *\li	'portlist' to be valid.
  *\li	port_lo <= port_hi
  */
-
-ISC_LANG_ENDDECLS

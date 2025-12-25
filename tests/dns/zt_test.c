@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -25,11 +26,14 @@
 
 #include <isc/atomic.h>
 #include <isc/buffer.h>
+#include <isc/lib.h>
 #include <isc/loop.h>
 #include <isc/timer.h>
+#include <isc/urcu.h>
 #include <isc/util.h>
 
 #include <dns/db.h>
+#include <dns/lib.h>
 #include <dns/name.h>
 #include <dns/view.h>
 #include <dns/zone.h>
@@ -48,24 +52,28 @@ count_zone(dns_zone_t *zone, void *uap) {
 	UNUSED(zone);
 
 	*nzones += 1;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 /* apply a function to a zone table */
 ISC_LOOP_TEST_IMPL(apply) {
 	isc_result_t result;
 	dns_zone_t *zone = NULL;
+	dns_zt_t *zt = NULL;
 	int nzones = 0;
 
 	result = dns_test_makezone("foo", &zone, NULL, true);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	view = dns_zone_getview(zone);
-	assert_non_null(view->zonetable);
+	rcu_read_lock();
+	zt = rcu_dereference(view->zonetable);
+	rcu_read_unlock();
+
+	assert_non_null(zt);
 
 	assert_int_equal(nzones, 0);
-	result = dns_zt_apply(view->zonetable, false, NULL, count_zone,
-			      &nzones);
+	result = dns_view_apply(view, false, NULL, count_zone, &nzones);
 	assert_int_equal(result, ISC_R_SUCCESS);
 	assert_int_equal(nzones, 1);
 
@@ -79,7 +87,7 @@ ISC_LOOP_TEST_IMPL(apply) {
 	/* The view was left attached in dns_test_makezone() */
 	dns_view_detach(&view);
 	dns_zone_detach(&zone);
-	isc_loopmgr_shutdown(loopmgr);
+	isc_loopmgr_shutdown();
 }
 
 static isc_result_t
@@ -102,9 +110,9 @@ load_done_last(void *uap) {
 	dns_zone_detach(&zone);
 	dns_view_detach(&view);
 
-	isc_loopmgr_shutdown(loopmgr);
+	isc_loopmgr_shutdown();
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -119,7 +127,7 @@ load_done_new_only(void *uap) {
 
 	dns_zone_asyncload(zone, true, load_done_last, zone);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -142,7 +150,7 @@ load_done_first(void *uap) {
 
 	dns_zone_asyncload(zone, true, load_done_new_only, zone);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 /* asynchronous zone load */
@@ -150,6 +158,7 @@ ISC_LOOP_TEST_IMPL(asyncload_zone) {
 	isc_result_t result;
 	int n;
 	dns_zone_t *zone = NULL;
+	dns_zt_t *zt = NULL;
 	char buf[4096];
 
 	result = dns_test_makezone("foo", &zone, NULL, true);
@@ -160,7 +169,10 @@ ISC_LOOP_TEST_IMPL(asyncload_zone) {
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	view = dns_zone_getview(zone);
-	assert_non_null(view->zonetable);
+	rcu_read_lock();
+	zt = rcu_dereference(view->zonetable);
+	rcu_read_unlock();
+	assert_non_null(zt);
 
 	assert_false(dns__zone_loadpending(zone));
 	zonefile = fopen("./zone.data", "wb");
@@ -172,7 +184,7 @@ ISC_LOOP_TEST_IMPL(asyncload_zone) {
 	fwrite(buf, 1, n, zonefile);
 	fflush(zonefile);
 
-	dns_zone_setfile(zone, "./zone.data", dns_masterformat_text,
+	dns_zone_setfile(zone, "./zone.data", NULL, dns_masterformat_text,
 			 &dns_master_style_default);
 
 	dns_zone_asyncload(zone, false, load_done_first, zone);
@@ -209,8 +221,8 @@ all_done(void *arg ISC_ATTR_UNUSED) {
 	dns_zone_detach(&zone3);
 	dns_view_detach(&view);
 
-	isc_loopmgr_shutdown(loopmgr);
-	return (ISC_R_SUCCESS);
+	isc_loopmgr_shutdown();
+	return ISC_R_SUCCESS;
 }
 
 /* asynchronous zone table load */
@@ -223,22 +235,24 @@ ISC_LOOP_TEST_IMPL(asyncload_zt) {
 
 	result = dns_test_makezone("foo", &zone1, NULL, true);
 	assert_int_equal(result, ISC_R_SUCCESS);
-	dns_zone_setfile(zone1, TESTS_DIR "/testdata/zt/zone1.db",
+	dns_zone_setfile(zone1, TESTS_DIR "/testdata/zt/zone1.db", NULL,
 			 dns_masterformat_text, &dns_master_style_default);
 	view = dns_zone_getview(zone1);
 
 	result = dns_test_makezone("bar", &zone2, view, false);
 	assert_int_equal(result, ISC_R_SUCCESS);
-	dns_zone_setfile(zone2, TESTS_DIR "/testdata/zt/zone1.db",
+	dns_zone_setfile(zone2, TESTS_DIR "/testdata/zt/zone1.db", NULL,
 			 dns_masterformat_text, &dns_master_style_default);
 
 	/* This one will fail to load */
 	result = dns_test_makezone("fake", &zone3, view, false);
 	assert_int_equal(result, ISC_R_SUCCESS);
-	dns_zone_setfile(zone3, TESTS_DIR "/testdata/zt/nonexistent.db",
+	dns_zone_setfile(zone3, TESTS_DIR "/testdata/zt/nonexistent.db", NULL,
 			 dns_masterformat_text, &dns_master_style_default);
 
-	zt = view->zonetable;
+	rcu_read_lock();
+	zt = rcu_dereference(view->zonetable);
+	rcu_read_unlock();
 	assert_non_null(zt);
 
 	dns_test_setupzonemgr();
@@ -253,7 +267,10 @@ ISC_LOOP_TEST_IMPL(asyncload_zt) {
 	assert_false(dns__zone_loadpending(zone2));
 	assert_false(atomic_load(&done));
 
+	rcu_read_lock();
+	zt = rcu_dereference(view->zonetable);
 	dns_zt_asyncload(zt, false, all_done, NULL);
+	rcu_read_unlock();
 }
 
 ISC_TEST_LIST_START

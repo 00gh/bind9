@@ -21,6 +21,8 @@
 
 #include <ns/client.h>
 
+#include <tests/ns.h>
+
 #if ISC_NETMGR_TRACE
 #define FLARG                                                                 \
 	, const char *func ISC_ATTR_UNUSED, const char *file ISC_ATTR_UNUSED, \
@@ -32,8 +34,6 @@
 /*
  * We don't want to use netmgr-based client accounting, we need to emulate it.
  */
-atomic_uint_fast32_t client_refs[32];
-atomic_uintptr_t client_addrs[32];
 
 #if ISC_NETMGR_TRACE
 void
@@ -84,8 +84,8 @@ isc_nmhandle_detach(isc_nmhandle_t **handlep) {
 	INSIST(i < 32);
 
 	if (atomic_fetch_sub(&client_refs[i], 1) == 1) {
-		dns_view_detach(&client->view);
-		client->state = 4;
+		dns_view_detach(&client->inner.view);
+		client->inner.state = 4;
 		ns__client_reset_cb(client);
 		ns__client_put_cb(client);
 		atomic_store(&client_addrs[i], (uintptr_t)NULL);
@@ -95,5 +95,23 @@ isc_nmhandle_detach(isc_nmhandle_t **handlep) {
 		client_refs[i]);
 #endif
 
+	return;
+}
+
+isc_nmsocket_type
+isc_nm_socket_type(const isc_nmhandle_t *handle ISC_ATTR_UNUSED) {
+	/*
+	 * By arbitrary choice, we treat mock handles as if
+	 * they were always for UDP sockets. If it's necessary
+	 * to test with other socket types in the future, this
+	 * could be changed to a global variable rather than a
+	 * constant.
+	 */
+	return isc_nm_udpsocket;
+}
+
+void
+ns_client_error(ns_client_t *client ISC_ATTR_UNUSED,
+		isc_result_t result ISC_ATTR_UNUSED) {
 	return;
 }

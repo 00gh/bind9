@@ -18,28 +18,26 @@
 #include <inttypes.h>
 #include <stdbool.h>
 
-#include <isc/lang.h>
+#include <isc/log.h>
 #include <isc/stdtime.h>
 
 #include <dns/ds.h>
 #include <dns/dsdigest.h>
-#include <dns/log.h>
 #include <dns/name.h>
 #include <dns/secalg.h>
 #include <dns/types.h>
 
 #include <dst/gssapi.h>
 
-ISC_LANG_BEGINDECLS
-
 /***
  *** Types
  ***/
 
 /*%
- * The dst_key structure is opaque.  Applications should use the accessor
- * functions provided to retrieve key attributes.  If an application needs
- * to set attributes, new accessor functions will be written.
+ * The dst_key structure is opaque.  Applications should use the
+ * accessor functions provided to retrieve key attributes.  If an
+ * application needs to set attributes, new accessor functions will be
+ * written.
  */
 
 typedef struct dst_key	   dst_key_t;
@@ -95,18 +93,32 @@ typedef enum dst_algorithm {
 	DST_ALG_ECDSA384 = 14,
 	DST_ALG_ED25519 = 15,
 	DST_ALG_ED448 = 16,
-	DST_ALG_GSSAPI = 159,
-	DST_ALG_HMACMD5 = 160,
+
+	/*
+	 * Do not renumber HMAC algorithms as they are used externally to named
+	 * in legacy K* key pair files.
+	 * Do not add non HMAC between DST_ALG_HMACMD5 and DST_ALG_HMACSHA512.
+	 */
+	DST_ALG_HMACMD5 = 157,
 	DST_ALG_HMAC_FIRST = DST_ALG_HMACMD5,
+	DST_ALG_GSSAPI = 160,	  /* Internal use only. Exception. */
 	DST_ALG_HMACSHA1 = 161,	  /* XXXMPA */
 	DST_ALG_HMACSHA224 = 162, /* XXXMPA */
 	DST_ALG_HMACSHA256 = 163, /* XXXMPA */
 	DST_ALG_HMACSHA384 = 164, /* XXXMPA */
 	DST_ALG_HMACSHA512 = 165, /* XXXMPA */
 	DST_ALG_HMAC_LAST = DST_ALG_HMACSHA512,
+
 	DST_ALG_INDIRECT = 252,
-	DST_ALG_PRIVATE = 254,
-	DST_MAX_ALGS = 256,
+	DST_ALG_PRIVATEDNS = 253,
+	DST_ALG_PRIVATEOID = 254,
+	DST_ALG_RESERVED = 255,
+	/*
+	 * Put PRIVATE DNS and PRIVATE OID identifiers here.
+	 */
+	DST_ALG_RSASHA256PRIVATEOID = 256, /* 1.2.840.113549.1.1.11 */
+	DST_ALG_RSASHA512PRIVATEOID = 257, /* 1.2.840.113549.1.1.13 */
+	DST_MAX_ALGS = 258,
 } dst_algorithm_t;
 
 /*% A buffer of this size is large enough to hold any key */
@@ -190,28 +202,6 @@ typedef enum dst_algorithm {
 /***
  *** Functions
  ***/
-isc_result_t
-dst_lib_init(isc_mem_t *mctx, const char *engine);
-/*%<
- * Initializes the DST subsystem.
- *
- * Requires:
- * \li 	"mctx" is a valid memory context
- *
- * Returns:
- * \li	ISC_R_SUCCESS
- * \li	ISC_R_NOMEMORY
- * \li	DST_R_NOENGINE
- *
- * Ensures:
- * \li	DST is properly initialized.
- */
-
-void
-dst_lib_destroy(void);
-/*%<
- * Releases all resources allocated by DST.
- */
 
 bool
 dst_algorithm_supported(unsigned int alg);
@@ -221,6 +211,20 @@ dst_algorithm_supported(unsigned int alg);
  * Returns:
  * \li	true
  * \li	false
+ */
+
+dst_algorithm_t
+dst_algorithm_fromprivateoid(isc_buffer_t *buffer);
+/*
+ * Extract the dst algorithm identifier that matches
+ * the OID value found at the start of 'buffer'.
+ */
+
+dst_algorithm_t
+dst_algorithm_fromprivatedns(isc_buffer_t *buf);
+/*
+ * Extract the dst algorithm identifier that matches
+ * the DNS name found at the start of 'buffer'.
  */
 
 bool
@@ -234,8 +238,8 @@ dst_ds_digest_supported(unsigned int digest_type);
  */
 
 isc_result_t
-dst_context_create(dst_key_t *key, isc_mem_t *mctx, isc_logcategory_t *category,
-		   bool useforsigning, int maxbits, dst_context_t **dctxp);
+dst_context_create(dst_key_t *key, isc_mem_t *mctx, isc_logcategory_t category,
+		   bool useforsigning, dst_context_t **dctxp);
 /*%<
  * Creates a context to be used for a sign or verify operation.
  *
@@ -246,7 +250,9 @@ dst_context_create(dst_key_t *key, isc_mem_t *mctx, isc_logcategory_t *category,
  *
  * Returns:
  * \li	ISC_R_SUCCESS
- * \li	ISC_R_NOMEMORY
+ * \li	DST_R_UNSUPPORTEDALG
+ * \li	DST_R_NULLKEY
+ * \li	Other errors are possible.
  *
  * Ensures:
  * \li	*dctxp will contain a usable context.
@@ -300,15 +306,8 @@ dst_context_sign(dst_context_t *dctx, isc_buffer_t *sig);
 
 isc_result_t
 dst_context_verify(dst_context_t *dctx, isc_region_t *sig);
-
-isc_result_t
-dst_context_verify2(dst_context_t *dctx, unsigned int maxbits,
-		    isc_region_t *sig);
 /*%<
  * Verifies the signature using the data and key stored in the context.
- *
- * 'maxbits' specifies the maximum number of bits permitted in the RSA
- * exponent.
  *
  * Requires:
  * \li	"dctx" is a valid context.
@@ -320,25 +319,6 @@ dst_context_verify2(dst_context_t *dctx, unsigned int maxbits,
  *
  * Ensures:
  * \li	"sig" will contain the signature
- */
-
-isc_result_t
-dst_key_computesecret(const dst_key_t *pub, const dst_key_t *priv,
-		      isc_buffer_t *secret);
-/*%<
- * Computes a shared secret from two (Diffie-Hellman) keys.
- *
- * Requires:
- * \li	"pub" is a valid key that can be used to derive a shared secret
- * \li	"priv" is a valid private key that can be used to derive a shared secret
- * \li	"secret" is a valid buffer
- *
- * Returns:
- * \li	ISC_R_SUCCESS
- * \li	any other result indicates failure
- *
- * Ensures:
- * \li	If successful, secret will contain the derived shared secret.
  */
 
 isc_result_t
@@ -552,25 +532,6 @@ dst_key_tobuffer(const dst_key_t *key, isc_buffer_t *target);
  *\li	If successful, the used pointer in 'target' is advanced.
  */
 
-isc_result_t
-dst_key_privatefrombuffer(dst_key_t *key, isc_buffer_t *buffer);
-/*%<
- * Converts a public key into a private key, reading the private key
- * information from the buffer.  The buffer should contain the same data
- * as the .private key file would.
- *
- * Requires:
- *\li	"key" is a valid public key.
- *\li	"buffer" is not NULL.
- *
- * Returns:
- *\li 	ISC_R_SUCCESS
- * \li	any other result indicates failure
- *
- * Ensures:
- *\li	If successful, key will contain a valid private key.
- */
-
 dns_gss_ctx_id_t
 dst_key_getgssctx(const dst_key_t *key);
 /*%<
@@ -616,23 +577,21 @@ dst_key_buildinternal(const dns_name_t *name, unsigned int alg,
 isc_result_t
 dst_key_fromlabel(const dns_name_t *name, int alg, unsigned int flags,
 		  unsigned int protocol, dns_rdataclass_t rdclass,
-		  const char *engine, const char *label, const char *pin,
-		  isc_mem_t *mctx, dst_key_t **keyp);
+		  const char *label, const char *pin, isc_mem_t *mctx,
+		  dst_key_t **keyp);
 
 isc_result_t
 dst_key_generate(const dns_name_t *name, unsigned int alg, unsigned int bits,
 		 unsigned int param, unsigned int flags, unsigned int protocol,
-		 dns_rdataclass_t rdclass, isc_mem_t *mctx, dst_key_t **keyp,
-		 void (*callback)(int));
+		 dns_rdataclass_t rdclass, const char *label, isc_mem_t *mctx,
+		 dst_key_t **keyp, void (*callback)(int));
 
 /*%<
  * Generate a DST key (or keypair) with the supplied parameters.  The
  * interpretation of the "param" field depends on the algorithm:
  * \code
- * 	RSA:	exponent
- * 		0	use exponent 3
- * 		!0	use Fermat4 (2^16 + 1)
- * 	DSA:	unused
+ * 	RSA:	unused
+ * 	ECDSA:	unused
  * 	HMACMD5: entropy
  *		0	default - require good entropy
  *		!0	lack of good entropy is ok
@@ -688,21 +647,6 @@ dst_key_pubcompare(const dst_key_t *key1, const dst_key_t *key2,
  * \li	false
  */
 
-bool
-dst_key_paramcompare(const dst_key_t *key1, const dst_key_t *key2);
-/*%<
- * Compares the parameters of two DST keys.  This is used to determine if
- * two (Diffie-Hellman) keys can be used to derive a shared secret.
- *
- * Requires:
- *\li	"key1" is a valid key.
- *\li	"key2" is a valid key.
- *
- * Returns:
- *\li 	true
- * \li	false
- */
-
 void
 dst_key_attach(dst_key_t *source, dst_key_t **target);
 /*
@@ -741,9 +685,6 @@ unsigned int
 dst_key_size(const dst_key_t *key);
 
 unsigned int
-dst_key_proto(const dst_key_t *key);
-
-unsigned int
 dst_key_alg(const dst_key_t *key);
 
 uint32_t
@@ -758,6 +699,9 @@ dst_key_rid(const dst_key_t *key);
 dns_rdataclass_t
 dst_key_class(const dst_key_t *key);
 
+const char *
+dst_key_directory(const dst_key_t *key);
+
 bool
 dst_key_isprivate(const dst_key_t *key);
 
@@ -765,7 +709,23 @@ bool
 dst_key_iszonekey(const dst_key_t *key);
 
 bool
-dst_key_isnullkey(const dst_key_t *key);
+dst_key_have_ksk_and_zsk(dst_key_t **keys, unsigned int nkeys, unsigned int i,
+			 bool check_offline, bool ksk, bool zsk, bool *have_ksk,
+			 bool *have_zsk);
+/*%<
+ *
+ * Check the list of 'keys' to see if both a KSK and ZSK are present, given key
+ * 'i'. The values stored in 'ksk' and 'zsk' tell whether key 'i' is a KSK, ZSK,
+ * or both (CSK). If 'check_offline' is true, don't consider KSKs that are
+ * currently offline (e.g. their private key file is not available).
+ *
+ * Requires:
+ *\li	"keys" is not NULL.
+ *
+ * Returns:
+ *\li	true if there is one or more keys such that both the KSK and ZSK roles
+ *are covered, false otherwise.
+ */
 
 isc_result_t
 dst_key_buildfilename(const dst_key_t *key, int type, const char *directory,
@@ -1046,7 +1006,6 @@ dst_key_dump(dst_key_t *key, isc_mem_t *mctx, char **buffer, int *length);
  *
  * Returns:
  *	ISC_R_SUCCESS
- *	ISC_R_NOMEMORY
  *	ISC_R_NOTIMPLEMENTED
  *	others.
  */
@@ -1122,7 +1081,7 @@ dst_key_haskasp(dst_key_t *key);
  */
 
 bool
-dst_key_is_unused(dst_key_t *key);
+dst_key_is_unused(const dst_key_t *key);
 /*%<
  * Check if this key is unused.
  *
@@ -1179,7 +1138,7 @@ dst_key_is_removed(dst_key_t *key, isc_stdtime_t now, isc_stdtime_t *remove);
  */
 
 dst_key_state_t
-dst_key_goal(dst_key_t *key);
+dst_key_goal(const dst_key_t *key);
 /*%<
  * Get the key goal. Should be OMNIPRESENT or HIDDEN.
  * This can be used to determine if the key is being introduced or
@@ -1207,11 +1166,104 @@ dst_key_copy_metadata(dst_key_t *to, dst_key_t *from);
  *	'to' and 'from' to be valid.
  */
 
+void
+dst_key_setdirectory(dst_key_t *key, const char *dir);
+/*%<
+ * Set the directory where to store key files for this key.
+ *
+ * Requires:
+ *	'key' to be valid.
+ */
+
 const char *
 dst_hmac_algorithm_totext(dst_algorithm_t alg);
-/*$<
+/*%<
  * Return the name associtated with the HMAC algorithm 'alg'
  * or return "unknown".
  */
 
-ISC_LANG_ENDDECLS
+isc_result_t
+dst_algorithm_fromtext(dst_algorithm_t *algp, isc_textregion_t *source);
+/*%<
+ * Convert the text 'source' refers to into a DST security algorithm value.
+ * The text may contain either a mnemonic algorithm name or a decimal algorithm
+ * number.  This supports more algorithms than 'dns_secalg_fromtext' as it
+ * supports private algorithms used with PRIVATEDNS and PRIVATEOID.
+ *
+ * Requires:
+ *\li   'algp' is a valid pointer.
+ *
+ *\li   'source' is a valid text region.
+ *
+ * Returns:
+ *\li   ISC_R_SUCCESS                   on success
+ *\li   ISC_R_RANGE                     numeric type is out of range
+ *\li   DNS_R_UNKNOWN                   mnemonic type is unknown
+ */
+
+isc_result_t
+dst_algorithm_totext(dst_algorithm_t alg, isc_buffer_t *target);
+/*%<
+ * Put a textual representation of DST security algorithm 'alg'
+ * into 'target'.  This supports a superset of dns_secalg_totext.
+ *
+ * Requires:
+ *\li   'alg' is a valid dst_algorithm_t.
+ *
+ *\li   'target' is a valid text buffer.
+ *
+ * Ensures,
+ *      if the result is success:
+ *\li           The used space in 'target' is updated.
+ *
+ * Returns:
+ *\li   ISC_R_SUCCESS                   on success
+ *\li   ISC_R_NOSPACE                   target buffer is too small
+ */
+
+#define DST_ALGORITHM_FORMATSIZE 20
+void
+dst_algorithm_format(dst_algorithm_t dst_alg, char *data, unsigned int length);
+/*%<
+ * Wrapper for dst_algorithm_totext(), writing text into 'cp'
+ */
+
+dns_secalg_t
+dst_algorithm_tosecalg(dst_algorithm_t dst_alg);
+/*%<
+ * Return the DNSSEC algorithm identifier that applies for the DST
+ * algorithm.  For PRIVATEDNS and PRIVATEOID based algorithms, this
+ * is PRIVATEDNS and PRIVATEOID respectively.
+ *
+ * Zero is returned when there is no mapping.
+ */
+
+isc_result_t
+dst_privatedns_fromtext(dst_algorithm_t *algp, isc_textregion_t *source);
+
+isc_result_t
+dns_privatedns_totext(dst_algorithm_t alg, isc_buffer_t *b);
+
+void
+dns_privatedns_format(dst_algorithm_t alg, char *buf, unsigned int size);
+
+isc_result_t
+dst_privateoid_fromtext(dst_algorithm_t *algp, isc_textregion_t *source);
+
+isc_result_t
+dns_privateoid_totext(dst_algorithm_t alg, isc_buffer_t *b);
+
+void
+dns_privateoid_format(dst_algorithm_t alg, char *buf, unsigned int size);
+
+dst_algorithm_t
+dst_algorithm_fromdata(dns_secalg_t algorithm, unsigned char *data,
+		       unsigned int length);
+/*%<
+ * If 'algorithm' is PRIVATEOID or PRIVATEDNS, extract the DNSSEC private
+ * algorithm encoded at the begining of data and return the DST algorithm
+ * number that corresponds to it; if the algorithm is unknown to DST,
+ * return 0.
+ *
+ * If 'algorithm' is any other value, return it directly.
+ */

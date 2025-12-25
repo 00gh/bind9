@@ -13,26 +13,21 @@
 
 #pragma once
 
-/*
- * Define this for reference count tracing in the unit
- */
-#undef DNS_RPZ_TRACE
+/* Add -DDNS_RPZ_TRACE=1 to CFLAGS for detailed reference tracing */
 
 #include <inttypes.h>
 #include <stdbool.h>
 
 #include <isc/ht.h>
-#include <isc/lang.h>
 #include <isc/refcount.h>
 #include <isc/rwlock.h>
 #include <isc/time.h>
 #include <isc/timer.h>
 
 #include <dns/fixedname.h>
+#include <dns/qp.h>
 #include <dns/rdata.h>
 #include <dns/types.h>
-
-ISC_LANG_BEGINDECLS
 
 #define DNS_RPZ_PREFIX "rpz-"
 /*
@@ -90,7 +85,7 @@ typedef uint8_t dns_rpz_num_t;
  */
 typedef uint64_t dns_rpz_zbits_t;
 
-#define DNS_RPZ_ALL_ZBITS ((dns_rpz_zbits_t)-1)
+#define DNS_RPZ_ALL_ZBITS ((dns_rpz_zbits_t) - 1)
 
 #define DNS_RPZ_INVALID_NUM DNS_RPZ_MAX_ZONES
 
@@ -202,7 +197,6 @@ struct dns_rpz_popt {
 	dns_rpz_zbits_t no_log;
 	dns_rpz_zbits_t nsip_on;
 	dns_rpz_zbits_t nsdname_on;
-	bool		dnsrps_enabled;
 	bool		break_dnssec;
 	bool		qname_wait_recurse;
 	bool		nsip_wait_recurse;
@@ -218,7 +212,6 @@ struct dns_rpz_zones {
 	unsigned int   magic;
 	isc_refcount_t references;
 	isc_mem_t     *mctx;
-	isc_loopmgr_t *loopmgr;
 
 	dns_rpz_popt_t	   p;
 	dns_rpz_zone_t	  *zones[DNS_RPZ_MAX_ZONES];
@@ -269,14 +262,7 @@ struct dns_rpz_zones {
 	bool shuttingdown;
 
 	dns_rpz_cidr_node_t *cidr;
-	dns_rbt_t	    *rbt;
-
-	/*
-	 * DNSRPZ librpz configuration string and handle on librpz connection
-	 */
-	char		     *rps_cstr;
-	size_t		      rps_cstr_size;
-	struct librpz_client *rps_client;
+	dns_qpmulti_t	    *table;
 };
 
 /*
@@ -346,11 +332,6 @@ typedef struct {
 	int	       rpz_ver;
 
 	/*
-	 * Shim db between BIND and DNRPS librpz.
-	 */
-	dns_db_t *rpsdb;
-
-	/*
 	 * p_name: current policy owner name
 	 * r_name: recursing for this name to possible policy triggers
 	 * f_name: saved found name from before recursion
@@ -394,40 +375,33 @@ dns_rpz_decode_cname(dns_rpz_zone_t *rpz, dns_rdataset_t *rdataset,
 		     dns_name_t *selfname);
 
 isc_result_t
-dns_rpz_new_zones(isc_mem_t *mctx, isc_loopmgr_t *loopmgr, char *rps_cstr,
-		  size_t rps_cstr_size, dns_rpz_zones_t **rpzsp);
+dns_rpz_new_zones(dns_view_t *view, dns_rpz_zones_t **rpzsp);
 
 isc_result_t
 dns_rpz_new_zone(dns_rpz_zones_t *rpzs, dns_rpz_zone_t **rpzp);
 
 isc_result_t
 dns_rpz_dbupdate_callback(dns_db_t *db, void *fn_arg);
+void
+dns_rpz_dbupdate_unregister(dns_db_t *db, dns_rpz_zone_t *rpz);
+void
+dns_rpz_dbupdate_register(dns_db_t *db, dns_rpz_zone_t *rpz);
 
 void
 dns_rpz_zones_shutdown(dns_rpz_zones_t *rpzs);
 
 #ifdef DNS_RPZ_TRACE
-/* Compatibility macros */
-#define dns_rpz_detach_rpzs(rpzsp) \
+#define dns_rpz_zones_detach(rpzsp) \
 	dns_rpz_zones__detach(rpzsp, __func__, __FILE__, __LINE__)
-#define dns_rpz_attach_rpzs(rpzs, rpzsp) \
+#define dns_rpz_zones_attach(rpzs, rpzsp) \
 	dns_rpz_zones__attach(rpzs, rpzsp, __func__, __FILE__, __LINE__)
-#define dns_rpz_ref_rpzs(ptr) \
+#define dns_rpz_zones_ref(ptr) \
 	dns_rpz_zones__ref(ptr, __func__, __FILE__, __LINE__)
-#define dns_rpz_unref_rpzs(ptr) \
+#define dns_rpz_zones_unref(ptr) \
 	dns_rpz_zones__unref(ptr, __func__, __FILE__, __LINE__)
-#define dns_rpz_shutdown_rpzs(rpzs) \
-	dns_rpz_zones_shutdown(rpzs, __func__, __FILE__, __LINE__)
 
 ISC_REFCOUNT_TRACE_DECL(dns_rpz_zones);
 #else
-/* Compatibility macros */
-#define dns_rpz_detach_rpzs(rpzsp)	 dns_rpz_zones_detach(rpzsp)
-#define dns_rpz_attach_rpzs(rpzs, rpzsp) dns_rpz_zones_attach(rpzs, rpzsp)
-#define dns_rpz_shutdown_rpzs(rpzsp)	 dns_rpz_zones_shutdown(rpzsp)
-#define dns_rpz_ref_rpzs(ptr)		 dns_rpz_zones_ref(ptr)
-#define dns_rpz_unref_rpzs(ptr)		 dns_rpz_zones_unref(ptr)
-
 ISC_REFCOUNT_DECL(dns_rpz_zones);
 #endif
 
@@ -439,5 +413,3 @@ dns_rpz_find_ip(dns_rpz_zones_t *rpzs, dns_rpz_type_t rpz_type,
 dns_rpz_zbits_t
 dns_rpz_find_name(dns_rpz_zones_t *rpzs, dns_rpz_type_t rpz_type,
 		  dns_rpz_zbits_t zbits, dns_name_t *trig_name);
-
-ISC_LANG_ENDDECLS

@@ -97,6 +97,12 @@ Options
    after executing the requested command (e.g., ISC_R_SUCCESS,
    ISC_R_FAILURE, etc.).
 
+.. option:: -t timeout
+
+   This option sets the idle timeout period for :program:`rndc` to
+   ``timeout`` seconds. The default is 60 seconds, and the maximum settable
+   value is 86400 seconds (1 day). If set to 0, there is no timeout.
+
 .. option:: -V
 
    This option enables verbose logging.
@@ -145,6 +151,15 @@ Currently supported commands are:
    text.)
 
    See also :option:`rndc delzone` and :option:`rndc modzone`.
+
+.. option:: closelogs
+
+   This command closes currently open log files.  It is intended to be used
+   by external log rotation tools following this proceedure.
+
+   1) rename the log files
+   2) run ``rndc closelogs``
+   3) optionally compress the log files
 
 .. option:: delzone [-clean] zone [class [view]]
 
@@ -251,6 +266,11 @@ Currently supported commands are:
 
    See also :option:`rndc stop`.
 
+.. option:: skr -import file zone [class [view]]
+
+   This command allows you to import a SKR file for the specified zone, to
+   support offline KSK signing.
+
 .. option:: loadkeys [zone [class [view]]]
 
    This command fetches all DNSSEC keys for the given zone from the key directory. If
@@ -259,10 +279,9 @@ Currently supported commands are:
    immediately re-signed by the new keys, but is allowed to
    incrementally re-sign over time.
 
-   This command requires that the zone be configured with a ``dnssec-policy``, or
-   that the ``auto-dnssec`` zone option be set to ``maintain``, and also requires the
-   zone to be configured to allow dynamic DNS. (See "Dynamic Update Policies" in
-   the Administrator Reference Manual for more details.)
+   This command requires that the zone be configured with a ``dnssec-policy``, and
+   also requires the zone to be configured to allow dynamic DNS. (See "Dynamic
+   Update Policies" in the Administrator Reference Manual for more details.)
 
 .. option:: managed-keys (status | refresh | sync | destroy) [class [view]]
 
@@ -302,6 +321,19 @@ Currently supported commands are:
       also be used, for example, to jumpstart the acquisition of new
       keys in the event of a trust anchor rollover, or as a brute-force
       repair for key maintenance problems.
+
+.. option:: memprof [(on | off | dump)]
+
+   This command controls memory profiling. To have any effect, :iscman:`named` must be
+   built with jemalloc, the library have profiling support enabled and run with the
+   ``prof:true`` allocator configuration. (either via ``MALLOC_CONF`` or ``/etc/malloc.conf``)
+
+   The ``prof_active:false`` option is recommended to ensure the profiling overhead does
+   not affect :iscman:`named` when not needed.
+
+   The ``on`` and ``off`` options will start and stop the jemalloc memory profiling respectively.
+   When run with the `dump` option, :iscman:`named` will dump the profile to the working
+   directory. The name will be chosen automatically by jemalloc.
 
 .. option:: modzone zone [class [view]] configuration
 
@@ -410,8 +442,10 @@ Currently supported commands are:
 
    The first list includes all unique clients that are waiting for
    recursion to complete, including the query that is awaiting a
-   response and the timestamp (seconds since the Unix epoch) of
-   when named started processing this client query.
+   response, the timestamp (seconds since the Unix epoch) of
+   when named started processing this client query, the client's
+   address, and the transport over which the the query was received
+   (UDP, TCP, TLS, or HTTP).
 
    The second list comprises of domains for which there are active
    (or recently active) fetches in progress.  It reports the number
@@ -435,17 +469,38 @@ Currently supported commands are:
    .. option:: zone [class [view]]
 
    If a zone is specified, this command reloads only the given zone.
+   If no zone is specified, the reloading happens asynchronously.
 
 .. program:: rndc
 
-.. option:: retransfer zone [class [view]]
+.. option:: reset-stats <counter-name ...>
+
+   This command resets the requested statistics counters.
+
+   At least one counter name must be provided. Currently the following counters
+   are supported: ``recursive-high-water``, ``tcp-high-water``.
+
+.. option:: responselog [on | off]
+
+   This command enables or disables response logging. For backward compatibility,
+   this command can also be used without an argument to toggle response logging
+   on and off.
+
+   Unlike query logging, response logging cannot be enabled by explicitly directing
+   the ``responses`` ``category`` to a ``channel`` in the ``logging`` section
+   of :iscman:`named.conf`, but it can still be enabled by specifying
+   ``responselog yes;`` in the ``options`` section of :iscman:`named.conf`.
+
+.. option:: retransfer [-force] zone [class [view]]
 
    This command retransfers the given secondary zone from the primary server.
 
    If the zone is configured to use ``inline-signing``, the signed
    version of the zone is discarded; after the retransfer of the
    unsigned version is complete, the signed version is regenerated
-   with new signatures.
+   with new signatures. With the optional ``-force`` argument provided
+   if there is an ongoing zone transfer it will be aborted before a new zone
+   transfer is scheduled.
 
 .. option:: scan
 
@@ -456,9 +511,8 @@ Currently supported commands are:
 .. option:: secroots [-] [view ...]
 
    This command dumps the security roots (i.e., trust anchors configured via
-   ``trust-anchors``, or the ``managed-keys`` or ``trusted-keys`` statements
-   [both deprecated], or ``dnssec-validation auto``) and negative trust anchors
-   for the specified views. If no view is specified, all views are
+   ``trust-anchors`` statement, or ``dnssec-validation auto``) and negative
+   trust anchors for the specified views. If no view is specified, all views are
    dumped. Security roots indicate whether they are configured as trusted
    keys, managed keys, or initializing managed keys (managed keys that have not
    yet been updated by a successful key refresh query).
@@ -498,11 +552,9 @@ Currently supported commands are:
    the zone's DNSKEY RRset. If the DNSKEY RRset is changed, then the
    zone is automatically re-signed with the new key set.
 
-   This command requires that the zone be configured with a ``dnssec-policy``, or
-   that the ``auto-dnssec`` zone option be set to ``allow`` or ``maintain``,
-   and also requires the zone to be configured to allow dynamic DNS. (See
-   "Dynamic Update Policies" in the BIND 9 Administrator Reference Manual for more
-   details.)
+   This command requires that the zone be configured with a ``dnssec-policy``, and
+   also requires the zone to be configured to allow dynamic DNS. (See "Dynamic
+   Update Policies" in the Administrator Reference Manual for more details.)
 
    See also :option:`rndc loadkeys`.
 
@@ -601,7 +653,8 @@ Currently supported commands are:
    refused. If the zone has changed and the ``ixfr-from-differences``
    option is in use, the journal file is updated to reflect
    changes in the zone. Otherwise, if the zone has changed, any existing
-   journal file is removed.
+   journal file is removed.  If no zone is specified, the reloading happens
+   asynchronously.
 
    See also :option:`rndc freeze`.
 

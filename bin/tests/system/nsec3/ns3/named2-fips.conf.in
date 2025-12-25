@@ -27,7 +27,7 @@ dnssec-policy "optout" {
 };
 
 dnssec-policy "nsec3-other" {
-	nsec3param iterations 11 optout yes salt-length 0;
+	nsec3param iterations 0 optout yes salt-length 8;
 };
 
 options {
@@ -40,6 +40,7 @@ options {
 	listen-on-v6 { none; };
 	allow-transfer { any; };
 	recursion no;
+	dnssec-validation no;
 };
 
 key rndc_key {
@@ -55,7 +56,6 @@ controls {
 zone "nsec-to-nsec3.kasp" {
 	type primary;
 	file "nsec-to-nsec3.kasp.db";
-	inline-signing yes;
 	//dnssec-policy "nsec";
 	dnssec-policy "nsec3";
 };
@@ -64,7 +64,6 @@ zone "nsec-to-nsec3.kasp" {
 zone "nsec3.kasp" {
 	type primary;
 	file "nsec3.kasp.db";
-	inline-signing yes;
 	dnssec-policy "nsec3";
 };
 
@@ -79,7 +78,6 @@ zone "nsec3-dynamic.kasp" {
 zone "nsec3-other.kasp" {
 	type primary;
 	file "nsec3-other.kasp.db";
-	inline-signing yes;
 	dnssec-policy "nsec3-other";
 };
 
@@ -87,7 +85,6 @@ zone "nsec3-other.kasp" {
 zone "nsec3-change.kasp" {
 	type primary;
 	file "nsec3-change.kasp.db";
-	inline-signing yes;
 	//dnssec-policy "nsec3";
 	dnssec-policy "nsec3-other";
 };
@@ -96,6 +93,7 @@ zone "nsec3-dynamic-change.kasp" {
 	type primary;
 	file "nsec3-dynamic-change.kasp.db";
 	//dnssec-policy "nsec3";
+	inline-signing no;
 	dnssec-policy "nsec3-other";
 	allow-update { any; };
 };
@@ -104,7 +102,6 @@ zone "nsec3-dynamic-change.kasp" {
 zone "nsec3-to-optout.kasp" {
 	type primary;
 	file "nsec3-to-optout.kasp.db";
-	inline-signing yes;
 	//dnssec-policy "nsec3";
 	dnssec-policy "optout";
 };
@@ -113,7 +110,6 @@ zone "nsec3-to-optout.kasp" {
 zone "nsec3-from-optout.kasp" {
 	type primary;
 	file "nsec3-from-optout.kasp.db";
-	inline-signing yes;
 	//dnssec-policy "optout";
 	dnssec-policy "nsec3";
 };
@@ -122,7 +118,6 @@ zone "nsec3-from-optout.kasp" {
 zone "nsec3-to-nsec.kasp" {
 	type primary;
 	file "nsec3-to-nsec.kasp.db";
-	inline-signing yes;
 	//dnssec-policy "nsec3";
 	dnssec-policy "nsec";
 };
@@ -139,7 +134,6 @@ zone "nsec3-fails-to-load.kasp" {
 zone "nsec3-dynamic-to-inline.kasp" {
        type primary;
        file "nsec3-dynamic-to-inline.kasp.db";
-       inline-signing yes;
        dnssec-policy "nsec3";
        allow-update { any; };
 };
@@ -150,4 +144,14 @@ zone "nsec3-inline-to-dynamic.kasp" {
        inline-signing no;
        dnssec-policy "nsec3";
        allow-update { any; };
+};
+
+/*
+ * This zone will have an empty nonterminal node added and a node deleted.
+ */
+zone "nsec3-ent.kasp" {
+	type primary;
+	file "nsec3-ent.kasp.db";
+	dnssec-policy "nsec3";
+	inline-signing yes;
 };

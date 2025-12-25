@@ -33,7 +33,9 @@
 #include <dns/rdatatype.h>
 #include <dns/resolver.h>
 #include <dns/stats.h>
+#include <dns/transport.h>
 #include <dns/view.h>
+#include <dns/xfrin.h>
 #include <dns/zt.h>
 
 #include <ns/stats.h>
@@ -95,7 +97,7 @@ typedef struct stats_dumparg {
 	isc_result_t result;
 } stats_dumparg_t;
 
-static isc_once_t once = ISC_ONCE_INIT;
+static isc_once_t once = ISC_ONCE_INITIALIZER;
 
 #if defined(HAVE_LIBXML2) || defined(HAVE_JSON_C)
 #define EXTENDED_STATS
@@ -124,19 +126,19 @@ user_zonetype(dns_zone_t *zone) {
 	const struct zt *tp;
 
 	if ((dns_zone_getoptions(zone) & DNS_ZONEOPT_AUTOEMPTY) != 0) {
-		return ("builtin");
+		return "builtin";
 	}
 
 	view = dns_zone_getview(zone);
 	if (view != NULL && strcmp(view->name, "_bind") == 0) {
-		return ("builtin");
+		return "builtin";
 	}
 
 	ztype = dns_zone_gettype(zone);
 	for (tp = typemap; tp->string != NULL && tp->type != ztype; tp++) {
 		/* empty */
 	}
-	return (tp->string);
+	return tp->string;
 }
 #endif /* ifdef EXTENDED_STATS */
 
@@ -249,7 +251,7 @@ get_histo_desc(const char *prefix, int i, int inf, bool ext) {
 	}
 	INSIST(0 < len && (size_t)len < space);
 	used += len + 1;
-	return (desc);
+	return desc;
 }
 
 static void
@@ -325,6 +327,8 @@ init_desc(void) {
 	SET_NSSTATDESC(updatebadprereq,
 		       "updates rejected due to prerequisite failure",
 		       "UpdateBadPrereq");
+	SET_NSSTATDESC(recurshighwater, "Recursive clients high-water",
+		       "RecursHighwater");
 	SET_NSSTATDESC(recursclients, "recursing clients", "RecursClients");
 	SET_NSSTATDESC(dns64, "queries answered by DNS64", "DNS64");
 	SET_NSSTATDESC(ratedropped, "responses dropped for rate limits",
@@ -335,10 +339,27 @@ init_desc(void) {
 		       "RPZRewrites");
 	SET_NSSTATDESC(udp, "UDP queries received", "QryUDP");
 	SET_NSSTATDESC(tcp, "TCP queries received", "QryTCP");
+	SET_NSSTATDESC(dot, "DoT queries received", "QryDoT");
+	SET_NSSTATDESC(doh, "DoH queries received", "QryDoH");
+	SET_NSSTATDESC(dohplain, "DoH-Plain queries received", "QryDoHPlain");
+	SET_NSSTATDESC(proxyudp, "PROXYv2 UDP queries received", "QryProxyUDP");
+	SET_NSSTATDESC(proxytcp, "PROXYv2 TCP queries received", "QryProxyTCP");
+	SET_NSSTATDESC(proxydot, "PROXYv2 DoT queries received", "QryProxyDoT");
+	SET_NSSTATDESC(proxydoh, "PROXYv2 DoH queries received", "QryProxyDoH");
+	SET_NSSTATDESC(proxydohplain, "PROXYv2/DoH-Plain queries received",
+		       "QryProxyDoHPlain");
+	SET_NSSTATDESC(encryptedproxydot,
+		       "Encrypted PROXYv2 DoT queries received",
+		       "QryEncryptedProxyDoT");
+	SET_NSSTATDESC(encryptedproxydoh,
+		       "Encrypted PROXYv2 DoH queries received",
+		       "QryEncryptedProxyDoH");
 	SET_NSSTATDESC(nsidopt, "NSID option received", "NSIDOpt");
 	SET_NSSTATDESC(expireopt, "Expire option received", "ExpireOpt");
 	SET_NSSTATDESC(keepaliveopt, "EDNS TCP keepalive option received",
 		       "KeepAliveOpt");
+	SET_NSSTATDESC(zoneversionopt, "ZONEVERSION option received",
+		       "ZoneVersionOpt");
 	SET_NSSTATDESC(padopt, "EDNS padding option received", "PadOpt");
 	SET_NSSTATDESC(otheropt, "Other EDNS option received", "OtherOpt");
 	SET_NSSTATDESC(cookiein, "COOKIE option received", "CookieIn");
@@ -464,8 +485,12 @@ init_desc(void) {
 	SET_RESSTATDESC(zonequota, "spilled due to zone quota", "ZoneQuota");
 	SET_RESSTATDESC(serverquota, "spilled due to server quota",
 			"ServerQuota");
+	SET_RESSTATDESC(clientquota, "spilled due to clients per query quota",
+			"ClientQuota");
 	SET_RESSTATDESC(nextitem, "waited for next item", "NextItem");
 	SET_RESSTATDESC(priming, "priming queries", "Priming");
+	SET_RESSTATDESC(forwardonlyfail, "all forwarders failed",
+			"ForwardOnlyFail");
 
 	INSIST(i == dns_resstatscounter_max);
 
@@ -551,8 +576,6 @@ init_desc(void) {
 	SET_SOCKSTATDESC(udp6open, "UDP/IPv6 sockets opened", "UDP6Open");
 	SET_SOCKSTATDESC(tcp4open, "TCP/IPv4 sockets opened", "TCP4Open");
 	SET_SOCKSTATDESC(tcp6open, "TCP/IPv6 sockets opened", "TCP6Open");
-	SET_SOCKSTATDESC(unixopen, "Unix domain sockets opened", "UnixOpen");
-	SET_SOCKSTATDESC(rawopen, "Raw sockets opened", "RawOpen");
 	SET_SOCKSTATDESC(udp4openfail, "UDP/IPv4 socket open failures",
 			 "UDP4OpenFail");
 	SET_SOCKSTATDESC(udp6openfail, "UDP/IPv6 socket open failures",
@@ -561,18 +584,10 @@ init_desc(void) {
 			 "TCP4OpenFail");
 	SET_SOCKSTATDESC(tcp6openfail, "TCP/IPv6 socket open failures",
 			 "TCP6OpenFail");
-	SET_SOCKSTATDESC(unixopenfail, "Unix domain socket open failures",
-			 "UnixOpenFail");
-	SET_SOCKSTATDESC(rawopenfail, "Raw socket open failures",
-			 "RawOpenFail");
 	SET_SOCKSTATDESC(udp4close, "UDP/IPv4 sockets closed", "UDP4Close");
 	SET_SOCKSTATDESC(udp6close, "UDP/IPv6 sockets closed", "UDP6Close");
 	SET_SOCKSTATDESC(tcp4close, "TCP/IPv4 sockets closed", "TCP4Close");
 	SET_SOCKSTATDESC(tcp6close, "TCP/IPv6 sockets closed", "TCP6Close");
-	SET_SOCKSTATDESC(unixclose, "Unix domain sockets closed", "UnixClose");
-	SET_SOCKSTATDESC(fdwatchclose, "FDwatch sockets closed",
-			 "FDWatchClose");
-	SET_SOCKSTATDESC(rawclose, "Raw sockets closed", "RawClose");
 	SET_SOCKSTATDESC(udp4bindfail, "UDP/IPv4 socket bind failures",
 			 "UDP4BindFail");
 	SET_SOCKSTATDESC(udp6bindfail, "UDP/IPv6 socket bind failures",
@@ -581,10 +596,6 @@ init_desc(void) {
 			 "TCP4BindFail");
 	SET_SOCKSTATDESC(tcp6bindfail, "TCP/IPv6 socket bind failures",
 			 "TCP6BindFail");
-	SET_SOCKSTATDESC(unixbindfail, "Unix domain socket bind failures",
-			 "UnixBindFail");
-	SET_SOCKSTATDESC(fdwatchbindfail, "FDwatch socket bind failures",
-			 "FdwatchBindFail");
 	SET_SOCKSTATDESC(udp4connectfail, "UDP/IPv4 socket connect failures",
 			 "UDP4ConnFail");
 	SET_SOCKSTATDESC(udp6connectfail, "UDP/IPv6 socket connect failures",
@@ -593,10 +604,6 @@ init_desc(void) {
 			 "TCP4ConnFail");
 	SET_SOCKSTATDESC(tcp6connectfail, "TCP/IPv6 socket connect failures",
 			 "TCP6ConnFail");
-	SET_SOCKSTATDESC(unixconnectfail, "Unix domain socket connect failures",
-			 "UnixConnFail");
-	SET_SOCKSTATDESC(fdwatchconnectfail, "FDwatch socket connect failures",
-			 "FDwatchConnFail");
 	SET_SOCKSTATDESC(udp4connect, "UDP/IPv4 connections established",
 			 "UDP4Conn");
 	SET_SOCKSTATDESC(udp6connect, "UDP/IPv6 connections established",
@@ -605,48 +612,30 @@ init_desc(void) {
 			 "TCP4Conn");
 	SET_SOCKSTATDESC(tcp6connect, "TCP/IPv6 connections established",
 			 "TCP6Conn");
-	SET_SOCKSTATDESC(unixconnect, "Unix domain connections established",
-			 "UnixConn");
-	SET_SOCKSTATDESC(fdwatchconnect,
-			 "FDwatch domain connections established",
-			 "FDwatchConn");
 	SET_SOCKSTATDESC(tcp4acceptfail, "TCP/IPv4 connection accept failures",
 			 "TCP4AcceptFail");
 	SET_SOCKSTATDESC(tcp6acceptfail, "TCP/IPv6 connection accept failures",
 			 "TCP6AcceptFail");
-	SET_SOCKSTATDESC(unixacceptfail,
-			 "Unix domain connection accept failures",
-			 "UnixAcceptFail");
 	SET_SOCKSTATDESC(tcp4accept, "TCP/IPv4 connections accepted",
 			 "TCP4Accept");
 	SET_SOCKSTATDESC(tcp6accept, "TCP/IPv6 connections accepted",
 			 "TCP6Accept");
-	SET_SOCKSTATDESC(unixaccept, "Unix domain connections accepted",
-			 "UnixAccept");
 	SET_SOCKSTATDESC(udp4sendfail, "UDP/IPv4 send errors", "UDP4SendErr");
 	SET_SOCKSTATDESC(udp6sendfail, "UDP/IPv6 send errors", "UDP6SendErr");
 	SET_SOCKSTATDESC(tcp4sendfail, "TCP/IPv4 send errors", "TCP4SendErr");
 	SET_SOCKSTATDESC(tcp6sendfail, "TCP/IPv6 send errors", "TCP6SendErr");
-	SET_SOCKSTATDESC(unixsendfail, "Unix domain send errors",
-			 "UnixSendErr");
-	SET_SOCKSTATDESC(fdwatchsendfail, "FDwatch send errors",
-			 "FDwatchSendErr");
 	SET_SOCKSTATDESC(udp4recvfail, "UDP/IPv4 recv errors", "UDP4RecvErr");
 	SET_SOCKSTATDESC(udp6recvfail, "UDP/IPv6 recv errors", "UDP6RecvErr");
 	SET_SOCKSTATDESC(tcp4recvfail, "TCP/IPv4 recv errors", "TCP4RecvErr");
 	SET_SOCKSTATDESC(tcp6recvfail, "TCP/IPv6 recv errors", "TCP6RecvErr");
-	SET_SOCKSTATDESC(unixrecvfail, "Unix domain recv errors",
-			 "UnixRecvErr");
-	SET_SOCKSTATDESC(fdwatchrecvfail, "FDwatch recv errors",
-			 "FDwatchRecvErr");
-	SET_SOCKSTATDESC(rawrecvfail, "Raw recv errors", "RawRecvErr");
 	SET_SOCKSTATDESC(udp4active, "UDP/IPv4 sockets active", "UDP4Active");
 	SET_SOCKSTATDESC(udp6active, "UDP/IPv6 sockets active", "UDP6Active");
 	SET_SOCKSTATDESC(tcp4active, "TCP/IPv4 sockets active", "TCP4Active");
 	SET_SOCKSTATDESC(tcp6active, "TCP/IPv6 sockets active", "TCP6Active");
-	SET_SOCKSTATDESC(unixactive, "Unix domain sockets active",
-			 "UnixActive");
-	SET_SOCKSTATDESC(rawactive, "Raw sockets active", "RawActive");
+	SET_SOCKSTATDESC(tcp4clients, "TCP/IPv4 clients currently connected",
+			 "TCP4Clients");
+	SET_SOCKSTATDESC(tcp6clients, "TCP/IPv6 clients currently connected",
+			 "TCP6Clients");
 	INSIST(i == isc_sockstatscounter_max);
 
 	/* Initialize DNSSEC statistics */
@@ -844,8 +833,8 @@ dump_stats(isc_stats_t *stats, isc_statsformat_t type, void *arg,
 	memset(values, 0, sizeof(values[0]) * ncounters);
 	isc_stats_dump(stats, generalstat_dump, &dumparg, options);
 
-	return (dump_counters(type, arg, category, desc, ncounters, indices,
-			      values, options));
+	return dump_counters(type, arg, category, desc, ncounters, indices,
+			     values, options);
 }
 
 #if defined(EXTENDED_STATS)
@@ -861,8 +850,8 @@ dump_histo(isc_histomulti_t *hm, isc_statsformat_t type, void *arg,
 	}
 	isc_histo_destroy(&hg);
 
-	return (dump_counters(type, arg, category, desc, ncounters, indices,
-			      values, options));
+	return dump_counters(type, arg, category, desc, ncounters, indices,
+			     values, options);
 }
 #endif /* defined(EXTENDED_STATS) */
 
@@ -891,7 +880,7 @@ dump_counters(isc_statsformat_t type, void *arg, const char *category,
 		if (category != NULL) {
 			cat = json_object_new_object();
 			if (cat == NULL) {
-				return (ISC_R_NOMEMORY);
+				return ISC_R_NOMEMORY;
 			}
 			json_object_object_add(job, category, cat);
 		}
@@ -956,20 +945,19 @@ dump_counters(isc_statsformat_t type, void *arg, const char *category,
 #ifdef HAVE_JSON_C
 			counter = json_object_new_int64(value);
 			if (counter == NULL) {
-				return (ISC_R_NOMEMORY);
+				return ISC_R_NOMEMORY;
 			}
 			json_object_object_add(cat, desc[idx], counter);
 #endif /* ifdef HAVE_JSON_C */
 			break;
 		}
 	}
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 #ifdef HAVE_LIBXML2
 cleanup:
-	isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
-		      NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR,
-		      "failed at dump_counters()");
-	return (ISC_R_FAILURE);
+	isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+		      ISC_LOG_ERROR, "failed at dump_counters()");
+	return ISC_R_FAILURE;
 #endif /* ifdef HAVE_LIBXML2 */
 }
 
@@ -1029,9 +1017,8 @@ rdtypestat_dump(dns_rdatastatstype_t type, uint64_t val, void *arg) {
 	return;
 #ifdef HAVE_LIBXML2
 cleanup:
-	isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
-		      NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR,
-		      "failed at rdtypestat_dump()");
+	isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+		      ISC_LOG_ERROR, "failed at rdtypestat_dump()");
 	dumparg->result = ISC_R_FAILURE;
 	return;
 #endif /* ifdef HAVE_LIBXML2 */
@@ -1039,7 +1026,7 @@ cleanup:
 
 static bool
 rdatastatstype_attr(dns_rdatastatstype_t type, unsigned int attr) {
-	return ((DNS_RDATASTATSTYPE_ATTR(type) & attr) != 0);
+	return (DNS_RDATASTATSTYPE_ATTR(type) & attr) != 0;
 }
 
 static void
@@ -1118,9 +1105,8 @@ rdatasetstats_dump(dns_rdatastatstype_t type, uint64_t val, void *arg) {
 	return;
 #ifdef HAVE_LIBXML2
 cleanup:
-	isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
-		      NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR,
-		      "failed at rdatasetstats_dump()");
+	isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+		      ISC_LOG_ERROR, "failed at rdatasetstats_dump()");
 	dumparg->result = ISC_R_FAILURE;
 #endif /* ifdef HAVE_LIBXML2 */
 }
@@ -1173,9 +1159,8 @@ opcodestat_dump(dns_opcode_t code, uint64_t val, void *arg) {
 
 #ifdef HAVE_LIBXML2
 cleanup:
-	isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
-		      NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR,
-		      "failed at opcodestat_dump()");
+	isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+		      ISC_LOG_ERROR, "failed at opcodestat_dump()");
 	dumparg->result = ISC_R_FAILURE;
 	return;
 #endif /* ifdef HAVE_LIBXML2 */
@@ -1229,9 +1214,8 @@ rcodestat_dump(dns_rcode_t code, uint64_t val, void *arg) {
 
 #ifdef HAVE_LIBXML2
 cleanup:
-	isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
-		      NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR,
-		      "failed at rcodestat_dump()");
+	isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+		      ISC_LOG_ERROR, "failed at rcodestat_dump()");
 	dumparg->result = ISC_R_FAILURE;
 	return;
 #endif /* ifdef HAVE_LIBXML2 */
@@ -1286,9 +1270,8 @@ dnssecsignstat_dump(uint32_t kval, uint64_t val, void *arg) {
 	return;
 #ifdef HAVE_LIBXML2
 cleanup:
-	isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
-		      NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR,
-		      "failed at dnssecsignstat_dump()");
+	isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+		      ISC_LOG_ERROR, "failed at dnssecsignstat_dump()");
 	dumparg->result = ISC_R_FAILURE;
 	return;
 #endif /* ifdef HAVE_LIBXML2 */
@@ -1302,6 +1285,7 @@ cleanup:
 #define STATS_XML_STATUS  0x00 /* display only common statistics */
 #define STATS_XML_SERVER  0x01
 #define STATS_XML_ZONES	  0x02
+#define STATS_XML_XFRINS  0x04
 #define STATS_XML_NET	  0x08
 #define STATS_XML_MEM	  0x10
 #define STATS_XML_TRAFFIC 0x20
@@ -1322,7 +1306,7 @@ zone_xmlrender(dns_zone_t *zone, void *arg) {
 
 	statlevel = dns_zone_getstatlevel(zone);
 	if (statlevel == dns_zonestat_none) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	dumparg.type = isc_statsformat_xml;
@@ -1479,12 +1463,292 @@ zone_xmlrender(dns_zone_t *zone, void *arg) {
 
 	TRY0(xmlTextWriterEndElement(writer)); /* zone */
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 cleanup:
-	isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
-		      NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR,
-		      "Failed at zone_xmlrender()");
-	return (ISC_R_FAILURE);
+	isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+		      ISC_LOG_ERROR, "Failed at zone_xmlrender()");
+	return ISC_R_FAILURE;
+}
+
+static isc_result_t
+xfrin_xmlrender(dns_zone_t *zone, void *arg) {
+	char buf[1024 + 32]; /* sufficiently large for zone name and class */
+	dns_rdataclass_t rdclass;
+	const char *ztype;
+	uint32_t serial;
+	isc_sockaddr_t addr;
+	const isc_sockaddr_t *addrp = NULL;
+	char addr_buf[ISC_SOCKADDR_FORMATSIZE];
+	dns_transport_type_t transport_type;
+	xmlTextWriterPtr writer = arg;
+	dns_zonestat_level_t statlevel;
+	int xmlrc;
+	dns_xfrin_t *xfr = NULL;
+	bool is_firstrefresh, is_running, is_deferred, is_presoa, is_pending;
+	bool needs_refresh;
+	bool is_first_data_received, is_ixfr;
+	unsigned int nmsg = 0;
+	unsigned int nrecs = 0;
+	uint64_t nbytes = 0;
+	uint64_t rate = 0;
+
+	statlevel = dns_zone_getstatlevel(zone);
+	if (statlevel == dns_zonestat_none) {
+		return ISC_R_SUCCESS;
+	}
+
+	if (dns_zone_getxfr(zone, &xfr, &is_firstrefresh, &is_running,
+			    &is_deferred, &is_presoa, &is_pending,
+			    &needs_refresh) != ISC_R_SUCCESS)
+	{
+		/*
+		 * Failed to get information about the zone's incoming transfer
+		 * (if any), but we still want to continue generating the
+		 * remaining parts of the output.
+		 */
+		return ISC_R_SUCCESS;
+	}
+
+	if (!is_running && !is_deferred && !is_presoa && !is_pending &&
+	    !needs_refresh)
+	{
+		if (xfr != NULL) {
+			dns_xfrin_detach(&xfr);
+		}
+		/* No ongoing/queued transfer. */
+		return ISC_R_SUCCESS;
+	}
+
+	if (is_running && xfr == NULL) {
+		/* The transfer is finished, and it's shutting down. */
+		return ISC_R_SUCCESS;
+	}
+
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "xfrin"));
+
+	dns_zone_nameonly(zone, buf, sizeof(buf));
+	TRY0(xmlTextWriterWriteAttribute(writer, ISC_XMLCHAR "name",
+					 ISC_XMLCHAR buf));
+
+	rdclass = dns_zone_getclass(zone);
+	dns_rdataclass_format(rdclass, buf, sizeof(buf));
+	TRY0(xmlTextWriterWriteAttribute(writer, ISC_XMLCHAR "class",
+					 ISC_XMLCHAR buf));
+
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "type"));
+	ztype = user_zonetype(zone);
+	if (ztype != NULL) {
+		TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR ztype));
+	} else {
+		TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR "-"));
+	}
+	TRY0(xmlTextWriterEndElement(writer));
+
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "serial"));
+	if (dns_zone_getserial(zone, &serial) == ISC_R_SUCCESS) {
+		TRY0(xmlTextWriterWriteFormatString(writer, "%u", serial));
+	} else {
+		TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR "-"));
+	}
+	TRY0(xmlTextWriterEndElement(writer));
+
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "remoteserial"));
+	if (is_running) {
+		serial = dns_xfrin_getendserial(xfr);
+		if (serial != 0) {
+			TRY0(xmlTextWriterWriteFormatString(writer, "%u",
+							    serial));
+		} else {
+			TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR "-"));
+		}
+	} else {
+		TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR "-"));
+	}
+	TRY0(xmlTextWriterEndElement(writer));
+
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "firstrefresh"));
+	TRY0(xmlTextWriterWriteString(
+		writer, ISC_XMLCHAR(is_firstrefresh ? "Yes" : "No")));
+	TRY0(xmlTextWriterEndElement(writer));
+
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "state"));
+	if (is_running) {
+		const char *xfr_state = NULL;
+
+		dns_xfrin_getstate(xfr, &xfr_state, &is_first_data_received,
+				   &is_ixfr);
+		TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR xfr_state));
+	} else if (is_deferred) {
+		TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR "Deferred"));
+	} else if (is_presoa) {
+		TRY0(xmlTextWriterWriteString(writer,
+					      ISC_XMLCHAR "Refresh SOA"));
+	} else if (is_pending) {
+		TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR "Pending"));
+	} else if (needs_refresh) {
+		TRY0(xmlTextWriterWriteString(writer,
+					      ISC_XMLCHAR "Needs Refresh"));
+	} else {
+		UNREACHABLE();
+	}
+	TRY0(xmlTextWriterEndElement(writer));
+
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "refreshqueued"));
+	TRY0(xmlTextWriterWriteString(
+		writer,
+		ISC_XMLCHAR(is_running && needs_refresh ? "Yes" : "No")));
+	TRY0(xmlTextWriterEndElement(writer));
+
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "localaddr"));
+	if (is_running) {
+		addrp = dns_xfrin_getsourceaddr(xfr);
+		isc_sockaddr_format(addrp, addr_buf, sizeof(addr_buf));
+		TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR addr_buf));
+	} else if (is_presoa) {
+		dns_zone_getsourceaddr(zone, &addr);
+		isc_sockaddr_format(&addr, addr_buf, sizeof(addr_buf));
+		TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR addr_buf));
+	} else {
+		TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR "-"));
+	}
+	TRY0(xmlTextWriterEndElement(writer));
+
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "remoteaddr"));
+	if (is_running) {
+		addrp = dns_xfrin_getprimaryaddr(xfr);
+		isc_sockaddr_format(addrp, addr_buf, sizeof(addr_buf));
+		TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR addr_buf));
+	} else if (is_presoa) {
+		if (dns_zone_getprimaryaddr(zone, &addr) == ISC_R_SUCCESS) {
+			isc_sockaddr_format(&addr, addr_buf, sizeof(addr_buf));
+			TRY0(xmlTextWriterWriteString(writer,
+						      ISC_XMLCHAR addr_buf));
+		} else {
+			TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR "-"));
+		}
+	} else {
+		TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR "-"));
+	}
+	TRY0(xmlTextWriterEndElement(writer));
+
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "soatransport"));
+	if (is_running || is_presoa) {
+		if (is_running) {
+			transport_type = dns_xfrin_getsoatransporttype(xfr);
+		} else {
+			transport_type = dns_zone_getrequesttransporttype(zone);
+		}
+		if (transport_type == DNS_TRANSPORT_UDP) {
+			TRY0(xmlTextWriterWriteString(writer,
+						      ISC_XMLCHAR "UDP"));
+		} else if (transport_type == DNS_TRANSPORT_TCP) {
+			TRY0(xmlTextWriterWriteString(writer,
+						      ISC_XMLCHAR "TCP"));
+		} else if (transport_type == DNS_TRANSPORT_TLS) {
+			TRY0(xmlTextWriterWriteString(writer,
+						      ISC_XMLCHAR "TLS"));
+		} else if (transport_type == DNS_TRANSPORT_NONE) {
+			TRY0(xmlTextWriterWriteString(writer,
+						      ISC_XMLCHAR "None"));
+		} else {
+			/* We don't expect any other SOA transport type. */
+			TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR "-"));
+		}
+	} else {
+		TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR "-"));
+	}
+	TRY0(xmlTextWriterEndElement(writer));
+
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "transport"));
+	if (is_running) {
+		transport_type = dns_xfrin_gettransporttype(xfr);
+		if (transport_type == DNS_TRANSPORT_TCP) {
+			TRY0(xmlTextWriterWriteString(writer,
+						      ISC_XMLCHAR "TCP"));
+		} else if (transport_type == DNS_TRANSPORT_TLS) {
+			TRY0(xmlTextWriterWriteString(writer,
+						      ISC_XMLCHAR "TLS"));
+		} else {
+			/* We don't expect any other transport type. */
+			TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR "-"));
+		}
+	} else {
+		TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR "-"));
+	}
+	TRY0(xmlTextWriterEndElement(writer));
+
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "tsigkeyname"));
+	if (is_running) {
+		const dns_name_t *tsigkeyname = dns_xfrin_gettsigkeyname(xfr);
+		char tsigkeyname_buf[DNS_NAME_FORMATSIZE];
+
+		if (tsigkeyname != NULL) {
+			dns_name_format(tsigkeyname, tsigkeyname_buf,
+					sizeof(tsigkeyname_buf));
+			TRY0(xmlTextWriterWriteString(
+				writer, ISC_XMLCHAR tsigkeyname_buf));
+		}
+	}
+	TRY0(xmlTextWriterEndElement(writer));
+
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "duration"));
+	if (is_running || is_deferred || is_presoa || is_pending) {
+		isc_time_t start = is_running ? dns_xfrin_getstarttime(xfr)
+					      : dns_zone_getxfrintime(zone);
+		isc_time_t now = isc_time_now();
+		isc_time_t diff;
+		uint32_t sec;
+
+		isc_time_subtract(&now, &start, &diff);
+		sec = isc_time_seconds(&diff);
+		TRY0(xmlTextWriterWriteFormatString(writer, "%" PRIu32, sec));
+	} else {
+		TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR "0"));
+	}
+	TRY0(xmlTextWriterEndElement(writer));
+
+	if (is_running) {
+		dns_xfrin_getstats(xfr, &nmsg, &nrecs, &nbytes, &rate);
+	}
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "nmsg"));
+	TRY0(xmlTextWriterWriteFormatString(writer, "%u", nmsg));
+	TRY0(xmlTextWriterEndElement(writer));
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "nrecs"));
+	TRY0(xmlTextWriterWriteFormatString(writer, "%u", nrecs));
+	TRY0(xmlTextWriterEndElement(writer));
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "nbytes"));
+	TRY0(xmlTextWriterWriteFormatString(writer, "%" PRIu64, nbytes));
+	TRY0(xmlTextWriterEndElement(writer));
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "rate"));
+	TRY0(xmlTextWriterWriteFormatString(writer, "%" PRIu64, rate));
+	TRY0(xmlTextWriterEndElement(writer));
+
+	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "ixfr"));
+	if (is_running && is_first_data_received) {
+		TRY0(xmlTextWriterWriteString(
+			writer, ISC_XMLCHAR(is_ixfr ? "Yes" : "No")));
+	} else {
+		TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR ""));
+	}
+	TRY0(xmlTextWriterEndElement(writer));
+
+	TRY0(xmlTextWriterEndElement(writer)); /* xfrin */
+
+	if (xfr != NULL) {
+		dns_xfrin_detach(&xfr);
+	}
+
+	return ISC_R_SUCCESS;
+
+cleanup:
+	if (xfr != NULL) {
+		dns_xfrin_detach(&xfr);
+	}
+
+	isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+		      ISC_LOG_ERROR, "Failed at xfrin_xmlrender()");
+
+	return ISC_R_FAILURE;
 }
 
 static isc_result_t
@@ -1515,7 +1779,7 @@ generatexml(named_server_t *server, uint32_t flags, int *buflen,
 	isc_result_t result;
 
 	isc_time_formatISO8601ms(&named_g_boottime, boottime, sizeof boottime);
-	isc_time_formatISO8601ms(&named_g_configtime, configtime,
+	isc_time_formatISO8601ms(&named_g_defaultconfigtime, configtime,
 				 sizeof configtime);
 	isc_time_formatISO8601ms(&now, nowstr, sizeof nowstr);
 
@@ -1765,11 +2029,12 @@ generatexml(named_server_t *server, uint32_t flags, int *buflen,
 	 */
 	view = ISC_LIST_HEAD(server->viewlist);
 	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "views"));
-	while (view != NULL &&
-	       ((flags & (STATS_XML_SERVER | STATS_XML_ZONES)) != 0))
+	while (view != NULL && ((flags & (STATS_XML_SERVER | STATS_XML_ZONES |
+					  STATS_XML_XFRINS)) != 0))
 	{
 		isc_stats_t *istats = NULL;
 		dns_stats_t *dstats = NULL;
+		dns_adb_t *adb = NULL;
 
 		TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "view"));
 		TRY0(xmlTextWriterWriteAttribute(writer, ISC_XMLCHAR "name",
@@ -1778,9 +2043,17 @@ generatexml(named_server_t *server, uint32_t flags, int *buflen,
 		if ((flags & STATS_XML_ZONES) != 0) {
 			TRY0(xmlTextWriterStartElement(writer,
 						       ISC_XMLCHAR "zones"));
-			CHECK(dns_zt_apply(view->zonetable, true, NULL,
-					   zone_xmlrender, writer));
+			CHECK(dns_view_apply(view, true, NULL, zone_xmlrender,
+					     writer));
 			TRY0(xmlTextWriterEndElement(writer)); /* /zones */
+		}
+
+		if ((flags & STATS_XML_XFRINS) != 0) {
+			TRY0(xmlTextWriterStartElement(writer,
+						       ISC_XMLCHAR "xfrins"));
+			CHECK(dns_zt_apply(view->zonetable, true, NULL,
+					   xfrin_xmlrender, writer));
+			TRY0(xmlTextWriterEndElement(writer)); /* /xfrins */
 		}
 
 		if ((flags & STATS_XML_SERVER) == 0) {
@@ -1836,10 +2109,16 @@ generatexml(named_server_t *server, uint32_t flags, int *buflen,
 		TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "counters"));
 		TRY0(xmlTextWriterWriteAttribute(writer, ISC_XMLCHAR "type",
 						 ISC_XMLCHAR "adbstat"));
-		CHECK(dump_stats(
-			dns_adb_getstats(view->adb), isc_statsformat_xml,
-			writer, NULL, adbstats_xmldesc, dns_adbstats_max,
-			adbstats_index, adbstat_values, ISC_STATSDUMP_VERBOSE));
+		dns_view_getadb(view, &adb);
+		if (adb != NULL) {
+			result = dump_stats(dns_adb_getstats(adb),
+					    isc_statsformat_xml, writer, NULL,
+					    adbstats_xmldesc, dns_adbstats_max,
+					    adbstats_index, adbstat_values,
+					    ISC_STATSDUMP_VERBOSE);
+			dns_adb_detach(&adb);
+			CHECK(result);
+		}
 		TRY0(xmlTextWriterEndElement(writer)); /* </adbstats> */
 
 		/* <cachestats> */
@@ -1871,19 +2150,18 @@ generatexml(named_server_t *server, uint32_t flags, int *buflen,
 
 	xmlFreeTextWriter(writer);
 	xmlFreeDoc(doc);
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 
 cleanup:
-	isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
-		      NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR,
-		      "failed generating XML response");
+	isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+		      ISC_LOG_ERROR, "failed generating XML response");
 	if (writer != NULL) {
 		xmlFreeTextWriter(writer);
 	}
 	if (doc != NULL) {
 		xmlFreeDoc(doc);
 	}
-	return (ISC_R_FAILURE);
+	return ISC_R_FAILURE;
 }
 
 static void
@@ -1913,12 +2191,11 @@ render_xml(uint32_t flags, void *arg, unsigned int *retcode,
 		*freecb = wrap_xmlfree;
 		*freecb_args = NULL;
 	} else {
-		isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
-			      NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR,
-			      "failed at rendering XML()");
+		isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+			      ISC_LOG_ERROR, "failed at rendering XML()");
 	}
 
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -1928,8 +2205,8 @@ render_xml_all(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo,
 	       void **freecb_args) {
 	UNUSED(httpd);
 	UNUSED(urlinfo);
-	return (render_xml(STATS_XML_ALL, arg, retcode, retmsg, mimetype, b,
-			   freecb, freecb_args));
+	return render_xml(STATS_XML_ALL, arg, retcode, retmsg, mimetype, b,
+			  freecb, freecb_args);
 }
 
 static isc_result_t
@@ -1939,8 +2216,8 @@ render_xml_status(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo,
 		  isc_httpdfree_t **freecb, void **freecb_args) {
 	UNUSED(httpd);
 	UNUSED(urlinfo);
-	return (render_xml(STATS_XML_STATUS, arg, retcode, retmsg, mimetype, b,
-			   freecb, freecb_args));
+	return render_xml(STATS_XML_STATUS, arg, retcode, retmsg, mimetype, b,
+			  freecb, freecb_args);
 }
 
 static isc_result_t
@@ -1950,8 +2227,8 @@ render_xml_server(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo,
 		  isc_httpdfree_t **freecb, void **freecb_args) {
 	UNUSED(httpd);
 	UNUSED(urlinfo);
-	return (render_xml(STATS_XML_SERVER, arg, retcode, retmsg, mimetype, b,
-			   freecb, freecb_args));
+	return render_xml(STATS_XML_SERVER, arg, retcode, retmsg, mimetype, b,
+			  freecb, freecb_args);
 }
 
 static isc_result_t
@@ -1961,8 +2238,19 @@ render_xml_zones(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo,
 		 isc_httpdfree_t **freecb, void **freecb_args) {
 	UNUSED(httpd);
 	UNUSED(urlinfo);
-	return (render_xml(STATS_XML_ZONES, arg, retcode, retmsg, mimetype, b,
-			   freecb, freecb_args));
+	return render_xml(STATS_XML_ZONES, arg, retcode, retmsg, mimetype, b,
+			  freecb, freecb_args);
+}
+
+static isc_result_t
+render_xml_xfrins(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo,
+		  void *arg, unsigned int *retcode, const char **retmsg,
+		  const char **mimetype, isc_buffer_t *b,
+		  isc_httpdfree_t **freecb, void **freecb_args) {
+	UNUSED(httpd);
+	UNUSED(urlinfo);
+	return render_xml(STATS_XML_XFRINS, arg, retcode, retmsg, mimetype, b,
+			  freecb, freecb_args);
 }
 
 static isc_result_t
@@ -1972,8 +2260,8 @@ render_xml_net(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo,
 	       void **freecb_args) {
 	UNUSED(httpd);
 	UNUSED(urlinfo);
-	return (render_xml(STATS_XML_NET, arg, retcode, retmsg, mimetype, b,
-			   freecb, freecb_args));
+	return render_xml(STATS_XML_NET, arg, retcode, retmsg, mimetype, b,
+			  freecb, freecb_args);
 }
 
 static isc_result_t
@@ -1983,8 +2271,8 @@ render_xml_mem(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo,
 	       void **freecb_args) {
 	UNUSED(httpd);
 	UNUSED(urlinfo);
-	return (render_xml(STATS_XML_MEM, arg, retcode, retmsg, mimetype, b,
-			   freecb, freecb_args));
+	return render_xml(STATS_XML_MEM, arg, retcode, retmsg, mimetype, b,
+			  freecb, freecb_args);
 }
 
 static isc_result_t
@@ -1994,8 +2282,8 @@ render_xml_traffic(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo,
 		   isc_httpdfree_t **freecb, void **freecb_args) {
 	UNUSED(httpd);
 	UNUSED(urlinfo);
-	return (render_xml(STATS_XML_TRAFFIC, arg, retcode, retmsg, mimetype, b,
-			   freecb, freecb_args));
+	return render_xml(STATS_XML_TRAFFIC, arg, retcode, retmsg, mimetype, b,
+			  freecb, freecb_args);
 }
 
 #endif /* HAVE_LIBXML2 */
@@ -2007,6 +2295,7 @@ render_xml_traffic(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo,
 #define STATS_JSON_STATUS  0x00 /* display only common statistics */
 #define STATS_JSON_SERVER  0x01
 #define STATS_JSON_ZONES   0x02
+#define STATS_JSON_XFRINS  0x04
 #define STATS_JSON_NET	   0x08
 #define STATS_JSON_MEM	   0x10
 #define STATS_JSON_TRAFFIC 0x20
@@ -2034,7 +2323,7 @@ addzone(char *name, char *classname, const char *ztype, uint32_t serial,
 	json_object *node = json_object_new_object();
 
 	if (node == NULL) {
-		return (NULL);
+		return NULL;
 	}
 
 	json_object_object_add(node, "name", json_object_new_string(name));
@@ -2048,7 +2337,7 @@ addzone(char *name, char *classname, const char *ztype, uint32_t serial,
 		json_object_object_add(node, "type",
 				       json_object_new_string(ztype));
 	}
-	return (node);
+	return node;
 }
 
 static isc_result_t
@@ -2067,7 +2356,7 @@ zone_jsonrender(dns_zone_t *zone, void *arg) {
 
 	statlevel = dns_zone_getstatlevel(zone);
 	if (statlevel == dns_zonestat_none) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	dns_zone_nameonly(zone, buf, sizeof(buf));
@@ -2086,7 +2375,7 @@ zone_jsonrender(dns_zone_t *zone, void *arg) {
 	}
 
 	if (zoneobj == NULL) {
-		return (ISC_R_NOMEMORY);
+		return ISC_R_NOMEMORY;
 	}
 
 	/*
@@ -2254,13 +2543,276 @@ cleanup:
 	if (zoneobj != NULL) {
 		json_object_put(zoneobj);
 	}
-	return (result);
+	return result;
+}
+
+static isc_result_t
+xfrin_jsonrender(dns_zone_t *zone, void *arg) {
+	isc_result_t result;
+	char buf[1024 + 32]; /* sufficiently large for zone name and class */
+	char classbuf[64];   /* sufficiently large for class */
+	char *zone_name_only = NULL;
+	char *class_only = NULL;
+	dns_rdataclass_t rdclass;
+	uint32_t serial;
+	json_object *xfrinarray = (json_object *)arg;
+	json_object *xfrinobj = NULL;
+	isc_sockaddr_t addr;
+	const isc_sockaddr_t *addrp = NULL;
+	char addr_buf[ISC_SOCKADDR_FORMATSIZE];
+	dns_transport_type_t transport_type;
+	dns_zonestat_level_t statlevel;
+	dns_xfrin_t *xfr = NULL;
+	bool is_firstrefresh, is_running, is_deferred, is_presoa, is_pending;
+	bool needs_refresh;
+	bool is_first_data_received, is_ixfr;
+	unsigned int nmsg = 0;
+	unsigned int nrecs = 0;
+	uint64_t nbytes = 0;
+	uint64_t rate = 0;
+
+	statlevel = dns_zone_getstatlevel(zone);
+	if (statlevel == dns_zonestat_none) {
+		return ISC_R_SUCCESS;
+	}
+
+	dns_zone_nameonly(zone, buf, sizeof(buf));
+	zone_name_only = buf;
+
+	rdclass = dns_zone_getclass(zone);
+	dns_rdataclass_format(rdclass, classbuf, sizeof(classbuf));
+	class_only = classbuf;
+
+	if (dns_zone_getserial(zone, &serial) != ISC_R_SUCCESS) {
+		xfrinobj = addzone(zone_name_only, class_only,
+				   user_zonetype(zone), 0, false);
+	} else {
+		xfrinobj = addzone(zone_name_only, class_only,
+				   user_zonetype(zone), serial, true);
+	}
+
+	if (xfrinobj == NULL) {
+		result = ISC_R_NOMEMORY;
+		goto cleanup;
+	}
+
+	result = dns_zone_getxfr(zone, &xfr, &is_firstrefresh, &is_running,
+				 &is_deferred, &is_presoa, &is_pending,
+				 &needs_refresh);
+	if (result != ISC_R_SUCCESS) {
+		result = ISC_R_SUCCESS;
+		goto cleanup;
+	}
+
+	if (!is_running && !is_deferred && !is_presoa && !is_pending &&
+	    !needs_refresh)
+	{
+		/* No ongoing/queued transfer. */
+		goto cleanup;
+	}
+
+	if (is_running && xfr == NULL) {
+		/* The transfer is finished, and it's shutting down. */
+		goto cleanup;
+	}
+
+	if (is_running) {
+		serial = dns_xfrin_getendserial(xfr);
+		if (serial != 0) {
+			json_object_object_add(xfrinobj, "remoteserial",
+					       json_object_new_int64(serial));
+		}
+	}
+
+	json_object_object_add(
+		xfrinobj, "firstrefresh",
+		json_object_new_string(is_firstrefresh ? "Yes" : "No"));
+
+	if (is_running) {
+		const char *xfr_state = NULL;
+
+		dns_xfrin_getstate(xfr, &xfr_state, &is_first_data_received,
+				   &is_ixfr);
+		json_object_object_add(xfrinobj, "state",
+				       json_object_new_string(xfr_state));
+	} else if (is_deferred) {
+		json_object_object_add(xfrinobj, "state",
+				       json_object_new_string("Deferred"));
+	} else if (is_presoa) {
+		json_object_object_add(xfrinobj, "state",
+				       json_object_new_string("Refresh SOA"));
+	} else if (is_pending) {
+		json_object_object_add(xfrinobj, "state",
+				       json_object_new_string("Pending"));
+	} else if (needs_refresh) {
+		json_object_object_add(xfrinobj, "state",
+				       json_object_new_string("Needs Refresh"));
+	} else {
+		UNREACHABLE();
+	}
+
+	json_object_object_add(
+		xfrinobj, "refreshqueued",
+		json_object_new_string(is_running && needs_refresh ? "Yes"
+								   : "No"));
+
+	if (is_running) {
+		addrp = dns_xfrin_getsourceaddr(xfr);
+		isc_sockaddr_format(addrp, addr_buf, sizeof(addr_buf));
+		json_object_object_add(xfrinobj, "localaddr",
+				       json_object_new_string(addr_buf));
+	} else if (is_presoa) {
+		dns_zone_getsourceaddr(zone, &addr);
+		isc_sockaddr_format(&addr, addr_buf, sizeof(addr_buf));
+		json_object_object_add(xfrinobj, "localaddr",
+				       json_object_new_string(addr_buf));
+	} else {
+		json_object_object_add(xfrinobj, "localaddr",
+				       json_object_new_string("-"));
+	}
+
+	if (is_running) {
+		addrp = dns_xfrin_getprimaryaddr(xfr);
+		isc_sockaddr_format(addrp, addr_buf, sizeof(addr_buf));
+		json_object_object_add(xfrinobj, "remoteaddr",
+				       json_object_new_string(addr_buf));
+	} else if (is_presoa) {
+		if (dns_zone_getprimaryaddr(zone, &addr) == ISC_R_SUCCESS) {
+			isc_sockaddr_format(&addr, addr_buf, sizeof(addr_buf));
+			json_object_object_add(
+				xfrinobj, "remoteaddr",
+				json_object_new_string(addr_buf));
+		} else {
+			json_object_object_add(xfrinobj, "remoteaddr",
+					       json_object_new_string("-"));
+		}
+	} else {
+		json_object_object_add(xfrinobj, "remoteaddr",
+				       json_object_new_string("-"));
+	}
+
+	if (is_running || is_presoa) {
+		if (is_running) {
+			transport_type = dns_xfrin_getsoatransporttype(xfr);
+		} else {
+			transport_type = dns_zone_getrequesttransporttype(zone);
+		}
+
+		if (transport_type == DNS_TRANSPORT_UDP) {
+			json_object_object_add(xfrinobj, "soatransport",
+					       json_object_new_string("UDP"));
+		} else if (transport_type == DNS_TRANSPORT_TCP) {
+			json_object_object_add(xfrinobj, "soatransport",
+					       json_object_new_string("TCP"));
+		} else if (transport_type == DNS_TRANSPORT_TLS) {
+			json_object_object_add(xfrinobj, "soatransport",
+					       json_object_new_string("TLS"));
+		} else if (transport_type == DNS_TRANSPORT_NONE) {
+			json_object_object_add(xfrinobj, "soatransport",
+					       json_object_new_string("None"));
+		} else {
+			/* We don't expect any other SOA transport type. */
+			json_object_object_add(xfrinobj, "soatransport",
+					       json_object_new_string("-"));
+		}
+	} else {
+		json_object_object_add(xfrinobj, "soatransport",
+				       json_object_new_string("-"));
+	}
+
+	if (is_running) {
+		transport_type = dns_xfrin_gettransporttype(xfr);
+		if (transport_type == DNS_TRANSPORT_TCP) {
+			json_object_object_add(xfrinobj, "transport",
+					       json_object_new_string("TCP"));
+		} else if (transport_type == DNS_TRANSPORT_TLS) {
+			json_object_object_add(xfrinobj, "transport",
+					       json_object_new_string("TLS"));
+		} else {
+			/* We don't expect any other transport type. */
+			json_object_object_add(xfrinobj, "transport",
+					       json_object_new_string("-"));
+		}
+	} else {
+		json_object_object_add(xfrinobj, "transport",
+				       json_object_new_string("-"));
+	}
+
+	if (is_running) {
+		const dns_name_t *tsigkeyname = dns_xfrin_gettsigkeyname(xfr);
+		char tsigkeyname_buf[DNS_NAME_FORMATSIZE];
+
+		if (tsigkeyname != NULL) {
+			dns_name_format(tsigkeyname, tsigkeyname_buf,
+					sizeof(tsigkeyname_buf));
+			json_object_object_add(
+				xfrinobj, "tsigkeyname",
+				json_object_new_string(tsigkeyname_buf));
+		} else {
+			json_object_object_add(xfrinobj, "tsigkeyname", NULL);
+		}
+	} else {
+		json_object_object_add(xfrinobj, "tsigkeyname", NULL);
+	}
+
+	if (is_running || is_deferred || is_presoa || is_pending) {
+		isc_time_t start = is_running ? dns_xfrin_getstarttime(xfr)
+					      : dns_zone_getxfrintime(zone);
+		isc_time_t now = isc_time_now();
+		isc_time_t diff;
+		uint32_t sec;
+
+		isc_time_subtract(&now, &start, &diff);
+		sec = isc_time_seconds(&diff);
+		json_object_object_add(xfrinobj, "duration",
+				       json_object_new_int64((int64_t)sec));
+	} else {
+		json_object_object_add(xfrinobj, "duration",
+				       json_object_new_int64(0));
+	}
+
+	if (is_running) {
+		dns_xfrin_getstats(xfr, &nmsg, &nrecs, &nbytes, &rate);
+	}
+	json_object_object_add(xfrinobj, "nmsg",
+			       json_object_new_int64((int64_t)nmsg));
+	json_object_object_add(xfrinobj, "nrecs",
+			       json_object_new_int64((int64_t)nrecs));
+	json_object_object_add(
+		xfrinobj, "nbytes",
+		json_object_new_int64(nbytes > INT64_MAX ? INT64_MAX
+							 : (int64_t)nbytes));
+	json_object_object_add(xfrinobj, "rate",
+			       json_object_new_int64(rate > INT64_MAX
+							     ? INT64_MAX
+							     : (int64_t)rate));
+
+	if (is_running && is_first_data_received) {
+		json_object_object_add(
+			xfrinobj, "ixfr",
+			json_object_new_string(is_ixfr ? "Yes" : "No"));
+	} else {
+		json_object_object_add(xfrinobj, "ixfr",
+				       json_object_new_string(""));
+	}
+
+	json_object_array_add(xfrinarray, xfrinobj);
+	xfrinobj = NULL;
+	result = ISC_R_SUCCESS;
+
+cleanup:
+	if (xfr != NULL) {
+		dns_xfrin_detach(&xfr);
+	}
+	if (xfrinobj != NULL) {
+		json_object_put(xfrinobj);
+	}
+	return result;
 }
 
 static isc_result_t
 generatejson(named_server_t *server, size_t *msglen, const char **msg,
 	     json_object **rootp, uint32_t flags) {
-	dns_view_t *view;
 	isc_result_t result = ISC_R_SUCCESS;
 	json_object *bindstats, *viewlist, *counters, *obj;
 	json_object *traffic = NULL;
@@ -2292,7 +2844,7 @@ generatejson(named_server_t *server, size_t *msglen, const char **msg,
 
 	bindstats = json_object_new_object();
 	if (bindstats == NULL) {
-		return (ISC_R_NOMEMORY);
+		return ISC_R_NOMEMORY;
 	}
 
 	/*
@@ -2304,7 +2856,7 @@ generatejson(named_server_t *server, size_t *msglen, const char **msg,
 
 	now = isc_time_now();
 	isc_time_formatISO8601ms(&named_g_boottime, boottime, sizeof(boottime));
-	isc_time_formatISO8601ms(&named_g_configtime, configtime,
+	isc_time_formatISO8601ms(&named_g_defaultconfigtime, configtime,
 				 sizeof configtime);
 	isc_time_formatISO8601ms(&now, nowstr, sizeof(nowstr));
 
@@ -2475,15 +3027,17 @@ generatejson(named_server_t *server, size_t *msglen, const char **msg,
 #endif /* ifdef HAVE_DNSTAP */
 	}
 
-	if ((flags & (STATS_JSON_ZONES | STATS_JSON_SERVER)) != 0) {
+	if ((flags &
+	     (STATS_JSON_SERVER | STATS_JSON_ZONES | STATS_JSON_XFRINS)) != 0)
+	{
 		viewlist = json_object_new_object();
 		CHECKMEM(viewlist);
 
 		json_object_object_add(bindstats, "views", viewlist);
 
-		view = ISC_LIST_HEAD(server->viewlist);
-		while (view != NULL) {
-			json_object *za, *v = json_object_new_object();
+		ISC_LIST_FOREACH (server->viewlist, view, link) {
+			json_object *za, *xa, *v = json_object_new_object();
+			dns_adb_t *adb = NULL;
 
 			CHECKMEM(v);
 			json_object_object_add(viewlist, view->name, v);
@@ -2492,14 +3046,28 @@ generatejson(named_server_t *server, size_t *msglen, const char **msg,
 			CHECKMEM(za);
 
 			if ((flags & STATS_JSON_ZONES) != 0) {
-				CHECK(dns_zt_apply(view->zonetable, true, NULL,
-						   zone_jsonrender, za));
+				CHECK(dns_view_apply(view, true, NULL,
+						     zone_jsonrender, za));
 			}
 
 			if (json_object_array_length(za) != 0) {
 				json_object_object_add(v, "zones", za);
 			} else {
 				json_object_put(za);
+			}
+
+			xa = json_object_new_array();
+			CHECKMEM(xa);
+
+			if ((flags & STATS_JSON_XFRINS) != 0) {
+				CHECK(dns_zt_apply(view->zonetable, true, NULL,
+						   xfrin_jsonrender, xa));
+			}
+
+			if (json_object_array_length(xa) != 0) {
+				json_object_object_add(v, "xfrins", xa);
+			} else {
+				json_object_put(xa);
 			}
 
 			if ((flags & STATS_JSON_SERVER) != 0) {
@@ -2589,7 +3157,11 @@ generatejson(named_server_t *server, size_t *msglen, const char **msg,
 				json_object_object_add(res, "cachestats",
 						       counters);
 
-				istats = dns_adb_getstats(view->adb);
+				dns_view_getadb(view, &adb);
+				if (adb != NULL) {
+					istats = dns_adb_getstats(adb);
+					dns_adb_detach(&adb);
+				}
 				if (istats != NULL) {
 					counters = json_object_new_object();
 					CHECKMEM(counters);
@@ -2611,8 +3183,6 @@ generatejson(named_server_t *server, size_t *msglen, const char **msg,
 							       counters);
 				}
 			}
-
-			view = ISC_LIST_NEXT(view, link);
 		}
 	}
 
@@ -2804,7 +3374,7 @@ cleanup:
 		json_object_put(bindstats);
 	}
 
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -2829,12 +3399,11 @@ render_json(uint32_t flags, void *arg, unsigned int *retcode,
 		*freecb = wrap_jsonfree;
 		*freecb_args = bindstats;
 	} else {
-		isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
-			      NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR,
-			      "failed at rendering JSON()");
+		isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+			      ISC_LOG_ERROR, "failed at rendering JSON()");
 	}
 
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -2844,8 +3413,8 @@ render_json_all(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo,
 		isc_httpdfree_t **freecb, void **freecb_args) {
 	UNUSED(httpd);
 	UNUSED(urlinfo);
-	return (render_json(STATS_JSON_ALL, arg, retcode, retmsg, mimetype, b,
-			    freecb, freecb_args));
+	return render_json(STATS_JSON_ALL, arg, retcode, retmsg, mimetype, b,
+			   freecb, freecb_args);
 }
 
 static isc_result_t
@@ -2855,8 +3424,8 @@ render_json_status(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo,
 		   isc_httpdfree_t **freecb, void **freecb_args) {
 	UNUSED(httpd);
 	UNUSED(urlinfo);
-	return (render_json(STATS_JSON_STATUS, arg, retcode, retmsg, mimetype,
-			    b, freecb, freecb_args));
+	return render_json(STATS_JSON_STATUS, arg, retcode, retmsg, mimetype, b,
+			   freecb, freecb_args);
 }
 
 static isc_result_t
@@ -2866,8 +3435,8 @@ render_json_server(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo,
 		   isc_httpdfree_t **freecb, void **freecb_args) {
 	UNUSED(httpd);
 	UNUSED(urlinfo);
-	return (render_json(STATS_JSON_SERVER, arg, retcode, retmsg, mimetype,
-			    b, freecb, freecb_args));
+	return render_json(STATS_JSON_SERVER, arg, retcode, retmsg, mimetype, b,
+			   freecb, freecb_args);
 }
 
 static isc_result_t
@@ -2877,8 +3446,19 @@ render_json_zones(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo,
 		  isc_httpdfree_t **freecb, void **freecb_args) {
 	UNUSED(httpd);
 	UNUSED(urlinfo);
-	return (render_json(STATS_JSON_ZONES, arg, retcode, retmsg, mimetype, b,
-			    freecb, freecb_args));
+	return render_json(STATS_JSON_ZONES, arg, retcode, retmsg, mimetype, b,
+			   freecb, freecb_args);
+}
+
+static isc_result_t
+render_json_xfrins(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo,
+		   void *arg, unsigned int *retcode, const char **retmsg,
+		   const char **mimetype, isc_buffer_t *b,
+		   isc_httpdfree_t **freecb, void **freecb_args) {
+	UNUSED(httpd);
+	UNUSED(urlinfo);
+	return render_json(STATS_JSON_XFRINS, arg, retcode, retmsg, mimetype, b,
+			   freecb, freecb_args);
 }
 
 static isc_result_t
@@ -2888,8 +3468,8 @@ render_json_mem(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo,
 		isc_httpdfree_t **freecb, void **freecb_args) {
 	UNUSED(httpd);
 	UNUSED(urlinfo);
-	return (render_json(STATS_JSON_MEM, arg, retcode, retmsg, mimetype, b,
-			    freecb, freecb_args));
+	return render_json(STATS_JSON_MEM, arg, retcode, retmsg, mimetype, b,
+			   freecb, freecb_args);
 }
 
 static isc_result_t
@@ -2899,8 +3479,8 @@ render_json_net(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo,
 		isc_httpdfree_t **freecb, void **freecb_args) {
 	UNUSED(httpd);
 	UNUSED(urlinfo);
-	return (render_json(STATS_JSON_NET, arg, retcode, retmsg, mimetype, b,
-			    freecb, freecb_args));
+	return render_json(STATS_JSON_NET, arg, retcode, retmsg, mimetype, b,
+			   freecb, freecb_args);
 }
 
 static isc_result_t
@@ -2910,12 +3490,17 @@ render_json_traffic(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo,
 		    isc_httpdfree_t **freecb, void **freecb_args) {
 	UNUSED(httpd);
 	UNUSED(urlinfo);
-	return (render_json(STATS_JSON_TRAFFIC, arg, retcode, retmsg, mimetype,
-			    b, freecb, freecb_args));
+	return render_json(STATS_JSON_TRAFFIC, arg, retcode, retmsg, mimetype,
+			   b, freecb, freecb_args);
 }
 
 #endif /* HAVE_JSON_C */
 
+#if HAVE_LIBXML2
+/*
+ * This is only needed if we have libxml2 and was confusingly returned if
+ * neither of libxml2 or json-c is configured.
+ */
 static isc_result_t
 render_xsl(const isc_httpd_t *httpd, const isc_httpdurl_t *urlinfo, void *args,
 	   unsigned int *retcode, const char **retmsg, const char **mimetype,
@@ -2969,20 +3554,22 @@ send:
 	isc_buffer_reinit(b, p, strlen(xslmsg));
 	isc_buffer_add(b, strlen(xslmsg));
 end:
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
+#endif
 
 static void
 shutdown_listener(named_statschannel_t *listener) {
 	char socktext[ISC_SOCKADDR_FORMATSIZE];
 	isc_sockaddr_format(&listener->address, socktext, sizeof(socktext));
-	isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
-		      NAMED_LOGMODULE_SERVER, ISC_LOG_NOTICE,
-		      "stopping statistics channel on %s", socktext);
+	isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+		      ISC_LOG_NOTICE, "stopping statistics channel on %s",
+		      socktext);
 
 	isc_httpdmgr_shutdown(&listener->httpdmgr);
 }
 
+#if defined(HAVE_LIBXML2) || defined(HAVE_JSON_C)
 static bool
 client_ok(const isc_sockaddr_t *fromaddr, void *arg) {
 	named_statschannel_t *listener = arg;
@@ -3002,18 +3589,20 @@ client_ok(const isc_sockaddr_t *fromaddr, void *arg) {
 	    match > 0)
 	{
 		UNLOCK(&listener->lock);
-		return (true);
+		return true;
 	}
 	UNLOCK(&listener->lock);
 
 	isc_sockaddr_format(fromaddr, socktext, sizeof(socktext));
-	isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
-		      NAMED_LOGMODULE_SERVER, ISC_LOG_WARNING,
-		      "rejected statistics connection from %s", socktext);
+	isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+		      ISC_LOG_WARNING, "rejected statistics connection from %s",
+		      socktext);
 
-	return (false);
+	return false;
 }
+#endif
 
+#if defined(HAVE_LIBXML2) || defined(HAVE_JSON_C)
 static void
 destroy_listener(void *arg) {
 	named_statschannel_t *listener = (named_statschannel_t *)arg;
@@ -3027,12 +3616,24 @@ destroy_listener(void *arg) {
 	isc_mutex_destroy(&listener->lock);
 	isc_mem_putanddetach(&listener->mctx, listener, sizeof(*listener));
 }
+#endif
 
 static isc_result_t
 add_listener(named_server_t *server, named_statschannel_t **listenerp,
 	     const cfg_obj_t *listen_params, const cfg_obj_t *config,
 	     isc_sockaddr_t *addr, cfg_aclconfctx_t *aclconfctx,
 	     const char *socktext) {
+#if !defined(HAVE_LIBXML2) && !defined(HAVE_JSON_C)
+	UNUSED(server);
+	UNUSED(listenerp);
+	UNUSED(listen_params);
+	UNUSED(config);
+	UNUSED(addr);
+	UNUSED(aclconfctx);
+	UNUSED(socktext);
+
+	return ISC_R_NOTIMPLEMENTED;
+#else
 	isc_result_t result;
 	named_statschannel_t *listener = NULL;
 	const cfg_obj_t *allow = NULL;
@@ -3047,9 +3648,8 @@ add_listener(named_server_t *server, named_statschannel_t **listenerp,
 
 	allow = cfg_tuple_get(listen_params, "allow");
 	if (allow != NULL && cfg_obj_islist(allow)) {
-		result = cfg_acl_fromconfig(allow, config, named_g_lctx,
-					    aclconfctx, listener->mctx, 0,
-					    &new_acl);
+		result = cfg_acl_fromconfig(allow, config, aclconfctx,
+					    listener->mctx, 0, &new_acl);
 	} else {
 		result = dns_acl_any(listener->mctx, &new_acl);
 	}
@@ -3065,7 +3665,7 @@ add_listener(named_server_t *server, named_statschannel_t **listenerp,
 		CHECK(ISC_R_FAMILYNOSUPPORT);
 	}
 
-	CHECK(isc_httpdmgr_create(named_g_netmgr, server->mctx, addr, client_ok,
+	CHECK(isc_httpdmgr_create(server->mctx, addr, client_ok,
 				  destroy_listener, listener,
 				  &listener->httpdmgr));
 
@@ -3087,6 +3687,9 @@ add_listener(named_server_t *server, named_statschannel_t **listenerp,
 			    "/xml/v" STATS_XML_VERSION_MAJOR "/zones", false,
 			    render_xml_zones, server);
 	isc_httpdmgr_addurl(listener->httpdmgr,
+			    "/xml/v" STATS_XML_VERSION_MAJOR "/xfrins", false,
+			    render_xml_xfrins, server);
+	isc_httpdmgr_addurl(listener->httpdmgr,
 			    "/xml/v" STATS_XML_VERSION_MAJOR "/net", false,
 			    render_xml_net, server);
 	isc_httpdmgr_addurl(listener->httpdmgr,
@@ -3095,6 +3698,8 @@ add_listener(named_server_t *server, named_statschannel_t **listenerp,
 	isc_httpdmgr_addurl(listener->httpdmgr,
 			    "/xml/v" STATS_XML_VERSION_MAJOR "/traffic", false,
 			    render_xml_traffic, server);
+	isc_httpdmgr_addurl(listener->httpdmgr, "/bind9.xsl", true, render_xsl,
+			    server);
 #endif /* ifdef HAVE_LIBXML2 */
 #ifdef HAVE_JSON_C
 	isc_httpdmgr_addurl(listener->httpdmgr, "/json", false, render_json_all,
@@ -3112,6 +3717,9 @@ add_listener(named_server_t *server, named_statschannel_t **listenerp,
 			    "/json/v" STATS_JSON_VERSION_MAJOR "/zones", false,
 			    render_json_zones, server);
 	isc_httpdmgr_addurl(listener->httpdmgr,
+			    "/json/v" STATS_JSON_VERSION_MAJOR "/xfrins", false,
+			    render_json_xfrins, server);
+	isc_httpdmgr_addurl(listener->httpdmgr,
 			    "/json/v" STATS_JSON_VERSION_MAJOR "/net", false,
 			    render_json_net, server);
 	isc_httpdmgr_addurl(listener->httpdmgr,
@@ -3121,15 +3729,13 @@ add_listener(named_server_t *server, named_statschannel_t **listenerp,
 			    "/json/v" STATS_JSON_VERSION_MAJOR "/traffic",
 			    false, render_json_traffic, server);
 #endif /* ifdef HAVE_JSON_C */
-	isc_httpdmgr_addurl(listener->httpdmgr, "/bind9.xsl", true, render_xsl,
-			    server);
 
 	*listenerp = listener;
-	isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
-		      NAMED_LOGMODULE_SERVER, ISC_LOG_NOTICE,
-		      "statistics channel listening on %s", socktext);
+	isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+		      ISC_LOG_NOTICE, "statistics channel listening on %s",
+		      socktext);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 
 cleanup:
 	if (listener->acl != NULL) {
@@ -3138,7 +3744,8 @@ cleanup:
 	isc_mutex_destroy(&listener->lock);
 	isc_mem_putanddetach(&listener->mctx, listener, sizeof(*listener));
 
-	return (result);
+	return result;
+#endif
 }
 
 static void
@@ -3146,15 +3753,14 @@ update_listener(named_server_t *server, named_statschannel_t **listenerp,
 		const cfg_obj_t *listen_params, const cfg_obj_t *config,
 		isc_sockaddr_t *addr, cfg_aclconfctx_t *aclconfctx,
 		const char *socktext) {
-	named_statschannel_t *listener;
+	named_statschannel_t *listener = NULL;
 	const cfg_obj_t *allow = NULL;
 	dns_acl_t *new_acl = NULL;
 	isc_result_t result = ISC_R_SUCCESS;
 
-	for (listener = ISC_LIST_HEAD(server->statschannels); listener != NULL;
-	     listener = ISC_LIST_NEXT(listener, link))
-	{
-		if (isc_sockaddr_equal(addr, &listener->address)) {
+	ISC_LIST_FOREACH (server->statschannels, l, link) {
+		if (isc_sockaddr_equal(addr, &l->address)) {
+			listener = l;
 			break;
 		}
 	}
@@ -3169,9 +3775,8 @@ update_listener(named_server_t *server, named_statschannel_t **listenerp,
 	 */
 	allow = cfg_tuple_get(listen_params, "allow");
 	if (allow != NULL && cfg_obj_islist(allow)) {
-		result = cfg_acl_fromconfig(allow, config, named_g_lctx,
-					    aclconfctx, listener->mctx, 0,
-					    &new_acl);
+		result = cfg_acl_fromconfig(allow, config, aclconfctx,
+					    listener->mctx, 0, &new_acl);
 	} else {
 		result = dns_acl_any(listener->mctx, &new_acl);
 	}
@@ -3185,7 +3790,7 @@ update_listener(named_server_t *server, named_statschannel_t **listenerp,
 
 		UNLOCK(&listener->lock);
 	} else {
-		cfg_obj_log(listen_params, named_g_lctx, ISC_LOG_WARNING,
+		cfg_obj_log(listen_params, ISC_LOG_WARNING,
 			    "couldn't install new acl for "
 			    "statistics channel %s: %s",
 			    socktext, isc_result_totext(result));
@@ -3197,10 +3802,8 @@ update_listener(named_server_t *server, named_statschannel_t **listenerp,
 isc_result_t
 named_statschannels_configure(named_server_t *server, const cfg_obj_t *config,
 			      cfg_aclconfctx_t *aclconfctx) {
-	named_statschannel_t *listener, *listener_next;
 	named_statschannellist_t new_listeners;
 	const cfg_obj_t *statschannellist = NULL;
-	const cfg_listelt_t *element, *element2;
 	char socktext[ISC_SOCKADDR_FORMATSIZE];
 
 	isc_once_do(&once, init_desc);
@@ -3222,29 +3825,27 @@ named_statschannels_configure(named_server_t *server, const cfg_obj_t *config,
 	 */
 	if (statschannellist != NULL) {
 #ifndef EXTENDED_STATS
-		isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
-			      NAMED_LOGMODULE_SERVER, ISC_LOG_WARNING,
+		isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+			      ISC_LOG_WARNING,
 			      "statistics-channels specified but not effective "
 			      "due to missing XML and/or JSON library");
 #else /* EXTENDED_STATS */
 #ifndef HAVE_LIBXML2
-		isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
-			      NAMED_LOGMODULE_SERVER, ISC_LOG_WARNING,
+		isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+			      ISC_LOG_WARNING,
 			      "statistics-channels: XML library missing, "
 			      "only JSON stats will be available");
 #endif /* !HAVE_LIBXML2 */
 #ifndef HAVE_JSON_C
-		isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
-			      NAMED_LOGMODULE_SERVER, ISC_LOG_WARNING,
+		isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+			      ISC_LOG_WARNING,
 			      "statistics-channels: JSON library missing, "
 			      "only XML stats will be available");
 #endif /* !HAVE_JSON_C */
 #endif /* EXTENDED_STATS */
 
-		for (element = cfg_list_first(statschannellist);
-		     element != NULL; element = cfg_list_next(element))
-		{
-			const cfg_obj_t *statschannel;
+		CFG_LIST_FOREACH (statschannellist, element) {
+			const cfg_obj_t *statschannel = NULL;
 			const cfg_obj_t *listenercfg = NULL;
 
 			statschannel = cfg_listelt_value(element);
@@ -3253,12 +3854,10 @@ named_statschannels_configure(named_server_t *server, const cfg_obj_t *config,
 				continue;
 			}
 
-			for (element2 = cfg_list_first(listenercfg);
-			     element2 != NULL;
-			     element2 = cfg_list_next(element2))
-			{
-				const cfg_obj_t *listen_params;
-				const cfg_obj_t *obj;
+			CFG_LIST_FOREACH (listenercfg, element2) {
+				named_statschannel_t *listener = NULL;
+				const cfg_obj_t *listen_params = NULL;
+				const cfg_obj_t *obj = NULL;
 				isc_sockaddr_t addr;
 
 				listen_params = cfg_listelt_value(element2);
@@ -3274,8 +3873,7 @@ named_statschannels_configure(named_server_t *server, const cfg_obj_t *config,
 				isc_sockaddr_format(&addr, socktext,
 						    sizeof(socktext));
 
-				isc_log_write(named_g_lctx,
-					      NAMED_LOGCATEGORY_GENERAL,
+				isc_log_write(NAMED_LOGCATEGORY_GENERAL,
 					      NAMED_LOGMODULE_SERVER,
 					      ISC_LOG_DEBUG(9),
 					      "processing statistics "
@@ -3306,7 +3904,6 @@ named_statschannels_configure(named_server_t *server, const cfg_obj_t *config,
 					if (r != ISC_R_SUCCESS) {
 						cfg_obj_log(
 							listen_params,
-							named_g_lctx,
 							ISC_LOG_WARNING,
 							"couldn't allocate "
 							"statistics channel"
@@ -3324,23 +3921,18 @@ named_statschannels_configure(named_server_t *server, const cfg_obj_t *config,
 		}
 	}
 
-	for (listener = ISC_LIST_HEAD(server->statschannels); listener != NULL;
-	     listener = listener_next)
-	{
-		listener_next = ISC_LIST_NEXT(listener, link);
+	ISC_LIST_FOREACH (server->statschannels, listener, link) {
 		ISC_LIST_UNLINK(server->statschannels, listener, link);
 		shutdown_listener(listener);
 	}
 
 	ISC_LIST_APPENDLIST(server->statschannels, new_listeners, link);
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 void
 named_statschannels_shutdown(named_server_t *server) {
-	named_statschannel_t *listener;
-
-	while ((listener = ISC_LIST_HEAD(server->statschannels)) != NULL) {
+	ISC_LIST_FOREACH (server->statschannels, listener, link) {
 		ISC_LIST_UNLINK(server->statschannels, listener, link);
 		shutdown_listener(listener);
 	}
@@ -3349,7 +3941,6 @@ named_statschannels_shutdown(named_server_t *server) {
 isc_result_t
 named_stats_dump(named_server_t *server, FILE *fp) {
 	isc_result_t result;
-	dns_view_t *view;
 	dns_zone_t *zone, *next;
 	stats_dumparg_t dumparg;
 	uint64_t nsstat_values[ns_statscounter_max];
@@ -3381,9 +3972,7 @@ named_stats_dump(named_server_t *server, FILE *fp) {
 			    0);
 
 	fprintf(fp, "++ Outgoing Queries ++\n");
-	for (view = ISC_LIST_HEAD(server->viewlist); view != NULL;
-	     view = ISC_LIST_NEXT(view, link))
-	{
+	ISC_LIST_FOREACH (server->viewlist, view, link) {
 		dns_stats_t *dstats = NULL;
 		dns_resolver_getquerystats(view->resolver, &dstats);
 		if (dstats == NULL) {
@@ -3413,9 +4002,7 @@ named_stats_dump(named_server_t *server, FILE *fp) {
 	(void)dump_stats(server->resolverstats, isc_statsformat_file, fp, NULL,
 			 resstats_desc, dns_resstatscounter_max, resstats_index,
 			 resstat_values, 0);
-	for (view = ISC_LIST_HEAD(server->viewlist); view != NULL;
-	     view = ISC_LIST_NEXT(view, link))
-	{
+	ISC_LIST_FOREACH (server->viewlist, view, link) {
 		isc_stats_t *istats = NULL;
 		dns_resolver_getstats(view->resolver, &istats);
 		if (istats == NULL) {
@@ -3433,9 +4020,7 @@ named_stats_dump(named_server_t *server, FILE *fp) {
 	}
 
 	fprintf(fp, "++ Cache Statistics ++\n");
-	for (view = ISC_LIST_HEAD(server->viewlist); view != NULL;
-	     view = ISC_LIST_NEXT(view, link))
-	{
+	ISC_LIST_FOREACH (server->viewlist, view, link) {
 		if (strcmp(view->name, "_default") == 0) {
 			fprintf(fp, "[View: default]\n");
 		} else {
@@ -3452,9 +4037,7 @@ named_stats_dump(named_server_t *server, FILE *fp) {
 	}
 
 	fprintf(fp, "++ Cache DB RRsets ++\n");
-	for (view = ISC_LIST_HEAD(server->viewlist); view != NULL;
-	     view = ISC_LIST_NEXT(view, link))
-	{
+	ISC_LIST_FOREACH (server->viewlist, view, link) {
 		dns_stats_t *cacherrstats;
 
 		cacherrstats = dns_db_getrrsetstats(view->cachedb);
@@ -3479,11 +4062,15 @@ named_stats_dump(named_server_t *server, FILE *fp) {
 	}
 
 	fprintf(fp, "++ ADB stats ++\n");
-	for (view = ISC_LIST_HEAD(server->viewlist); view != NULL;
-	     view = ISC_LIST_NEXT(view, link))
-	{
-		isc_stats_t *adbstats = dns_adb_getstats(view->adb);
+	ISC_LIST_FOREACH (server->viewlist, view, link) {
+		dns_adb_t *adb = NULL;
+		isc_stats_t *adbstats = NULL;
 
+		dns_view_getadb(view, &adb);
+		if (adb != NULL) {
+			adbstats = dns_adb_getstats(adb);
+			dns_adb_detach(&adb);
+		}
 		if (adbstats == NULL) {
 			continue;
 		}
@@ -3511,8 +4098,7 @@ named_stats_dump(named_server_t *server, FILE *fp) {
 		isc_stats_t *zonestats = dns_zone_getrequeststats(zone);
 		if (zonestats != NULL) {
 			char zonename[DNS_NAME_FORMATSIZE];
-
-			view = dns_zone_getview(zone);
+			dns_view_t *view = dns_zone_getview(zone);
 			if (view == NULL) {
 				continue;
 			}
@@ -3541,8 +4127,7 @@ named_stats_dump(named_server_t *server, FILE *fp) {
 		isc_stats_t *gluecachestats = dns_zone_getgluecachestats(zone);
 		if (gluecachestats != NULL) {
 			char zonename[DNS_NAME_FORMATSIZE];
-
-			view = dns_zone_getview(zone);
+			dns_view_t *view = dns_zone_getview(zone);
 			if (view == NULL) {
 				continue;
 			}
@@ -3565,5 +4150,5 @@ named_stats_dump(named_server_t *server, FILE *fp) {
 
 	fprintf(fp, "--- Statistics Dump --- (%lu)\n", (unsigned long)now);
 
-	return (ISC_R_SUCCESS); /* this function currently always succeeds */
+	return ISC_R_SUCCESS; /* this function currently always succeeds */
 }

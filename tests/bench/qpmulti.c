@@ -18,6 +18,8 @@
 #include <unistd.h>
 
 #include <isc/async.h>
+#include <isc/barrier.h>
+#include <isc/lib.h>
 #include <isc/list.h>
 #include <isc/log.h>
 #include <isc/loop.h>
@@ -25,7 +27,6 @@
 #include <isc/mem.h>
 #include <isc/mutex.h>
 #include <isc/os.h>
-#include <isc/qsbr.h>
 #include <isc/random.h>
 #include <isc/refcount.h>
 #include <isc/rwlock.h>
@@ -33,14 +34,14 @@
 #include <isc/tid.h>
 #include <isc/time.h>
 #include <isc/timer.h>
+#include <isc/urcu.h>
 #include <isc/util.h>
 #include <isc/uv.h>
 
-#include <dns/log.h>
+#include <dns/lib.h>
 #include <dns/qp.h>
 #include <dns/types.h>
 
-#include "loop_p.h"
 #include "qp_p.h"
 
 #include <tests/qp.h>
@@ -53,10 +54,10 @@
 #define ZIPF	0
 
 #if VERBOSE
-#define TRACE(fmt, ...)                                                     \
-	isc_log_write(dns_lctx, DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_QP, \
-		      ISC_LOG_DEBUG(7), "%s:%d:%s():t%d: " fmt, __FILE__,   \
-		      __LINE__, __func__, isc_tid(), ##__VA_ARGS__)
+#define TRACE(fmt, ...)                                                  \
+	isc_log_write(DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_QP,        \
+		      ISC_LOG_DEBUG(7), "%s:%d:%s():t%" PRItid ": " fmt, \
+		      __FILE__, __LINE__, __func__, isc_tid(), ##__VA_ARGS__)
 #else
 #define TRACE(...)
 #endif
@@ -101,7 +102,7 @@ item_makekey(dns_qpkey_t key, void *ctx, void *pval, uint32_t ival) {
 	UNUSED(ctx);
 	UNUSED(pval);
 	memmove(key, item[ival].key, item[ival].len);
-	return (item[ival].len);
+	return item[ival].len;
 }
 
 static void
@@ -119,68 +120,50 @@ const dns_qpmethods_t item_methods = {
 
 static uint8_t
 random_byte(void) {
-	return (isc_random_uniform(SHIFT_OFFSET - SHIFT_NOBYTE) + SHIFT_NOBYTE);
+	return isc_random_uniform(SHIFT_OFFSET - SHIFT_NOBYTE) + SHIFT_NOBYTE;
 }
 
 static void
 init_items(isc_mem_t *mctx) {
-	void *pval = NULL;
-	uint32_t ival = ~0U;
 	dns_qp_t *qp = NULL;
-	size_t bytes = ITEM_COUNT * sizeof(*item);
 	uint64_t start;
 
 	start = isc_time_monotonic();
-	item = isc_mem_allocatex(mctx, bytes, ISC_MEM_ZERO);
+	item = isc_mem_callocate(mctx, ITEM_COUNT, sizeof(*item));
 
 	/* ensure there are no duplicate names */
 	dns_qp_create(mctx, &item_methods, NULL, &qp);
 	for (size_t i = 0; i < ITEM_COUNT; i++) {
 		do {
 			size_t len = isc_random_uniform(16) + 4;
-			item[i].len = len;
-			for (size_t off = 0; off < len; off++) {
+			item[i].len = len + 1;
+			item[i].key[0] = 0;
+			for (size_t off = 1; off < len; off++) {
 				item[i].key[off] = random_byte();
 			}
 			item[i].key[len] = SHIFT_NOBYTE;
-		} while (dns_qp_getkey(qp, item[i].key, item[i].len, &pval,
-				       &ival) == ISC_R_SUCCESS);
+		} while (dns_qp_getkey(qp, item[i].key, item[i].len, NULL,
+				       NULL) == ISC_R_SUCCESS);
 		INSIST(dns_qp_insert(qp, &item[i], i) == ISC_R_SUCCESS);
 	}
 	dns_qp_destroy(&qp);
 
 	double time = (double)(isc_time_monotonic() - start) / NS_PER_SEC;
 	printf("%f sec to create %zu items, %f/sec %zu bytes\n", time,
-	       ITEM_COUNT, ITEM_COUNT / time, bytes);
+	       ITEM_COUNT, ITEM_COUNT / time, ITEM_COUNT * sizeof(*item));
 }
 
 static void
-init_logging(isc_mem_t *mctx) {
-	isc_result_t result;
-	isc_logdestination_t destination;
-	isc_logconfig_t *logconfig = NULL;
-	isc_log_t *lctx = NULL;
-
-	isc_log_create(mctx, &lctx, &logconfig);
-	isc_log_setcontext(lctx);
-	dns_log_init(lctx);
-	dns_log_setcontext(lctx);
-
-	destination.file.stream = stderr;
-	destination.file.name = NULL;
-	destination.file.versions = ISC_LOG_ROLLNEVER;
-	destination.file.maximum_size = 0;
-	isc_log_createchannel(logconfig, "stderr", ISC_LOG_TOFILEDESC,
-			      ISC_LOG_DYNAMIC, &destination,
-			      ISC_LOG_PRINTPREFIX | ISC_LOG_PRINTTIME |
-				      ISC_LOG_ISO8601);
+init_logging(void) {
 #if VERBOSE
-	isc_log_setdebuglevel(lctx, 7);
+	isc_log_setdebuglevel(7);
 #endif
-
-	result = isc_log_usechannel(logconfig, "stderr",
-				    ISC_LOGCATEGORY_DEFAULT, NULL);
-	INSIST(result == ISC_R_SUCCESS);
+	isc_logconfig_t *logconfig = isc_logconfig_get();
+	isc_log_createandusechannel(
+		logconfig, "default_stderr", ISC_LOG_TOFILEDESC,
+		ISC_LOG_DYNAMIC, ISC_LOGDESTINATION_STDERR,
+		ISC_LOG_PRINTPREFIX | ISC_LOG_PRINTTIME | ISC_LOG_ISO8601,
+		ISC_LOGCATEGORY_DEFAULT, ISC_LOGMODULE_DEFAULT);
 }
 
 static void
@@ -189,9 +172,8 @@ collect(void *);
 struct thread_args {
 	struct bench_state *bctx; /* (in) */
 	isc_barrier_t *barrier;	  /* (in) */
-	isc_loopmgr_t *loopmgr;	  /* (in) */
-	uv_idle_t handle;	  /* (in) */
-	uv_idle_cb cb;		  /* (in) */
+	isc_job_t job;		  /* (in) */
+	isc_job_cb cb;		  /* (in) */
 	dns_qpmulti_t *multi;	  /* (in) */
 	double zipf_skew;	  /* (in) */
 	uint32_t max_item;	  /* (in) */
@@ -209,11 +191,9 @@ struct thread_args {
 static void
 first_loop(void *varg) {
 	struct thread_args *args = varg;
-	isc_loop_t *loop = isc_loop_current(args->loopmgr);
+	isc_loop_t *loop = isc_loop();
 
-	uv_idle_init(&loop->loop, &args->handle);
-	uv_idle_start(&args->handle, args->cb);
-	args->handle.data = args;
+	isc_job_run(loop, &args->job, args->cb, args);
 
 	isc_barrier_wait(args->barrier);
 	args->start = isc_time_monotonic();
@@ -226,20 +206,17 @@ next_loop(struct thread_args *args, isc_nanosecs_t start) {
 	args->worked += stop - start;
 	args->stop = stop;
 	if (args->stop - args->start < RUNTIME) {
+		isc_job_run(isc_loop(), &args->job, args->cb, args);
 		return;
 	}
-	uv_idle_stop(&args->handle);
-	uv_close(&args->handle, NULL);
-	isc_async_run(isc_loop_main(args->loopmgr), collect, args);
+	isc_async_run(isc_loop_main(), collect, args);
 }
 
 #if ZIPF
 static void
-read_zipf(uv_idle_t *idle) {
-	struct thread_args *args = idle->data;
+read_zipf(void *varg) {
+	struct thread_args *args = varg;
 	isc_nanosecs_t start;
-	void *pval = NULL;
-	uint32_t ival;
 
 	/* outside time because it is v slow */
 	uint32_t r[args->tx_per_loop][args->ops_per_tx];
@@ -257,7 +234,7 @@ read_zipf(uv_idle_t *idle) {
 		for (uint32_t op = 0; op < args->ops_per_tx; op++) {
 			uint32_t i = r[tx][op];
 			isc_result_t result = dns_qp_getkey(
-				&qp, item[i].key, item[i].len, &pval, &ival);
+				&qp, item[i].key, item[i].len, NULL, NULL);
 			if (result == ISC_R_SUCCESS) {
 				args->present++;
 			} else {
@@ -273,11 +250,9 @@ read_zipf(uv_idle_t *idle) {
 #endif
 
 static void
-read_transactions(uv_idle_t *idle) {
-	struct thread_args *args = idle->data;
+read_transactions(void *varg) {
+	struct thread_args *args = varg;
 	isc_nanosecs_t start = isc_time_monotonic();
-	void *pval = NULL;
-	uint32_t ival;
 
 	for (uint32_t tx = 0; tx < args->tx_per_loop; tx++) {
 		args->transactions++;
@@ -286,7 +261,7 @@ read_transactions(uv_idle_t *idle) {
 		for (uint32_t op = 0; op < args->ops_per_tx; op++) {
 			uint32_t i = isc_random_uniform(args->max_item);
 			isc_result_t result = dns_qp_getkey(
-				&qp, item[i].key, item[i].len, &pval, &ival);
+				&qp, item[i].key, item[i].len, NULL, NULL);
 			if (result == ISC_R_SUCCESS) {
 				args->present++;
 			} else {
@@ -299,8 +274,8 @@ read_transactions(uv_idle_t *idle) {
 }
 
 static void
-mutate_transactions(uv_idle_t *idle) {
-	struct thread_args *args = idle->data;
+mutate_transactions(void *varg) {
+	struct thread_args *args = varg;
 	isc_nanosecs_t start = isc_time_monotonic();
 
 	for (uint32_t tx = 0; tx < args->tx_per_loop; tx++) {
@@ -310,7 +285,8 @@ mutate_transactions(uv_idle_t *idle) {
 			uint32_t i = isc_random_uniform(args->max_item);
 			if (item[i].present) {
 				isc_result_t result = dns_qp_deletekey(
-					qp, item[i].key, item[i].len);
+					qp, item[i].key, item[i].len, NULL,
+					NULL);
 				INSIST(result == ISC_R_SUCCESS);
 				item[i].present = false;
 				args->present++;
@@ -354,7 +330,6 @@ enum benchmode {
 struct bench_state {
 	isc_mem_t *mctx;
 	isc_barrier_t barrier;
-	isc_loopmgr_t *loopmgr;
 	dns_qpmulti_t *multi;
 	enum benchmode mode;
 	size_t bytes;
@@ -380,8 +355,7 @@ load_multi(struct bench_state *bctx) {
 	size_t count = 0;
 	uint64_t start;
 
-	dns_qpmulti_create(bctx->mctx, bctx->loopmgr, &item_methods, NULL,
-			   &bctx->multi);
+	dns_qpmulti_create(bctx->mctx, &item_methods, NULL, &bctx->multi);
 
 	/* initial contents of the trie */
 	start = isc_time_monotonic();
@@ -453,11 +427,10 @@ dispatch(struct bench_state *bctx) {
 	case init:
 		goto init_max_items_rw;
 
-	fini:;
-		isc_loopmgr_t *loopmgr = bctx->loopmgr;
+	fini:
 		dns_qpmulti_destroy(&bctx->multi);
 		isc_mem_putanddetach(&bctx->mctx, bctx, bctx->bytes);
-		isc_loopmgr_shutdown(loopmgr);
+		isc_loopmgr_shutdown();
 		return;
 
 	init_max_items_rw:
@@ -474,6 +447,7 @@ dispatch(struct bench_state *bctx) {
 		bctx->max_item = 10;
 		load_multi(bctx);
 		break;
+
 	case vary_max_items_rw:
 		if (bctx->max_item == ITEM_COUNT) {
 			goto init_max_items_ro;
@@ -725,20 +699,19 @@ dispatch(struct bench_state *bctx) {
 		bctx->thread[t] = (struct thread_args){
 			.bctx = bctx,
 			.barrier = &bctx->barrier,
-			.loopmgr = bctx->loopmgr,
 			.multi = bctx->multi,
 			.max_item = bctx->max_item,
 			.zipf_skew = bctx->zipf_skew,
 			.cb = zipf  ? read_zipf
 			      : mut ? mutate_transactions
 				    : read_transactions,
+			.job = ISC_JOB_INITIALIZER,
 			.ops_per_tx = mut ? bctx->mut_ops_per_tx
 					  : bctx->read_ops_per_tx,
 			.tx_per_loop = mut ? bctx->mut_tx_per_loop
 					   : bctx->read_tx_per_loop,
 		};
-		isc_async_run(isc_loop_get(bctx->loopmgr, t), first_loop,
-			      &bctx->thread[t]);
+		isc_async_run(isc_loop_get(t), first_loop, &bctx->thread[t]);
 	}
 }
 
@@ -769,7 +742,7 @@ collect(void *varg) {
 	nloops = zipf ? bctx->nloops : bctx->readers + bctx->mutate;
 	for (uint32_t t = 0; t < nloops; t++) {
 		struct thread_args *tp = &thread[t];
-		elapsed = ISC_MAX(elapsed, (tp->stop - tp->start));
+		elapsed = ISC_MAX(elapsed, tp->stop - tp->start);
 		bool mut = t < bctx->mutate;
 
 		stats[mut].worked += tp->worked;
@@ -777,6 +750,8 @@ collect(void *varg) {
 		stats[mut].ops += tp->transactions * tp->ops_per_tx;
 		stats[mut].compactions += tp->compactions;
 	}
+
+	INSIST(elapsed >= RUNTIME);
 
 	printf("%7.3f\t", RUNTIME / (double)NS_PER_SEC);
 	printf("%7.3f\t", elapsed / (double)NS_PER_SEC);
@@ -813,17 +788,15 @@ collect(void *varg) {
 }
 
 static void
-startup(void *arg) {
-	isc_loopmgr_t *loopmgr = arg;
-	isc_loop_t *loop = isc_loop_current(loopmgr);
+startup(void *arg ISC_ATTR_UNUSED) {
+	isc_loop_t *loop = isc_loop();
 	isc_mem_t *mctx = isc_loop_getmctx(loop);
-	uint32_t nloops = isc_loopmgr_nloops(loopmgr);
+	uint32_t nloops = isc_loopmgr_nloops();
 	size_t bytes = sizeof(struct bench_state) +
 		       sizeof(struct thread_args) * nloops;
-	struct bench_state *bctx = isc_mem_getx(mctx, bytes, ISC_MEM_ZERO);
+	struct bench_state *bctx = isc_mem_cget(mctx, 1, bytes);
 
 	*bctx = (struct bench_state){
-		.loopmgr = loopmgr,
 		.bytes = bytes,
 		.nloops = nloops,
 	};
@@ -833,7 +806,6 @@ startup(void *arg) {
 }
 
 struct ticker {
-	isc_loopmgr_t *loopmgr;
 	isc_mem_t *mctx;
 	isc_timer_t *timer;
 };
@@ -847,7 +819,7 @@ tick(void *varg) {
 static void
 start_ticker(void *varg) {
 	struct ticker *ticker = varg;
-	isc_loop_t *loop = isc_loop_current(ticker->loopmgr);
+	isc_loop_t *loop = isc_loop();
 
 	isc_timer_create(loop, tick, NULL, &ticker->timer);
 	isc_timer_start(ticker->timer, isc_timertype_ticker,
@@ -867,14 +839,14 @@ stop_ticker(void *varg) {
 }
 
 static void
-setup_tickers(isc_mem_t *mctx, isc_loopmgr_t *loopmgr) {
-	uint32_t nloops = isc_loopmgr_nloops(loopmgr);
+setup_tickers(isc_mem_t *mctx) {
+	uint32_t nloops = isc_loopmgr_nloops();
 	for (uint32_t i = 0; i < nloops; i++) {
-		isc_loop_t *loop = isc_loop_get(loopmgr, i);
-		struct ticker *ticker = isc_mem_getx(mctx, sizeof(*ticker),
-						     ISC_MEM_ZERO);
-		isc_mem_attach(mctx, &ticker->mctx);
-		ticker->loopmgr = loopmgr;
+		isc_loop_t *loop = isc_loop_get(i);
+		struct ticker *ticker = isc_mem_get(mctx, sizeof(*ticker));
+		*ticker = (struct ticker){
+			.mctx = isc_mem_ref(mctx),
+		};
 		isc_loop_setup(loop, start_ticker, ticker);
 		isc_loop_teardown(loop, stop_ticker, ticker);
 	}
@@ -882,8 +854,8 @@ setup_tickers(isc_mem_t *mctx, isc_loopmgr_t *loopmgr) {
 
 int
 main(void) {
-	isc_loopmgr_t *loopmgr = NULL;
-	isc_mem_t *mctx = NULL;
+	setlinebuf(stdout);
+
 	uint32_t nloops;
 	const char *env_workers = getenv("ISC_TASK_WORKERS");
 
@@ -894,21 +866,18 @@ main(void) {
 	}
 	INSIST(nloops > 1);
 
-	isc_mem_create(&mctx);
-	isc_mem_setdestroycheck(mctx, true);
-	init_logging(mctx);
-	init_items(mctx);
+	isc_mem_setdestroycheck(isc_g_mctx, true);
+	init_logging();
+	init_items(isc_g_mctx);
 
-	isc_loopmgr_create(mctx, nloops, &loopmgr);
-	setup_tickers(mctx, loopmgr);
-	isc_loop_setup(isc_loop_main(loopmgr), startup, loopmgr);
-	isc_loopmgr_run(loopmgr);
-	isc_loopmgr_destroy(&loopmgr);
+	isc_loopmgr_create(isc_g_mctx, nloops);
+	setup_tickers(isc_g_mctx);
+	isc_loop_setup(isc_loop_main(), startup, NULL);
+	isc_loopmgr_run();
+	isc_loopmgr_destroy();
 
-	isc_log_destroy(&dns_lctx);
-	isc_mem_free(mctx, item);
+	isc_mem_free(isc_g_mctx, item);
 	isc_mem_checkdestroyed(stdout);
-	isc_mem_destroy(&mctx);
 
-	return (0);
+	return 0;
 }

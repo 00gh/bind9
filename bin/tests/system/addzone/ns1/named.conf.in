@@ -25,14 +25,16 @@ options {
 	pid-file "named.pid";
 	listen-on { 10.53.0.1; };
 	listen-on-v6 { none; };
+	allow-transfer { any; };
 	allow-query { any; };
 	allow-new-zones yes;
 	recursion no;
+	dnssec-validation no;
 };
 
 zone "." {
 	type hint;
-	file "../../common/root.hint";
+	file "../../_common/root.hint";
 };
 
 zone "inlinesec.example" {

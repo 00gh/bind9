@@ -28,9 +28,10 @@ options {
 	listen-on-v6 { none; };
 	recursion no;
 	notify no;
-	dnssec-validation yes;
+	dnssec-validation no;
 	allow-query { allowed; };
 };
+
 
 key rndc_key {
 	secret "1234abcd8765";
@@ -44,8 +45,6 @@ controls {
 zone "." {
 	type primary;
 	file "root.db.signed";
-	allow-update { any; };
-	auto-dnssec maintain;
 };
 
 zone "tld" {

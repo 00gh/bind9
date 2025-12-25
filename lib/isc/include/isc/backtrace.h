@@ -32,6 +32,7 @@
 /***
  ***	Imports
  ***/
+#include <isc/log.h>
 #include <isc/types.h>
 
 /*
@@ -45,7 +46,6 @@
  *** Functions
  ***/
 
-ISC_LANG_BEGINDECLS
 int
 isc_backtrace(void **addrs, int maxaddrs);
 /*%<
@@ -105,10 +105,8 @@ isc_backtrace_symbols_fd(void *const *buffer, int size, int fd);
  */
 
 void
-isc_backtrace_log(isc_log_t *lctx, isc_logcategory_t *category,
-		  isc_logmodule_t *module, int level);
+isc_backtrace_log(isc_logcategory_t category, isc_logmodule_t module,
+		  int level);
 /*
  * Write a backtrace to the log.
  */
-
-ISC_LANG_ENDDECLS

@@ -25,11 +25,16 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <openssl/opensslv.h>
+
 #include <isc/async.h>
 #include <isc/attributes.h>
 #include <isc/base64.h>
 #include <isc/buffer.h>
+#include <isc/commandline.h>
+#include <isc/crypto.h>
 #include <isc/hex.h>
+#include <isc/lib.h>
 #include <isc/log.h>
 #include <isc/managers.h>
 #include <isc/md.h>
@@ -52,7 +57,7 @@
 #include <dns/fixedname.h>
 #include <dns/keytable.h>
 #include <dns/keyvalues.h>
-#include <dns/log.h>
+#include <dns/lib.h>
 #include <dns/masterdump.h>
 #include <dns/message.h>
 #include <dns/name.h>
@@ -70,7 +75,6 @@
 
 #include <dst/dst.h>
 
-#include <isccfg/log.h>
 #include <isccfg/namedconf.h>
 
 #include <ns/client.h>
@@ -88,22 +92,22 @@
 
 #define MAXNAME (DNS_NAME_MAXTEXT + 1)
 
+#define MAX_QUERIES  50
+#define MAX_TOTAL    200
+#define MAX_RESTARTS 11
+
 /* Variables used internally by delv. */
-char *progname = NULL;
-static isc_mem_t *mctx = NULL;
-static isc_log_t *lctx = NULL;
 static dns_view_t *view = NULL;
 static ns_server_t *sctx = NULL;
 static ns_interface_t *ifp = NULL;
-static dns_dispatch_t *dispatch = NULL;
+static dns_dispatch_t *dispatch4 = NULL;
+static dns_dispatch_t *dispatch6 = NULL;
 static dns_db_t *roothints = NULL;
 static isc_stats_t *resstats = NULL;
 static dns_stats_t *resquerystats = NULL;
 static FILE *logfp = NULL;
 
 /* Managers */
-static isc_nm_t *netmgr = NULL;
-static isc_loopmgr_t *loopmgr = NULL;
 static dns_dispatchmgr_t *dispatchmgr = NULL;
 static dns_requestmgr_t *requestmgr = NULL;
 static ns_interfacemgr_t *interfacemgr = NULL;
@@ -129,6 +133,10 @@ static bool showcomments = true, showdnssec = true, showtrust = true,
 	    rrcomments = true, noclass = false, nocrypto = false, nottl = false,
 	    multiline = false, short_form = false, print_unknown_format = false,
 	    yaml = false, fulltrace = false;
+
+static uint32_t maxqueries = MAX_QUERIES;
+static uint32_t maxtotal = MAX_TOTAL;
+static uint32_t restarts = MAX_RESTARTS;
 
 static bool resolve_trace = false, validator_trace = false,
 	    message_trace = false, send_trace = false;
@@ -212,7 +220,6 @@ usage(void) {
 		"                 +[no]crypto         (Control display of "
 		"cryptographic\n"
 		"                                      fields in records)\n"
-		"                 +[no]dlv            (Obsolete)\n"
 		"                 +[no]dnssec         (Display DNSSEC "
 		"records)\n"
 		"                 +[no]mtrace         (Trace messages "
@@ -247,10 +254,10 @@ usage(void) {
 		"process)\n"
 		"                 +[no]yaml           (Present the results as "
 		"YAML)\n");
-	exit(1);
+	exit(EXIT_FAILURE);
 }
 
-noreturn static void
+ISC_NORETURN static void
 fatal(const char *format, ...) ISC_FORMAT_PRINTF(1, 2);
 
 static void
@@ -258,13 +265,12 @@ fatal(const char *format, ...) {
 	va_list args;
 
 	fflush(stdout);
-	fprintf(stderr, "%s: ", progname);
+	fprintf(stderr, "%s: ", isc_commandline_progname);
 	va_start(args, format);
 	vfprintf(stderr, format, args);
 	va_end(args);
 	fprintf(stderr, "\n");
-	isc__tls_setfatalmode();
-	exit(1);
+	_exit(EXIT_FAILURE);
 }
 
 static void
@@ -275,18 +281,12 @@ warn(const char *format, ...) {
 	va_list args;
 
 	fflush(stdout);
-	fprintf(stderr, "%s: warning: ", progname);
+	fprintf(stderr, "%s: warning: ", isc_commandline_progname);
 	va_start(args, format);
 	vfprintf(stderr, format, args);
 	va_end(args);
 	fprintf(stderr, "\n");
 }
-
-static isc_logcategory_t categories[] = { { "delv", 0 }, { NULL, 0 } };
-#define LOGCATEGORY_DEFAULT (&categories[0])
-#define LOGMODULE_DEFAULT   (&modules[0])
-
-static isc_logmodule_t modules[] = { { "delv", 0 }, { NULL, 0 } };
 
 static void
 delv_log(int level, const char *fmt, ...) ISC_FORMAT_PRINTF(2, 3);
@@ -296,15 +296,15 @@ delv_log(int level, const char *fmt, ...) {
 	va_list ap;
 	char msgbuf[2048];
 
-	if (!isc_log_wouldlog(lctx, level)) {
+	if (!isc_log_wouldlog(level)) {
 		return;
 	}
 
 	va_start(ap, fmt);
 
 	vsnprintf(msgbuf, sizeof(msgbuf), fmt, ap);
-	isc_log_write(lctx, LOGCATEGORY_DEFAULT, LOGMODULE_DEFAULT, level, "%s",
-		      msgbuf);
+	isc_log_write(DELV_LOGCATEGORY_DEFAULT, DELV_LOGMODULE_DEFAULT, level,
+		      "%s", msgbuf);
 	va_end(ap);
 }
 
@@ -312,76 +312,45 @@ static int loglevel = 0;
 
 static void
 setup_logging(FILE *errout) {
-	isc_result_t result;
-	isc_logdestination_t destination;
-	isc_logconfig_t *logconfig = NULL;
 	int packetlevel = 10;
 
-	isc_log_create(mctx, &lctx, &logconfig);
-	isc_log_registercategories(lctx, categories);
-	isc_log_registermodules(lctx, modules);
-	isc_log_setcontext(lctx);
-	dns_log_init(lctx);
-	dns_log_setcontext(lctx);
-	cfg_log_init(lctx);
+	isc_log_setdebuglevel(loglevel);
 
-	destination.file.stream = errout;
-	destination.file.name = NULL;
-	destination.file.versions = ISC_LOG_ROLLNEVER;
-	destination.file.maximum_size = 0;
-	isc_log_createchannel(logconfig, "stderr", ISC_LOG_TOFILEDESC,
-			      ISC_LOG_DYNAMIC, &destination,
-			      ISC_LOG_PRINTPREFIX);
+	isc_logconfig_t *logconfig = isc_logconfig_get();
 
-	isc_log_setdebuglevel(lctx, loglevel);
 	isc_log_settag(logconfig, ";; ");
 
-	result = isc_log_usechannel(logconfig, "stderr",
-				    ISC_LOGCATEGORY_DEFAULT, NULL);
-	if (result != ISC_R_SUCCESS) {
-		fatal("Couldn't attach to log channel 'stderr'");
-	}
+	isc_log_createandusechannel(
+		logconfig, "default_stderr", ISC_LOG_TOFILEDESC,
+		ISC_LOG_DYNAMIC, ISC_LOGDESTINATION_FILE(errout),
+		ISC_LOG_PRINTPREFIX, ISC_LOGCATEGORY_DEFAULT,
+		ISC_LOGMODULE_DEFAULT);
 
 	if (resolve_trace && loglevel < 1) {
-		isc_log_createchannel(logconfig, "resolver", ISC_LOG_TOFILEDESC,
-				      ISC_LOG_DEBUG(1), &destination,
-				      ISC_LOG_PRINTPREFIX);
-
-		result = isc_log_usechannel(logconfig, "resolver",
-					    DNS_LOGCATEGORY_RESOLVER,
-					    DNS_LOGMODULE_RESOLVER);
-		if (result != ISC_R_SUCCESS) {
-			fatal("Couldn't attach to log channel 'resolver'");
-		}
+		isc_log_createandusechannel(
+			logconfig, "resolver", ISC_LOG_TOFILEDESC,
+			ISC_LOG_DEBUG(1), ISC_LOGDESTINATION_FILE(errout),
+			ISC_LOG_PRINTPREFIX, DNS_LOGCATEGORY_RESOLVER,
+			DNS_LOGMODULE_RESOLVER);
 	}
 
 	if (validator_trace && loglevel < 3) {
-		isc_log_createchannel(logconfig, "validator",
-				      ISC_LOG_TOFILEDESC, ISC_LOG_DEBUG(3),
-				      &destination, ISC_LOG_PRINTPREFIX);
-
-		result = isc_log_usechannel(logconfig, "validator",
-					    DNS_LOGCATEGORY_DNSSEC,
-					    DNS_LOGMODULE_VALIDATOR);
-		if (result != ISC_R_SUCCESS) {
-			fatal("Couldn't attach to log channel 'validator'");
-		}
+		isc_log_createandusechannel(
+			logconfig, "validator", ISC_LOG_TOFILEDESC,
+			ISC_LOG_DEBUG(3), ISC_LOGDESTINATION_FILE(errout),
+			ISC_LOG_PRINTPREFIX, DNS_LOGCATEGORY_DNSSEC,
+			DNS_LOGMODULE_VALIDATOR);
 	}
 
 	if (send_trace) {
 		packetlevel = 11;
 	}
 	if ((message_trace || send_trace) && loglevel < packetlevel) {
-		isc_log_createchannel(logconfig, "messages", ISC_LOG_TOFILEDESC,
-				      ISC_LOG_DEBUG(packetlevel), &destination,
-				      ISC_LOG_PRINTPREFIX);
-
-		result = isc_log_usechannel(logconfig, "messages",
-					    DNS_LOGCATEGORY_RESOLVER,
-					    DNS_LOGMODULE_PACKETS);
-		if (result != ISC_R_SUCCESS) {
-			fatal("Couldn't attach to log channel 'messagse'");
-		}
+		isc_log_createandusechannel(
+			logconfig, "messages", ISC_LOG_TOFILEDESC,
+			ISC_LOG_DEBUG(packetlevel),
+			ISC_LOGDESTINATION_FILE(errout), ISC_LOG_PRINTPREFIX,
+			DNS_LOGCATEGORY_RESOLVER, DNS_LOGMODULE_PACKETS);
 	}
 }
 
@@ -397,9 +366,9 @@ print_status(dns_rdataset_t *rdataset) {
 
 	buf[0] = '\0';
 
-	if ((rdataset->attributes & DNS_RDATASETATTR_NEGATIVE) != 0) {
+	if (rdataset->attributes.negative) {
 		strlcat(buf, "negative response", sizeof(buf));
-		strlcat(buf, (yaml ? "_" : ", "), sizeof(buf));
+		strlcat(buf, yaml ? "_" : ", ", sizeof(buf));
 	}
 
 	switch (rdataset->trust) {
@@ -495,18 +464,14 @@ printdata(dns_rdataset_t *rdataset, dns_name_t *owner) {
 	}
 
 	do {
-		t = isc_mem_get(mctx, len);
+		t = isc_mem_get(isc_g_mctx, len);
 
 		isc_buffer_init(&target, t, len);
 		if (short_form) {
-			dns_rdata_t rdata = DNS_RDATA_INIT;
-			for (result = dns_rdataset_first(rdataset);
-			     result == ISC_R_SUCCESS;
-			     result = dns_rdataset_next(rdataset))
-			{
-				if ((rdataset->attributes &
-				     DNS_RDATASETATTR_NEGATIVE) != 0)
-				{
+			DNS_RDATASET_FOREACH (rdataset) {
+				dns_rdata_t rdata = DNS_RDATA_INIT;
+
+				if (rdataset->attributes.negative) {
 					continue;
 				}
 
@@ -524,14 +489,10 @@ printdata(dns_rdataset_t *rdataset, dns_name_t *owner) {
 				}
 
 				isc_buffer_putstr(&target, "\n");
-
-				dns_rdata_reset(&rdata);
 			}
 		} else {
 			dns_indent_t indent = { "  ", 2 };
-			if (!yaml && (rdataset->attributes &
-				      DNS_RDATASETATTR_NEGATIVE) != 0)
-			{
+			if (!yaml && rdataset->attributes.negative) {
 				isc_buffer_putstr(&target, "; ");
 			}
 			result = dns_master_rdatasettotext(
@@ -540,7 +501,7 @@ printdata(dns_rdataset_t *rdataset, dns_name_t *owner) {
 		}
 
 		if (result == ISC_R_NOSPACE) {
-			isc_mem_put(mctx, t, len);
+			isc_mem_put(isc_g_mctx, t, len);
 			len += 1024;
 		} else if (result == ISC_R_NOMORE) {
 			result = ISC_R_SUCCESS;
@@ -554,7 +515,7 @@ printdata(dns_rdataset_t *rdataset, dns_name_t *owner) {
 
 cleanup:
 	if (t != NULL) {
-		isc_mem_put(mctx, t, len);
+		isc_mem_put(isc_g_mctx, t, len);
 	}
 }
 
@@ -592,16 +553,19 @@ setup_style(void) {
 
 	if (multiline || (nottl && noclass)) {
 		result = dns_master_stylecreate(&style, styleflags, 24, 24, 24,
-						32, 80, 8, splitwidth, mctx);
+						32, 80, 8, splitwidth,
+						isc_g_mctx);
 	} else if (nottl || noclass) {
 		result = dns_master_stylecreate(&style, styleflags, 24, 24, 32,
-						40, 80, 8, splitwidth, mctx);
+						40, 80, 8, splitwidth,
+						isc_g_mctx);
 	} else {
 		result = dns_master_stylecreate(&style, styleflags, 24, 32, 40,
-						48, 80, 8, splitwidth, mctx);
+						48, 80, 8, splitwidth,
+						isc_g_mctx);
 	}
 
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -618,15 +582,15 @@ convert_name(dns_fixedname_t *fn, dns_name_t **name, const char *text) {
 	isc_buffer_add(&b, len);
 	n = dns_fixedname_initname(fn);
 
-	result = dns_name_fromtext(n, &b, dns_rootname, 0, NULL);
+	result = dns_name_fromtext(n, &b, dns_rootname, 0);
 	if (result != ISC_R_SUCCESS) {
 		delv_log(ISC_LOG_ERROR, "failed to convert name %s: %s", text,
 			 isc_result_totext(result));
-		return (result);
+		return result;
 	}
 
 	*name = n;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -659,7 +623,7 @@ key_fromconfig(const cfg_obj_t *key, dns_client_t *client, dns_view_t *toview) {
 	CHECK(convert_name(&fkeyname, &keyname, keynamestr));
 
 	if (!root_validation) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	if (anchor_name) {
@@ -667,11 +631,11 @@ key_fromconfig(const cfg_obj_t *key, dns_client_t *client, dns_view_t *toview) {
 	}
 
 	if (!match_root) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	if (!root_validation) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	delv_log(ISC_LOG_DEBUG(3), "adding trust anchor %s", trust_anchor);
@@ -690,7 +654,7 @@ key_fromconfig(const cfg_obj_t *key, dns_client_t *client, dns_view_t *toview) {
 	if (cfg_obj_isvoid(obj)) {
 		/*
 		 * "anchortype" is not defined, this must be a static-key
-		 * configured with trusted-keys.
+		 * configured with trust-anchors.
 		 */
 		anchortype = STATIC_KEY;
 	} else {
@@ -733,8 +697,6 @@ key_fromconfig(const cfg_obj_t *key, dns_client_t *client, dns_view_t *toview) {
 		dnskey.common.rdtype = dns_rdatatype_dnskey;
 		dnskey.mctx = NULL;
 
-		ISC_LINK_INIT(&dnskey.common, link);
-
 		dnskey.flags = (uint16_t)rdata1;
 		dnskey.protocol = (uint8_t)rdata2;
 		dnskey.algorithm = (uint8_t)rdata3;
@@ -763,8 +725,6 @@ key_fromconfig(const cfg_obj_t *key, dns_client_t *client, dns_view_t *toview) {
 		ds.common.rdclass = dns_rdataclass_in;
 		ds.common.rdtype = dns_rdatatype_ds;
 		ds.mctx = NULL;
-
-		ISC_LINK_INIT(&ds.common, link);
 
 		ds.key_tag = (uint16_t)rdata1;
 		ds.algorithm = (uint8_t)rdata2;
@@ -810,70 +770,58 @@ key_fromconfig(const cfg_obj_t *key, dns_client_t *client, dns_view_t *toview) {
 	num_keys++;
 
 cleanup:
-	if (result == DST_R_NOCRYPTO) {
-		cfg_obj_log(key, lctx, ISC_LOG_ERROR, "no crypto support");
-	} else if (result == DST_R_UNSUPPORTEDALG) {
-		cfg_obj_log(key, lctx, ISC_LOG_WARNING,
+	if (result == DST_R_UNSUPPORTEDALG) {
+		cfg_obj_log(key, ISC_LOG_WARNING,
 			    "skipping trusted key '%s': %s", keynamestr,
 			    isc_result_totext(result));
 		result = ISC_R_SUCCESS;
 	} else if (result != ISC_R_SUCCESS) {
-		cfg_obj_log(key, lctx, ISC_LOG_ERROR,
+		cfg_obj_log(key, ISC_LOG_ERROR,
 			    "failed to add trusted key '%s': %s", keynamestr,
 			    isc_result_totext(result));
 		result = ISC_R_FAILURE;
 	}
 
-	return (result);
+	return result;
 }
 
 static isc_result_t
 load_keys(const cfg_obj_t *keys, dns_client_t *client, dns_view_t *toview) {
-	const cfg_listelt_t *elt, *elt2;
-	const cfg_obj_t *key, *keylist;
+	const cfg_obj_t *key = NULL, *keylist = NULL;
 	isc_result_t result = ISC_R_SUCCESS;
 
-	for (elt = cfg_list_first(keys); elt != NULL; elt = cfg_list_next(elt))
-	{
+	CFG_LIST_FOREACH (keys, elt) {
 		keylist = cfg_listelt_value(elt);
-
-		for (elt2 = cfg_list_first(keylist); elt2 != NULL;
-		     elt2 = cfg_list_next(elt2))
-		{
+		CFG_LIST_FOREACH (keylist, elt2) {
 			key = cfg_listelt_value(elt2);
 			CHECK(key_fromconfig(key, client, toview));
 		}
 	}
 
 cleanup:
-	if (result == DST_R_NOCRYPTO) {
-		result = ISC_R_SUCCESS;
-	}
-	return (result);
+	return result;
 }
 
 static isc_result_t
 setup_dnsseckeys(dns_client_t *client, dns_view_t *toview) {
 	isc_result_t result;
 	cfg_parser_t *parser = NULL;
-	const cfg_obj_t *trusted_keys = NULL;
-	const cfg_obj_t *managed_keys = NULL;
 	const cfg_obj_t *trust_anchors = NULL;
 	cfg_obj_t *bindkeys = NULL;
 
 	if (!root_validation) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	if (trust_anchor == NULL) {
-		trust_anchor = isc_mem_strdup(mctx, ".");
+		trust_anchor = isc_mem_strdup(isc_g_mctx, ".");
 	}
 
 	if (trust_anchor != NULL) {
 		CHECK(convert_name(&afn, &anchor_name, trust_anchor));
 	}
 
-	CHECK(cfg_parser_create(mctx, dns_lctx, &parser));
+	CHECK(cfg_parser_create(isc_g_mctx, &parser));
 
 	if (anchorfile != NULL) {
 		if (access(anchorfile, R_OK) != 0) {
@@ -899,16 +847,7 @@ setup_dnsseckeys(dns_client_t *client, dns_view_t *toview) {
 	}
 
 	INSIST(bindkeys != NULL);
-	cfg_map_get(bindkeys, "trusted-keys", &trusted_keys);
-	cfg_map_get(bindkeys, "managed-keys", &managed_keys);
 	cfg_map_get(bindkeys, "trust-anchors", &trust_anchors);
-
-	if (trusted_keys != NULL) {
-		CHECK(load_keys(trusted_keys, client, toview));
-	}
-	if (managed_keys != NULL) {
-		CHECK(load_keys(managed_keys, client, toview));
-	}
 	if (trust_anchors != NULL) {
 		CHECK(load_keys(trust_anchors, client, toview));
 	}
@@ -929,7 +868,7 @@ cleanup:
 		delv_log(ISC_LOG_ERROR, "setup_dnsseckeys: %s",
 			 isc_result_totext(result));
 	}
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -949,7 +888,7 @@ addserver(dns_client_t *client) {
 		if (!use_ipv4) {
 			fatal("Use of IPv4 disabled by -6");
 		}
-		sa = isc_mem_get(mctx, sizeof(*sa));
+		sa = isc_mem_get(isc_g_mctx, sizeof(*sa));
 		ISC_LINK_INIT(sa, link);
 		isc_sockaddr_fromin(sa, &in4, destport);
 		ISC_LIST_APPEND(servers, sa, link);
@@ -957,7 +896,7 @@ addserver(dns_client_t *client) {
 		if (!use_ipv6) {
 			fatal("Use of IPv6 disabled by -4");
 		}
-		sa = isc_mem_get(mctx, sizeof(*sa));
+		sa = isc_mem_get(isc_g_mctx, sizeof(*sa));
 		ISC_LINK_INIT(sa, link);
 		isc_sockaddr_fromin6(sa, &in6, destport);
 		ISC_LIST_APPEND(servers, sa, link);
@@ -976,7 +915,7 @@ addserver(dns_client_t *client) {
 		if (gaierror != 0) {
 			delv_log(ISC_LOG_ERROR, "getaddrinfo failed: %s",
 				 gai_strerror(gaierror));
-			return (ISC_R_FAILURE);
+			return ISC_R_FAILURE;
 		}
 
 		result = ISC_R_SUCCESS;
@@ -986,7 +925,7 @@ addserver(dns_client_t *client) {
 			{
 				continue;
 			}
-			sa = isc_mem_get(mctx, sizeof(*sa));
+			sa = isc_mem_get(isc_g_mctx, sizeof(*sa));
 			*sa = (isc_sockaddr_t){
 				.length = (unsigned int)cur->ai_addrlen,
 			};
@@ -1001,10 +940,9 @@ addserver(dns_client_t *client) {
 	CHECK(dns_client_setservers(client, dns_rdataclass_in, name, &servers));
 
 cleanup:
-	while (!ISC_LIST_EMPTY(servers)) {
-		sa = ISC_LIST_HEAD(servers);
-		ISC_LIST_UNLINK(servers, sa, link);
-		isc_mem_put(mctx, sa, sizeof(*sa));
+	ISC_LIST_FOREACH (servers, s, link) {
+		ISC_LIST_UNLINK(servers, s, link);
+		isc_mem_put(isc_g_mctx, s, sizeof(*s));
 	}
 
 	if (result != ISC_R_SUCCESS) {
@@ -1012,17 +950,16 @@ cleanup:
 			 isc_result_totext(result));
 	}
 
-	return (result);
+	return result;
 }
 
 static isc_result_t
 findserver(dns_client_t *client) {
 	isc_result_t result;
 	irs_resconf_t *resconf = NULL;
-	isc_sockaddrlist_t *nameservers;
-	isc_sockaddr_t *sa = NULL, *next = NULL;
+	isc_sockaddrlist_t *nameservers = NULL;
 
-	result = irs_resconf_load(mctx, "/etc/resolv.conf", &resconf);
+	result = irs_resconf_load(isc_g_mctx, "/etc/resolv.conf", &resconf);
 	if (result != ISC_R_SUCCESS && result != ISC_R_FILENOTFOUND) {
 		delv_log(ISC_LOG_ERROR, "irs_resconf_load: %s",
 			 isc_result_totext(result));
@@ -1031,9 +968,7 @@ findserver(dns_client_t *client) {
 
 	/* Get nameservers from resolv.conf */
 	nameservers = irs_resconf_getnameservers(resconf);
-	for (sa = ISC_LIST_HEAD(*nameservers); sa != NULL; sa = next) {
-		next = ISC_LIST_NEXT(sa, link);
-
+	ISC_LIST_FOREACH (*nameservers, sa, link) {
 		/* Set destination port */
 		if (sa->type.sa.sa_family == AF_INET && use_ipv4) {
 			sa->type.sin.sin_port = htons(destport);
@@ -1046,7 +981,7 @@ findserver(dns_client_t *client) {
 
 		/* Incompatible protocol family */
 		ISC_LIST_UNLINK(*nameservers, sa, link);
-		isc_mem_put(mctx, sa, sizeof(*sa));
+		isc_mem_put(isc_g_mctx, sa, sizeof(*sa));
 	}
 
 	/* None found, use localhost */
@@ -1054,7 +989,8 @@ findserver(dns_client_t *client) {
 		if (use_ipv4) {
 			struct in_addr localhost;
 			localhost.s_addr = htonl(INADDR_LOOPBACK);
-			sa = isc_mem_get(mctx, sizeof(*sa));
+			isc_sockaddr_t *sa = isc_mem_get(isc_g_mctx,
+							 sizeof(*sa));
 			isc_sockaddr_fromin(sa, &localhost, destport);
 
 			ISC_LINK_INIT(sa, link);
@@ -1062,7 +998,8 @@ findserver(dns_client_t *client) {
 		}
 
 		if (use_ipv6) {
-			sa = isc_mem_get(mctx, sizeof(*sa));
+			isc_sockaddr_t *sa = isc_mem_get(isc_g_mctx,
+							 sizeof(*sa));
 			isc_sockaddr_fromin6(sa, &in6addr_loopback, destport);
 
 			ISC_LINK_INIT(sa, link);
@@ -1081,7 +1018,7 @@ cleanup:
 	if (resconf != NULL) {
 		irs_resconf_destroy(&resconf);
 	}
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -1094,10 +1031,10 @@ parse_uint(uint32_t *uip, const char *value, uint32_t max, const char *desc) {
 	if (result != ISC_R_SUCCESS) {
 		printf("invalid %s '%s': %s\n", desc, value,
 		       isc_result_totext(result));
-		return (result);
+		return result;
 	}
 	*uip = n;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static void
@@ -1158,14 +1095,6 @@ plus_option(char *option) {
 		break;
 	case 'd':
 		switch (cmd[1]) {
-		case 'l': /* dlv */
-			FULLCHECK("dlv");
-			if (state) {
-				fprintf(stderr, "Invalid option: "
-						"+dlv is obsolete\n");
-				exit(1);
-			}
-			break;
 		case 'n': /* dnssec */
 			FULLCHECK("dnssec");
 			showdnssec = state;
@@ -1192,6 +1121,47 @@ plus_option(char *option) {
 		break;
 	case 'm':
 		switch (cmd[1]) {
+		case 'a':
+			switch (cmd[3]) {
+			case 'q': /* maxqueries */
+				FULLCHECK("maxqueries");
+				if (value == NULL) {
+					goto need_value;
+				}
+				if (!state) {
+					goto invalid_option;
+				}
+				result = parse_uint(&maxqueries, value,
+						    UINT_MAX, "maxqueries");
+				if (result != ISC_R_SUCCESS) {
+					fatal("Couldn't parse maxqueries");
+				}
+				if (maxqueries == 0) {
+					fatal("maxqueries must be nonzero");
+				}
+				break;
+			case 't': /* maxtotalqueries */
+				FULLCHECK("maxtotalqueries");
+				if (value == NULL) {
+					goto need_value;
+				}
+				if (!state) {
+					goto invalid_option;
+				}
+				result = parse_uint(&maxtotal, value, UINT_MAX,
+						    "maxtotalqueries");
+				if (result != ISC_R_SUCCESS) {
+					fatal("Couldn't parse maxtotalqueries");
+				}
+				if (maxtotal == 0) {
+					fatal("maxtotalqueries must be "
+					      "nonzero");
+				}
+				break;
+			default:
+				goto invalid_option;
+			}
+			break;
 		case 't': /* mtrace */
 			FULLCHECK("mtrace");
 			message_trace = state;
@@ -1244,6 +1214,22 @@ plus_option(char *option) {
 		break;
 	case 'r':
 		switch (cmd[1]) {
+		case 'e': /* restarts */
+			FULLCHECK("restarts");
+			if (value == NULL) {
+				goto need_value;
+			}
+			if (!state) {
+				goto invalid_option;
+			}
+			result = parse_uint(&restarts, value, 255, "restarts");
+			if (result != ISC_R_SUCCESS) {
+				fatal("Couldn't parse restarts");
+			}
+			if (restarts == 0) {
+				fatal("restarts must be between 1..255");
+			}
+			break;
 		case 'o': /* root */
 			FULLCHECK("root");
 			if (state && no_sigs) {
@@ -1251,7 +1237,8 @@ plus_option(char *option) {
 			}
 			root_validation = state;
 			if (value != NULL) {
-				trust_anchor = isc_mem_strdup(mctx, value);
+				trust_anchor = isc_mem_strdup(isc_g_mctx,
+							      value);
 			}
 			break;
 		case 'r': /* rrcomments */
@@ -1371,16 +1358,9 @@ plus_option(char *option) {
 		break;
 	default:
 	invalid_option:
-		/*
-		 * We can also add a "need_value:" case here if we ever
-		 * add a plus-option that requires a specified value
-		 */
+	need_value:
 		fprintf(stderr, "Invalid option: +%s\n", option);
 		usage();
-	}
-
-	if (qmin && !fulltrace) {
-		fatal("'+qmin' cannot be used without '+ns'");
 	}
 	return;
 }
@@ -1388,8 +1368,8 @@ plus_option(char *option) {
 /*
  * options: "46a:b:c:d:himp:q:t:vx:";
  */
-static const char *single_dash_opts = "46himv";
-static const char *dash_opts = "46abcdhimpqtvx";
+static const char *single_dash_opts = "46Fhimv";
+static const char *dash_opts = "46abcdFhimpqtvx";
 
 static bool
 dash_option(char *option, char *next, bool *open_type_class) {
@@ -1432,9 +1412,12 @@ dash_option(char *option, char *next, bool *open_type_class) {
 				use_ipv4 = false;
 			}
 			break;
+		case 'F': /* FIPS */
+			/* handled in preparse_args() */
+			break;
 		case 'h':
 			usage();
-			exit(0);
+			exit(EXIT_SUCCESS);
 		case 'i':
 			no_sigs = true;
 			root_validation = false;
@@ -1444,14 +1427,14 @@ dash_option(char *option, char *next, bool *open_type_class) {
 			break;
 		case 'v':
 			printf("delv %s\n", PACKAGE_VERSION);
-			exit(0);
+			exit(EXIT_SUCCESS);
 		default:
 			UNREACHABLE();
 		}
 		if (strlen(option) > 1U) {
 			option = &option[1];
 		} else {
-			return (false);
+			return false;
 		}
 	}
 	opt = option[0];
@@ -1467,8 +1450,8 @@ dash_option(char *option, char *next, bool *open_type_class) {
 	}
 	switch (opt) {
 	case 'a':
-		anchorfile = isc_mem_strdup(mctx, value);
-		return (value_from_next);
+		anchorfile = isc_mem_strdup(isc_g_mctx, value);
+		return value_from_next;
 	case 'b':
 		hash = strchr(value, '#');
 		if (hash != NULL) {
@@ -1505,7 +1488,7 @@ dash_option(char *option, char *next, bool *open_type_class) {
 		if (hash != NULL) {
 			*hash = '#';
 		}
-		return (value_from_next);
+		return value_from_next;
 	case 'c':
 		if (classset) {
 			warn("extra query class");
@@ -1523,28 +1506,28 @@ dash_option(char *option, char *next, bool *open_type_class) {
 		} else {
 			warn("ignoring invalid class");
 		}
-		return (value_from_next);
+		return value_from_next;
 	case 'd':
 		result = parse_uint(&num, value, 99, "debug level");
 		if (result != ISC_R_SUCCESS) {
 			fatal("Couldn't parse debug level");
 		}
 		loglevel = num;
-		return (value_from_next);
+		return value_from_next;
 	case 'p':
 		port = value;
 		result = parse_uint(&destport, port, 0xffff, "port");
 		if (result != ISC_R_SUCCESS) {
 			fatal("Couldn't parse port number");
 		}
-		return (value_from_next);
+		return value_from_next;
 	case 'q':
 		if (curqname != NULL) {
 			warn("extra query name");
-			isc_mem_free(mctx, curqname);
+			isc_mem_free(isc_g_mctx, curqname);
 		}
-		curqname = isc_mem_strdup(mctx, value);
-		return (value_from_next);
+		curqname = isc_mem_strdup(isc_g_mctx, value);
+		return value_from_next;
 	case 't':
 		*open_type_class = false;
 		tr.base = value;
@@ -1565,15 +1548,15 @@ dash_option(char *option, char *next, bool *open_type_class) {
 		} else {
 			warn("ignoring invalid type");
 		}
-		return (value_from_next);
+		return value_from_next;
 	case 'x':
 		result = get_reverse(textname, sizeof(textname), value, false);
 		if (result == ISC_R_SUCCESS) {
 			if (curqname != NULL) {
-				isc_mem_free(mctx, curqname);
+				isc_mem_free(isc_g_mctx, curqname);
 				warn("extra query name");
 			}
-			curqname = isc_mem_strdup(mctx, textname);
+			curqname = isc_mem_strdup(isc_g_mctx, textname);
 			if (typeset) {
 				warn("extra query type");
 			}
@@ -1581,16 +1564,16 @@ dash_option(char *option, char *next, bool *open_type_class) {
 			typeset = true;
 		} else {
 			fprintf(stderr, "Invalid IP address %s\n", value);
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
-		return (value_from_next);
+		return value_from_next;
 	invalid_option:
 	default:
 		fprintf(stderr, "Invalid option: -%s\n", option);
 		usage();
 	}
 	UNREACHABLE();
-	return (false);
+	return false;
 }
 
 /*
@@ -1610,9 +1593,14 @@ preparse_args(int argc, char **argv) {
 		option = &argv[0][1];
 		while (strpbrk(option, single_dash_opts) == &option[0]) {
 			switch (option[0]) {
+			case 'F':
+				if (isc_crypto_fips_enable() != ISC_R_SUCCESS) {
+					fatal("setting FIPS mode failed");
+				}
+				break;
 			case 'm':
-				isc_mem_debugging = ISC_MEM_DEBUGTRACE |
-						    ISC_MEM_DEBUGRECORD;
+				isc_mem_debugon(ISC_MEM_DEBUGTRACE |
+						ISC_MEM_DEBUGRECORD);
 				break;
 			case '4':
 				if (ipv6only) {
@@ -1725,9 +1713,14 @@ parse_args(int argc, char **argv) {
 			}
 
 			if (curqname == NULL) {
-				curqname = isc_mem_strdup(mctx, argv[0]);
+				curqname = isc_mem_strdup(isc_g_mctx, argv[0]);
 			}
 		}
+	}
+
+	/* check consistency */
+	if (qmin && !fulltrace) {
+		fatal("'+qmin' cannot be used without '+ns'");
 	}
 
 	/*
@@ -1739,7 +1732,7 @@ parse_args(int argc, char **argv) {
 	}
 
 	if (curqname == NULL) {
-		qname = isc_mem_strdup(mctx, ".");
+		qname = isc_mem_strdup(isc_g_mctx, ".");
 
 		if (!typeset) {
 			qtype = dns_rdatatype_ns;
@@ -1752,11 +1745,11 @@ parse_args(int argc, char **argv) {
 static isc_result_t
 append_str(const char *text, int len, char **p, char *end) {
 	if (len > end - *p) {
-		return (ISC_R_NOSPACE);
+		return ISC_R_NOSPACE;
 	}
 	memmove(*p, text, len);
 	*p += len;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -1767,17 +1760,17 @@ reverse_octets(const char *in, char **p, char *end) {
 		isc_result_t result;
 		result = reverse_octets(dot + 1, p, end);
 		if (result != ISC_R_SUCCESS) {
-			return (result);
+			return result;
 		}
 		result = append_str(".", 1, p, end);
 		if (result != ISC_R_SUCCESS) {
-			return (result);
+			return result;
 		}
 		len = (int)(dot - in);
 	} else {
 		len = strlen(in);
 	}
-	return (append_str(in, len, p, end));
+	return append_str(in, len, p, end);
 }
 
 static isc_result_t
@@ -1796,10 +1789,10 @@ get_reverse(char *reverse, size_t len, char *value, bool strict) {
 		name = dns_fixedname_initname(&fname);
 		result = dns_byaddr_createptrname(&addr, name);
 		if (result != ISC_R_SUCCESS) {
-			return (result);
+			return result;
 		}
 		dns_name_format(name, reverse, (unsigned int)len);
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	} else {
 		/*
 		 * Not a valid IPv6 address.  Assume IPv4.
@@ -1812,17 +1805,17 @@ get_reverse(char *reverse, size_t len, char *value, bool strict) {
 		char *p = reverse;
 		char *end = reverse + len;
 		if (strict && inet_pton(AF_INET, value, &addr.type.in) != 1) {
-			return (DNS_R_BADDOTTEDQUAD);
+			return DNS_R_BADDOTTEDQUAD;
 		}
 		result = reverse_octets(value, &p, end);
 		if (result != ISC_R_SUCCESS) {
-			return (result);
+			return result;
 		}
 		result = append_str(".in-addr.arpa.", 15, &p, end);
 		if (result != ISC_R_SUCCESS) {
-			return (result);
+			return result;
 		}
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 }
 
@@ -1830,7 +1823,6 @@ static void
 resolve_cb(dns_client_t *client, const dns_name_t *query_name,
 	   dns_namelist_t *namelist, isc_result_t result) {
 	char namestr[DNS_NAME_FORMATSIZE];
-	dns_rdataset_t *rdataset;
 
 	if (result != ISC_R_SUCCESS && !yaml) {
 		delv_log(ISC_LOG_ERROR, "resolution failed: %s",
@@ -1845,23 +1837,18 @@ resolve_cb(dns_client_t *client, const dns_name_t *query_name,
 		printf("records:\n");
 	}
 
-	for (dns_name_t *response_name = ISC_LIST_HEAD(*namelist);
-	     response_name != NULL;
-	     response_name = ISC_LIST_NEXT(response_name, link))
-	{
-		for (rdataset = ISC_LIST_HEAD(response_name->list);
-		     rdataset != NULL; rdataset = ISC_LIST_NEXT(rdataset, link))
-		{
+	ISC_LIST_FOREACH (*namelist, response_name, link) {
+		ISC_LIST_FOREACH (response_name->list, rdataset, link) {
 			printdata(rdataset, response_name);
 		}
 	}
 
 	dns_client_freeresanswer(client, namelist);
-	isc_mem_put(mctx, namelist, sizeof(*namelist));
+	isc_mem_put(isc_g_mctx, namelist, sizeof(*namelist));
 
 	dns_client_detach(&client);
 
-	isc_loopmgr_shutdown(loopmgr);
+	isc_loopmgr_shutdown();
 }
 
 static void
@@ -1874,7 +1861,7 @@ run_resolve(void *arg) {
 
 	UNUSED(arg);
 
-	namelist = isc_mem_get(mctx, sizeof(*namelist));
+	namelist = isc_mem_get(isc_g_mctx, sizeof(*namelist));
 	ISC_LIST_INIT(*namelist);
 
 	/* Construct QNAME */
@@ -1896,8 +1883,10 @@ run_resolve(void *arg) {
 	}
 
 	/* Create client */
-	CHECK(dns_client_create(mctx, loopmgr, netmgr, 0, tlsctx_client_cache,
-				&client, srcaddr4, srcaddr6));
+	CHECK(dns_client_create(isc_g_mctx, 0, tlsctx_client_cache, &client,
+				srcaddr4, srcaddr6));
+	dns_client_setmaxrestarts(client, restarts);
+	dns_client_setmaxqueries(client, maxtotal);
 
 	/* Set the nameserver */
 	if (server != NULL) {
@@ -1918,8 +1907,8 @@ cleanup:
 			 isc_result_totext(result));
 	}
 
-	isc_mem_put(mctx, namelist, sizeof(*namelist));
-	isc_loopmgr_shutdown(loopmgr);
+	isc_mem_put(isc_g_mctx, namelist, sizeof(*namelist));
+	isc_loopmgr_shutdown();
 
 	dns_client_detach(&client);
 }
@@ -1927,14 +1916,18 @@ cleanup:
 static void
 shutdown_server(void) {
 	if (requestmgr != NULL) {
+		dns_requestmgr_shutdown(requestmgr);
 		dns_requestmgr_detach(&requestmgr);
 	}
 	if (interfacemgr != NULL) {
 		ns_interfacemgr_shutdown(interfacemgr);
 		ns_interfacemgr_detach(&interfacemgr);
 	}
-	if (dispatch != NULL) {
-		dns_dispatch_detach(&dispatch);
+	if (dispatch4 != NULL) {
+		dns_dispatch_detach(&dispatch4);
+	}
+	if (dispatch6 != NULL) {
+		dns_dispatch_detach(&dispatch6);
 	}
 	if (dispatchmgr != NULL) {
 		dns_dispatchmgr_detach(&dispatchmgr);
@@ -1943,7 +1936,7 @@ shutdown_server(void) {
 		ns_server_detach(&sctx);
 	}
 
-	isc_loopmgr_shutdown(loopmgr);
+	isc_loopmgr_shutdown();
 }
 
 static void
@@ -1958,7 +1951,8 @@ recvresponse(void *arg) {
 		fatal("request event result: %s", isc_result_totext(result));
 	}
 
-	dns_message_create(mctx, DNS_MESSAGE_INTENTPARSE, &response);
+	dns_message_create(isc_g_mctx, NULL, NULL, DNS_MESSAGE_INTENTPARSE,
+			   &response);
 
 	result = dns_request_getresponse(request, response,
 					 DNS_MESSAGEPARSE_PRESERVEORDER);
@@ -1972,19 +1966,10 @@ recvresponse(void *arg) {
 		goto cleanup;
 	}
 
-	for (result = dns_message_firstname(response, DNS_SECTION_ANSWER);
-	     result == ISC_R_SUCCESS;
-	     result = dns_message_nextname(response, DNS_SECTION_ANSWER))
-	{
-		dns_name_t *name = NULL;
-		dns_rdataset_t *rdataset = NULL;
+	MSG_SECTION_FOREACH (response, DNS_SECTION_ANSWER, name) {
 		dns_rdatatype_t prevtype = 0;
 
-		dns_message_currentname(response, DNS_SECTION_ANSWER, &name);
-
-		for (rdataset = ISC_LIST_HEAD(name->list); rdataset != NULL;
-		     rdataset = ISC_LIST_NEXT(rdataset, link))
-		{
+		ISC_LIST_FOREACH (name->list, rdataset, link) {
 			dns_rdataset_t rds, sigs;
 			int options = 0;
 
@@ -2056,7 +2041,7 @@ accept_cb(isc_nmhandle_t *handle, isc_result_t result, void *arg) {
 	UNUSED(handle);
 	UNUSED(arg);
 
-	return (result);
+	return result;
 }
 
 static void
@@ -2073,7 +2058,8 @@ sendquery(void *arg) {
 	/* Construct query message */
 	CHECK(convert_name(&qfn, &query_name, qname));
 
-	dns_message_create(mctx, DNS_MESSAGE_INTENTRENDER, &message);
+	dns_message_create(isc_g_mctx, NULL, NULL, DNS_MESSAGE_INTENTRENDER,
+			   &message);
 	message->opcode = dns_opcode_query;
 	message->flags = DNS_MESSAGEFLAG_RD | DNS_MESSAGEFLAG_AD;
 	if (cdflag) {
@@ -2095,14 +2081,16 @@ sendquery(void *arg) {
 				   NULL, 0));
 	CHECK(dns_message_setopt(message, opt));
 
-	CHECK(dns_requestmgr_create(mctx, dispatchmgr, NULL, NULL,
+	CHECK(dns_requestmgr_create(isc_g_mctx, dispatchmgr, NULL, NULL,
 				    &requestmgr));
 
 	dns_view_attach(view, &(dns_view_t *){ NULL });
+
+	const unsigned int timeout = isc_nm_getinitialtimeout() / MS_PER_SEC;
 	CHECK(dns_request_create(requestmgr, message, NULL, &peer, NULL, NULL,
-				 DNS_REQUESTOPT_TCP, NULL, 1, 0, 0,
-				 isc_loop_current(loopmgr), recvresponse,
-				 message, &request));
+				 DNS_REQUESTOPT_TCP, NULL, timeout, timeout, 0,
+				 0, isc_loop(), recvresponse, message,
+				 &request));
 	return;
 
 cleanup:
@@ -2115,23 +2103,30 @@ cleanup:
 
 static isc_result_t
 matchview(isc_netaddr_t *srcaddr, isc_netaddr_t *destaddr,
-	  dns_message_t *message, dns_aclenv_t *env, isc_result_t *sigresultp,
+	  dns_message_t *message, dns_aclenv_t *env, ns_server_t *lsctx,
+	  isc_loop_t *loop, isc_job_cb cb, void *cbarg,
+	  isc_result_t *sigresultp, isc_result_t *viewpatchresultp,
 	  dns_view_t **viewp) {
 	UNUSED(srcaddr);
 	UNUSED(destaddr);
 	UNUSED(message);
 	UNUSED(env);
+	UNUSED(lsctx);
+	UNUSED(loop);
+	UNUSED(cb);
+	UNUSED(cbarg);
 	UNUSED(sigresultp);
 
 	*viewp = view;
-	return (ISC_R_SUCCESS);
+	*viewpatchresultp = ISC_R_SUCCESS;
+	return ISC_R_SUCCESS;
 }
 
 static void
 run_server(void *arg) {
 	isc_result_t result;
 	dns_cache_t *cache = NULL;
-	isc_sockaddr_t addr, any;
+	isc_sockaddr_t addr, any, any6;
 	struct in_addr in;
 
 	UNUSED(arg);
@@ -2139,40 +2134,54 @@ run_server(void *arg) {
 	RUNTIME_CHECK(inet_pton(AF_INET, "127.0.0.1", &in));
 	isc_sockaddr_fromin(&addr, &in, 0);
 
-	CHECK(ns_server_create(mctx, matchview, &sctx));
+	ns_server_create(isc_g_mctx, matchview, &sctx);
 
-	CHECK(dns_dispatchmgr_create(mctx, netmgr, &dispatchmgr));
-	isc_sockaddr_any(&any);
-	CHECK(dns_dispatch_createudp(dispatchmgr, &any, &dispatch));
-	CHECK(ns_interfacemgr_create(mctx, sctx, loopmgr, netmgr, dispatchmgr,
-				     NULL, false, &interfacemgr));
+	CHECK(dns_dispatchmgr_create(isc_g_mctx, &dispatchmgr));
 
-	CHECK(dns_view_create(mctx, loopmgr, dns_rdataclass_in, "_default",
-			      &view));
-	CHECK(dns_cache_create(loopmgr, dns_rdataclass_in, "", &cache));
+	if (use_ipv4) {
+		isc_sockaddr_any(&any);
+		isc_sockaddr_t *a = (srcaddr4 == NULL) ? &any : srcaddr4;
+		CHECK(dns_dispatch_createudp(dispatchmgr, a, &dispatch4));
+	}
+
+	if (use_ipv6) {
+		isc_sockaddr_any6(&any6);
+		isc_sockaddr_t *a = (srcaddr6 == NULL) ? &any6 : srcaddr6;
+		CHECK(dns_dispatch_createudp(dispatchmgr, a, &dispatch6));
+	}
+
+	CHECK(ns_interfacemgr_create(isc_g_mctx, sctx, dispatchmgr, NULL,
+				     &interfacemgr));
+
+	dns_view_create(isc_g_mctx, dispatchmgr, dns_rdataclass_in, "_default",
+			&view);
+	CHECK(dns_cache_create(dns_rdataclass_in, "", isc_g_mctx, &cache));
 	dns_view_setcache(view, cache, false);
 	dns_cache_detach(&cache);
 	dns_view_setdstport(view, destport);
+	dns_view_setmaxrestarts(view, restarts);
+	dns_view_setmaxqueries(view, maxtotal);
 
-	CHECK(dns_rootns_create(mctx, dns_rdataclass_in, hintfile, &roothints));
+	CHECK(dns_rootns_create(isc_g_mctx, dns_rdataclass_in, hintfile,
+				&roothints));
 	dns_view_sethints(view, roothints);
 	dns_db_detach(&roothints);
 
 	view->qminimization = qmin;
 	view->qmin_strict = qmin_strict;
 
-	CHECK(dns_view_initsecroots(view, mctx));
+	dns_view_initsecroots(view);
 	CHECK(setup_dnsseckeys(NULL, view));
 
-	dns_view_setdispatchmgr(view, dispatchmgr);
-	CHECK(dns_view_createresolver(view, loopmgr, 1, netmgr, 0,
-				      tlsctx_client_cache, dispatch, NULL));
+	CHECK(dns_view_createresolver(view, 0, tlsctx_client_cache, dispatch4,
+				      dispatch6));
+	dns_resolver_setmaxqueries(view->resolver, maxqueries);
 
-	CHECK(isc_stats_create(mctx, &resstats, dns_resstatscounter_max));
+	isc_stats_create(isc_g_mctx, &resstats, dns_resstatscounter_max);
 	dns_resolver_setstats(view->resolver, resstats);
 	isc_stats_detach(&resstats);
 
-	CHECK(dns_rdatatypestats_create(mctx, &resquerystats));
+	dns_rdatatypestats_create(isc_g_mctx, &resquerystats);
 	dns_resolver_setquerystats(view->resolver, resquerystats);
 	dns_stats_detach(&resquerystats);
 
@@ -2180,11 +2189,11 @@ run_server(void *arg) {
 
 	ns_interface_create(interfacemgr, &addr, NULL, &ifp);
 
-	CHECK(isc_nm_listenstreamdns(netmgr, ISC_NM_LISTEN_ONE, &addr,
-				     ns_client_request, ifp, accept_cb, ifp, 10,
-				     NULL, NULL, &ifp->tcplistensocket));
+	CHECK(isc_nm_listenstreamdns(
+		ISC_NM_LISTEN_ONE, &addr, ns_client_request, ifp, accept_cb,
+		ifp, 10, NULL, NULL, ISC_NM_PROXY_NONE, &ifp->tcplistensocket));
 	ifp->flags |= NS_INTERFACEFLAG_LISTENING;
-	isc_async_current(loopmgr, sendquery, ifp->tcplistensocket);
+	isc_async_current(sendquery, ifp->tcplistensocket);
 
 	return;
 
@@ -2200,7 +2209,8 @@ main(int argc, char *argv[]) {
 	isc_result_t result;
 	isc_loop_t *loop = NULL;
 
-	progname = argv[0];
+	isc_commandline_init(argc, argv);
+
 	logfp = stderr;
 
 	preparse_args(argc, argv);
@@ -2208,13 +2218,8 @@ main(int argc, char *argv[]) {
 	argc--;
 	argv++;
 
-	isc_managers_create(&mctx, 1, &loopmgr, &netmgr);
-	loop = isc_loop_main(loopmgr);
-
-	result = dst_lib_init(mctx, NULL);
-	if (result != ISC_R_SUCCESS) {
-		fatal("dst_lib_init failed: %d", result);
-	}
+	isc_managers_create(1);
+	loop = isc_loop_main();
 
 	parse_args(argc, argv);
 
@@ -2235,32 +2240,29 @@ main(int argc, char *argv[]) {
 			 server);
 	}
 
-	isc_tlsctx_cache_create(mctx, &tlsctx_client_cache);
+	isc_tlsctx_cache_create(isc_g_mctx, &tlsctx_client_cache);
 
 	isc_loop_setup(loop, fulltrace ? run_server : run_resolve, NULL);
-	isc_loopmgr_run(loopmgr);
+	isc_loopmgr_run();
 
 cleanup:
 	if (tlsctx_client_cache != NULL) {
 		isc_tlsctx_cache_detach(&tlsctx_client_cache);
 	}
 	if (trust_anchor != NULL) {
-		isc_mem_free(mctx, trust_anchor);
+		isc_mem_free(isc_g_mctx, trust_anchor);
 	}
 	if (anchorfile != NULL) {
-		isc_mem_free(mctx, anchorfile);
+		isc_mem_free(isc_g_mctx, anchorfile);
 	}
 	if (qname != NULL) {
-		isc_mem_free(mctx, qname);
+		isc_mem_free(isc_g_mctx, qname);
 	}
 	if (style != NULL) {
-		dns_master_styledestroy(&style, mctx);
+		dns_master_styledestroy(&style, isc_g_mctx);
 	}
 
-	isc_log_destroy(&lctx);
-	dst_lib_destroy();
+	isc_managers_destroy();
 
-	isc_managers_destroy(&mctx, &loopmgr, &netmgr);
-
-	return (0);
+	return 0;
 }

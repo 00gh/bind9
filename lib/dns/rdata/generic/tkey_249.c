@@ -22,7 +22,6 @@ static isc_result_t
 fromtext_tkey(ARGS_FROMTEXT) {
 	isc_token_t token;
 	dns_rcode_t rcode;
-	dns_name_t name;
 	isc_buffer_t buffer;
 	long i;
 	char *e;
@@ -38,12 +37,11 @@ fromtext_tkey(ARGS_FROMTEXT) {
 	 */
 	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
 				      false));
-	dns_name_init(&name, NULL);
 	buffer_fromregion(&buffer, &token.value.as_region);
 	if (origin == NULL) {
 		origin = dns_rootname;
 	}
-	RETTOK(dns_name_fromtext(&name, &buffer, origin, options, target));
+	RETTOK(dns_name_wirefromtext(&buffer, origin, options, target));
 
 	/*
 	 * Inception.
@@ -116,7 +114,7 @@ fromtext_tkey(ARGS_FROMTEXT) {
 	/*
 	 * Other Data.
 	 */
-	return (isc_base64_tobuffer(lexer, target, (int)token.value.as_ulong));
+	return isc_base64_tobuffer(lexer, target, (int)token.value.as_ulong);
 }
 
 static isc_result_t
@@ -126,7 +124,7 @@ totext_tkey(ARGS_TOTEXT) {
 	unsigned long n;
 	dns_name_t name;
 	dns_name_t prefix;
-	bool sub;
+	unsigned int opts;
 
 	REQUIRE(rdata->type == dns_rdatatype_tkey);
 	REQUIRE(rdata->length != 0);
@@ -136,11 +134,12 @@ totext_tkey(ARGS_TOTEXT) {
 	/*
 	 * Algorithm.
 	 */
-	dns_name_init(&name, NULL);
-	dns_name_init(&prefix, NULL);
+	dns_name_init(&name);
+	dns_name_init(&prefix);
 	dns_name_fromregion(&name, &sr);
-	sub = name_prefix(&name, tctx->origin, &prefix);
-	RETERR(dns_name_totext(&prefix, sub, target));
+	opts = name_prefix(&name, tctx->origin, &prefix) ? DNS_NAME_OMITFINALDOT
+							 : 0;
+	RETERR(dns_name_totext(&prefix, opts, target));
 	RETERR(str_totext(" ", target));
 	isc_region_consume(&sr, name_length(&name));
 
@@ -240,7 +239,7 @@ totext_tkey(ARGS_TOTEXT) {
 			RETERR(str_totext(" )", target));
 		}
 	}
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -259,7 +258,7 @@ fromwire_tkey(ARGS_FROMWIRE) {
 	/*
 	 * Algorithm.
 	 */
-	dns_name_init(&name, NULL);
+	dns_name_init(&name);
 	RETERR(dns_name_fromwire(&name, source, dctx, target));
 
 	/*
@@ -270,7 +269,7 @@ fromwire_tkey(ARGS_FROMWIRE) {
 	 */
 	isc_buffer_activeregion(source, &sr);
 	if (sr.length < 12) {
-		return (ISC_R_UNEXPECTEDEND);
+		return ISC_R_UNEXPECTEDEND;
 	}
 	RETERR(mem_tobuffer(target, sr.base, 12));
 	isc_region_consume(&sr, 12);
@@ -280,11 +279,11 @@ fromwire_tkey(ARGS_FROMWIRE) {
 	 * Key Length + Key Data.
 	 */
 	if (sr.length < 2) {
-		return (ISC_R_UNEXPECTEDEND);
+		return ISC_R_UNEXPECTEDEND;
 	}
 	n = uint16_fromregion(&sr);
 	if (sr.length < n + 2) {
-		return (ISC_R_UNEXPECTEDEND);
+		return ISC_R_UNEXPECTEDEND;
 	}
 	RETERR(mem_tobuffer(target, sr.base, n + 2));
 	isc_region_consume(&sr, n + 2);
@@ -294,21 +293,20 @@ fromwire_tkey(ARGS_FROMWIRE) {
 	 * Other Length + Other Data.
 	 */
 	if (sr.length < 2) {
-		return (ISC_R_UNEXPECTEDEND);
+		return ISC_R_UNEXPECTEDEND;
 	}
 	n = uint16_fromregion(&sr);
 	if (sr.length < n + 2) {
-		return (ISC_R_UNEXPECTEDEND);
+		return ISC_R_UNEXPECTEDEND;
 	}
 	isc_buffer_forward(source, n + 2);
-	return (mem_tobuffer(target, sr.base, n + 2));
+	return mem_tobuffer(target, sr.base, n + 2);
 }
 
 static isc_result_t
 towire_tkey(ARGS_TOWIRE) {
 	isc_region_t sr;
 	dns_name_t name;
-	dns_offsets_t offsets;
 
 	REQUIRE(rdata->type == dns_rdatatype_tkey);
 	REQUIRE(rdata->length != 0);
@@ -318,12 +316,12 @@ towire_tkey(ARGS_TOWIRE) {
 	 * Algorithm.
 	 */
 	dns_rdata_toregion(rdata, &sr);
-	dns_name_init(&name, offsets);
+	dns_name_init(&name);
 	dns_name_fromregion(&name, &sr);
 	RETERR(dns_name_towire(&name, cctx, target));
 	isc_region_consume(&sr, name_length(&name));
 
-	return (mem_tobuffer(target, sr.base, sr.length));
+	return mem_tobuffer(target, sr.base, sr.length);
 }
 
 static int
@@ -345,16 +343,16 @@ compare_tkey(ARGS_COMPARE) {
 	 */
 	dns_rdata_toregion(rdata1, &r1);
 	dns_rdata_toregion(rdata2, &r2);
-	dns_name_init(&name1, NULL);
-	dns_name_init(&name2, NULL);
+	dns_name_init(&name1);
+	dns_name_init(&name2);
 	dns_name_fromregion(&name1, &r1);
 	dns_name_fromregion(&name2, &r2);
 	if ((order = dns_name_rdatacompare(&name1, &name2)) != 0) {
-		return (order);
+		return order;
 	}
 	isc_region_consume(&r1, name_length(&name1));
 	isc_region_consume(&r2, name_length(&name2));
-	return (isc_region_compare(&r1, &r2));
+	return isc_region_compare(&r1, &r2);
 }
 
 static isc_result_t
@@ -412,7 +410,7 @@ fromstruct_tkey(ARGS_FROMSTRUCT) {
 	/*
 	 * Other data.
 	 */
-	return (mem_tobuffer(target, tkey->other, tkey->otherlen));
+	return mem_tobuffer(target, tkey->other, tkey->otherlen);
 }
 
 static isc_result_t
@@ -427,16 +425,15 @@ tostruct_tkey(ARGS_TOSTRUCT) {
 
 	tkey->common.rdclass = rdata->rdclass;
 	tkey->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&tkey->common, link);
 
 	dns_rdata_toregion(rdata, &sr);
 
 	/*
 	 * Algorithm Name.
 	 */
-	dns_name_init(&alg, NULL);
+	dns_name_init(&alg);
 	dns_name_fromregion(&alg, &sr);
-	dns_name_init(&tkey->algorithm, NULL);
+	dns_name_init(&tkey->algorithm);
 	name_duporclone(&alg, mctx, &tkey->algorithm);
 	isc_region_consume(&sr, name_length(&tkey->algorithm));
 
@@ -489,7 +486,7 @@ tostruct_tkey(ARGS_TOSTRUCT) {
 	INSIST(tkey->otherlen <= sr.length);
 	tkey->other = mem_maybedup(mctx, sr.base, tkey->otherlen);
 	tkey->mctx = mctx;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static void
@@ -521,7 +518,7 @@ additionaldata_tkey(ARGS_ADDLDATA) {
 	UNUSED(add);
 	UNUSED(arg);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -532,7 +529,7 @@ digest_tkey(ARGS_DIGEST) {
 
 	REQUIRE(rdata->type == dns_rdatatype_tkey);
 
-	return (ISC_R_NOTIMPLEMENTED);
+	return ISC_R_NOTIMPLEMENTED;
 }
 
 static bool
@@ -544,7 +541,7 @@ checkowner_tkey(ARGS_CHECKOWNER) {
 	UNUSED(rdclass);
 	UNUSED(wildcard);
 
-	return (true);
+	return true;
 }
 
 static bool
@@ -555,11 +552,11 @@ checknames_tkey(ARGS_CHECKNAMES) {
 	UNUSED(owner);
 	UNUSED(bad);
 
-	return (true);
+	return true;
 }
 
 static int
 casecompare_tkey(ARGS_COMPARE) {
-	return (compare_tkey(rdata1, rdata2));
+	return compare_tkey(rdata1, rdata2);
 }
 #endif /* RDATA_GENERIC_TKEY_249_C */

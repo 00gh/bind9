@@ -11,11 +11,11 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stddef.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +26,7 @@
 
 #include <isc/buffer.h>
 #include <isc/lex.h>
+#include <isc/lib.h>
 #include <isc/log.h>
 #include <isc/mem.h>
 #include <isc/types.h>
@@ -37,49 +38,14 @@
 
 #include <tests/isc.h>
 
-static isc_logcategory_t categories[] = { { "", 0 },
-					  { "client", 0 },
-					  { "network", 0 },
-					  { "update", 0 },
-					  { "queries", 0 },
-					  { "unmatched", 0 },
-					  { "update-security", 0 },
-					  { "query-errors", 0 },
-					  { NULL, 0 } };
-
 ISC_SETUP_TEST_IMPL(group) {
-	isc_result_t result;
-	isc_logdestination_t destination;
-	isc_logconfig_t *logconfig = NULL;
+	isc_logconfig_t *logconfig = isc_logconfig_get();
+	isc_log_createandusechannel(
+		logconfig, "default_stderr", ISC_LOG_TOFILEDESC,
+		ISC_LOG_DYNAMIC, ISC_LOGDESTINATION_STDERR, 0,
+		ISC_LOGCATEGORY_DEFAULT, ISC_LOGMODULE_DEFAULT);
 
-	isc_log_create(mctx, &lctx, &logconfig);
-	isc_log_registercategories(lctx, categories);
-	isc_log_setcontext(lctx);
-
-	destination.file.stream = stderr;
-	destination.file.name = NULL;
-	destination.file.versions = ISC_LOG_ROLLNEVER;
-	destination.file.maximum_size = 0;
-	isc_log_createchannel(logconfig, "stderr", ISC_LOG_TOFILEDESC,
-			      ISC_LOG_DYNAMIC, &destination, 0);
-	result = isc_log_usechannel(logconfig, "stderr", NULL, NULL);
-
-	if (result != ISC_R_SUCCESS) {
-		return (-1);
-	}
-
-	return (0);
-}
-
-ISC_TEARDOWN_TEST_IMPL(group) {
-	if (lctx == NULL) {
-		return (-1);
-	}
-
-	isc_log_setcontext(NULL);
-	isc_log_destroy(&lctx);
-
-	return (0);
+	return 0;
 }
 
 struct duration_conf {
@@ -159,7 +125,6 @@ ISC_RUN_TEST_IMPL(duration) {
 	bool must_fail = false;
 
 	for (size_t i = 0; i < ARRAY_SIZE(durations); i++) {
-		const cfg_listelt_t *element;
 		const cfg_obj_t *kasps = NULL;
 		const char cfg_tpl[] =
 			"dnssec-policy \"dp\"\n"
@@ -179,7 +144,7 @@ ISC_RUN_TEST_IMPL(duration) {
 		isc_buffer_add(&buf1, strlen(conf) - 1);
 
 		/* Parse with default line numbering */
-		result = cfg_parser_create(mctx, lctx, &p1);
+		result = cfg_parser_create(isc_g_mctx, &p1);
 		assert_int_equal(result, ISC_R_SUCCESS);
 
 		result = cfg_parse_buffer(p1, &buf1, "text1", 0,
@@ -193,9 +158,7 @@ ISC_RUN_TEST_IMPL(duration) {
 
 		(void)cfg_map_get(c1, "dnssec-policy", &kasps);
 		assert_non_null(kasps);
-		for (element = cfg_list_first(kasps); element != NULL;
-		     element = cfg_list_next(element))
-		{
+		CFG_LIST_FOREACH (kasps, element) {
 			const cfg_listelt_t *key_element;
 			const cfg_obj_t *lifetime = NULL;
 			const cfg_obj_t *keys = NULL;
@@ -240,4 +203,4 @@ ISC_TEST_ENTRY(duration)
 
 ISC_TEST_LIST_END
 
-ISC_TEST_MAIN_CUSTOM(setup_test_group, teardown_test_group)
+ISC_TEST_MAIN_CUSTOM(setup_test_group, NULL)

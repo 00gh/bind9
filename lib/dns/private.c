@@ -38,10 +38,10 @@
  * been requested to be built otherwise a NSEC chain needs to be built.
  */
 
-#define REMOVE(x)  (((x)&DNS_NSEC3FLAG_REMOVE) != 0)
-#define CREATE(x)  (((x)&DNS_NSEC3FLAG_CREATE) != 0)
-#define INITIAL(x) (((x)&DNS_NSEC3FLAG_INITIAL) != 0)
-#define NONSEC(x)  (((x)&DNS_NSEC3FLAG_NONSEC) != 0)
+#define REMOVE(x)  (((x) & DNS_NSEC3FLAG_REMOVE) != 0)
+#define CREATE(x)  (((x) & DNS_NSEC3FLAG_CREATE) != 0)
+#define INITIAL(x) (((x) & DNS_NSEC3FLAG_INITIAL) != 0)
+#define NONSEC(x)  (((x) & DNS_NSEC3FLAG_NONSEC) != 0)
 
 #define CHECK(x)                             \
 	do {                                 \
@@ -60,11 +60,7 @@
 
 static bool
 ignore(dns_rdata_t *param, dns_rdataset_t *privateset) {
-	isc_result_t result;
-
-	for (result = dns_rdataset_first(privateset); result == ISC_R_SUCCESS;
-	     result = dns_rdataset_next(privateset))
-	{
+	DNS_RDATASET_FOREACH (privateset) {
 		unsigned char buf[DNS_NSEC3PARAM_BUFFERSIZE];
 		dns_rdata_t private = DNS_RDATA_INIT;
 		dns_rdata_t rdata = DNS_RDATA_INIT;
@@ -80,7 +76,7 @@ ignore(dns_rdata_t *param, dns_rdataset_t *privateset) {
 		 * doesn't matter if we are removing this one.
 		 */
 		if (CREATE(rdata.data[1])) {
-			return (false);
+			return false;
 		}
 		if (rdata.data[0] != param->data[0] ||
 		    rdata.data[2] != param->data[2] ||
@@ -96,11 +92,11 @@ ignore(dns_rdata_t *param, dns_rdataset_t *privateset) {
 		 * the caller that it will be removed.
 		 */
 		if (NONSEC(rdata.data[1])) {
-			return (false);
+			return false;
 		}
-		return (true);
+		return true;
 	}
-	return (false);
+	return false;
 }
 
 isc_result_t
@@ -138,12 +134,8 @@ dns_private_chains(dns_db_t *db, dns_dbversion_t *ver,
 	if (dns_rdataset_isassociated(&nsecset) &&
 	    dns_rdataset_isassociated(&nsec3paramset))
 	{
-		if (build_nsec != NULL) {
-			*build_nsec = true;
-		}
-		if (build_nsec3 != NULL) {
-			*build_nsec3 = true;
-		}
+		SET_IF_NOT_NULL(build_nsec, true);
+		SET_IF_NOT_NULL(build_nsec3, true);
 		goto success;
 	}
 
@@ -160,19 +152,12 @@ dns_private_chains(dns_db_t *db, dns_dbversion_t *ver,
 	 * Look to see if we also need to be creating a NSEC3 chain.
 	 */
 	if (dns_rdataset_isassociated(&nsecset)) {
-		if (build_nsec != NULL) {
-			*build_nsec = true;
-		}
-		if (build_nsec3 != NULL) {
-			*build_nsec3 = false;
-		}
+		SET_IF_NOT_NULL(build_nsec, true);
+		SET_IF_NOT_NULL(build_nsec3, false);
 		if (!dns_rdataset_isassociated(&privateset)) {
 			goto success;
 		}
-		for (result = dns_rdataset_first(&privateset);
-		     result == ISC_R_SUCCESS;
-		     result = dns_rdataset_next(&privateset))
-		{
+		DNS_RDATASET_FOREACH (&privateset) {
 			dns_rdata_t private = DNS_RDATA_INIT;
 			dns_rdata_t rdata = DNS_RDATA_INIT;
 
@@ -194,12 +179,8 @@ dns_private_chains(dns_db_t *db, dns_dbversion_t *ver,
 	}
 
 	if (dns_rdataset_isassociated(&nsec3paramset)) {
-		if (build_nsec3 != NULL) {
-			*build_nsec3 = true;
-		}
-		if (build_nsec != NULL) {
-			*build_nsec = false;
-		}
+		SET_IF_NOT_NULL(build_nsec3, true);
+		SET_IF_NOT_NULL(build_nsec, false);
 		if (!dns_rdataset_isassociated(&privateset)) {
 			goto success;
 		}
@@ -207,10 +188,7 @@ dns_private_chains(dns_db_t *db, dns_dbversion_t *ver,
 		 * If we are in the process of building a new NSEC3 chain
 		 * then we don't need to build a NSEC chain.
 		 */
-		for (result = dns_rdataset_first(&privateset);
-		     result == ISC_R_SUCCESS;
-		     result = dns_rdataset_next(&privateset))
-		{
+		DNS_RDATASET_FOREACH (&privateset) {
 			dns_rdata_t private = DNS_RDATA_INIT;
 			dns_rdata_t rdata = DNS_RDATA_INIT;
 
@@ -230,10 +208,7 @@ dns_private_chains(dns_db_t *db, dns_dbversion_t *ver,
 		 * the changes queued complete.
 		 */
 		count = 0;
-		for (result = dns_rdataset_first(&nsec3paramset);
-		     result == ISC_R_SUCCESS;
-		     result = dns_rdataset_next(&nsec3paramset))
-		{
+		DNS_RDATASET_FOREACH (&nsec3paramset) {
 			dns_rdata_t rdata = DNS_RDATA_INIT;
 
 			/*
@@ -264,12 +239,8 @@ dns_private_chains(dns_db_t *db, dns_dbversion_t *ver,
 		goto success;
 	}
 
-	if (build_nsec != NULL) {
-		*build_nsec = false;
-	}
-	if (build_nsec3 != NULL) {
-		*build_nsec3 = false;
-	}
+	SET_IF_NOT_NULL(build_nsec, false);
+	SET_IF_NOT_NULL(build_nsec3, false);
 	if (!dns_rdataset_isassociated(&privateset)) {
 		goto success;
 	}
@@ -277,9 +248,7 @@ dns_private_chains(dns_db_t *db, dns_dbversion_t *ver,
 	signing = false;
 	nsec3chain = false;
 
-	for (result = dns_rdataset_first(&privateset); result == ISC_R_SUCCESS;
-	     result = dns_rdataset_next(&privateset))
-	{
+	DNS_RDATASET_FOREACH (&privateset) {
 		dns_rdata_t rdata = DNS_RDATA_INIT;
 		dns_rdata_t private = DNS_RDATA_INIT;
 
@@ -330,7 +299,7 @@ failure:
 	if (node != NULL) {
 		dns_db_detachnode(db, &node);
 	}
-	return (result);
+	return result;
 }
 
 isc_result_t
@@ -338,7 +307,7 @@ dns_private_totext(dns_rdata_t *private, isc_buffer_t *buf) {
 	isc_result_t result;
 
 	if (private->length < 5) {
-		return (ISC_R_NOTFOUND);
+		return ISC_R_NOTFOUND;
 	}
 
 	if (private->data[0] == 0) {
@@ -385,6 +354,7 @@ dns_private_totext(dns_rdata_t *private, isc_buffer_t *buf) {
 			isc_buffer_putstr(buf, " / creating NSEC chain");
 		}
 	} else if (private->length == 5) {
+		/* Old Form */
 		unsigned char alg = private->data[0];
 		dns_keytag_t keyid = (private->data[2] | private->data[1] << 8);
 		char keybuf[DNS_SECALG_FORMATSIZE + BUFSIZ],
@@ -405,12 +375,39 @@ dns_private_totext(dns_rdata_t *private, isc_buffer_t *buf) {
 		dns_secalg_format(alg, algbuf, sizeof(algbuf));
 		snprintf(keybuf, sizeof(keybuf), "key %d/%s", keyid, algbuf);
 		isc_buffer_putstr(buf, keybuf);
+	} else if (private->length == 7) {
+		/* New Form - supports private types */
+		dns_keytag_t keyid = private->data[2] | (private->data[1] << 8);
+		char keybuf[DNS_SECALG_FORMATSIZE + BUFSIZ],
+			algbuf[DNS_SECALG_FORMATSIZE];
+		bool del = private->data[3];
+		bool complete = private->data[4];
+		dst_algorithm_t alg = private->data[6] |
+				      (private->data[5] << 8);
+
+		if (dst_algorithm_tosecalg(alg) != private->data[0]) {
+			return ISC_R_NOTFOUND;
+		}
+
+		if (del && complete) {
+			isc_buffer_putstr(buf, "Done removing signatures for ");
+		} else if (del) {
+			isc_buffer_putstr(buf, "Removing signatures for ");
+		} else if (complete) {
+			isc_buffer_putstr(buf, "Done signing with ");
+		} else {
+			isc_buffer_putstr(buf, "Signing with ");
+		}
+
+		dns_secalg_format(alg, algbuf, sizeof(algbuf));
+		snprintf(keybuf, sizeof(keybuf), "key %d/%s", keyid, algbuf);
+		isc_buffer_putstr(buf, keybuf);
 	} else {
-		return (ISC_R_NOTFOUND);
+		return ISC_R_NOTFOUND;
 	}
 
 	isc_buffer_putuint8(buf, 0);
 	result = ISC_R_SUCCESS;
 failure:
-	return (result);
+	return result;
 }

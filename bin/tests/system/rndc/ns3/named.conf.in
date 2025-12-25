@@ -16,6 +16,7 @@ options {
 	pid-file "named.pid";
 	listen-on { 10.53.0.3; };
 	listen-on-v6 { none; };
+	dnssec-validation no;
 };
 
 key rndc_key {
@@ -39,7 +40,7 @@ view all {
 
 	zone "." {
 		type hint;
-		file "../../common/root.hint";
+		file "../../_common/root.hint";
 	};
 };
 

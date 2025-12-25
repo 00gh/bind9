@@ -28,68 +28,68 @@ isc__uverr2result(int uverr, bool dolog, const char *file, unsigned int line,
 		  const char *func) {
 	switch (uverr) {
 	case 0:
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	case UV_ENOTDIR:
 	case UV_ELOOP:
 	case UV_EINVAL: /* XXX sometimes this is not for files */
 	case UV_ENAMETOOLONG:
 	case UV_EBADF:
-		return (ISC_R_INVALIDFILE);
+		return ISC_R_INVALIDFILE;
 	case UV_ENOENT:
-		return (ISC_R_FILENOTFOUND);
+		return ISC_R_FILENOTFOUND;
 	case UV_EAGAIN:
-		return (ISC_R_NOCONN);
+		return ISC_R_NOCONN;
 	case UV_EACCES:
 	case UV_EPERM:
-		return (ISC_R_NOPERM);
+		return ISC_R_NOPERM;
 	case UV_EEXIST:
-		return (ISC_R_FILEEXISTS);
+		return ISC_R_FILEEXISTS;
 	case UV_EIO:
-		return (ISC_R_IOERROR);
+		return ISC_R_IOERROR;
 	case UV_ENOMEM:
-		return (ISC_R_NOMEMORY);
+		return ISC_R_NOMEMORY;
 	case UV_ENFILE:
 	case UV_EMFILE:
-		return (ISC_R_TOOMANYOPENFILES);
+		return ISC_R_TOOMANYOPENFILES;
 	case UV_ENOSPC:
-		return (ISC_R_DISCFULL);
+		return ISC_R_DISCFULL;
 	case UV_EPIPE:
 	case UV_ECONNRESET:
 	case UV_ECONNABORTED:
-		return (ISC_R_CONNECTIONRESET);
+		return ISC_R_CONNECTIONRESET;
 	case UV_ENOTCONN:
-		return (ISC_R_NOTCONNECTED);
+		return ISC_R_NOTCONNECTED;
 	case UV_ETIMEDOUT:
-		return (ISC_R_TIMEDOUT);
+		return ISC_R_TIMEDOUT;
 	case UV_ENOBUFS:
-		return (ISC_R_NORESOURCES);
+		return ISC_R_NORESOURCES;
 	case UV_EAFNOSUPPORT:
-		return (ISC_R_FAMILYNOSUPPORT);
+		return ISC_R_FAMILYNOSUPPORT;
 	case UV_ENETDOWN:
-		return (ISC_R_NETDOWN);
+		return ISC_R_NETDOWN;
 	case UV_EHOSTDOWN:
-		return (ISC_R_HOSTDOWN);
+		return ISC_R_HOSTDOWN;
 	case UV_ENETUNREACH:
-		return (ISC_R_NETUNREACH);
+		return ISC_R_NETUNREACH;
 	case UV_EHOSTUNREACH:
-		return (ISC_R_HOSTUNREACH);
+		return ISC_R_HOSTUNREACH;
 	case UV_EADDRINUSE:
-		return (ISC_R_ADDRINUSE);
+		return ISC_R_ADDRINUSE;
 	case UV_EADDRNOTAVAIL:
-		return (ISC_R_ADDRNOTAVAIL);
+		return ISC_R_ADDRNOTAVAIL;
 	case UV_ECONNREFUSED:
-		return (ISC_R_CONNREFUSED);
+		return ISC_R_CONNREFUSED;
 	case UV_ECANCELED:
-		return (ISC_R_CANCELED);
+		return ISC_R_CANCELED;
 	case UV_EOF:
-		return (ISC_R_EOF);
+		return ISC_R_EOF;
 	case UV_EMSGSIZE:
-		return (ISC_R_MAXSIZE);
+		return ISC_R_MAXSIZE;
 	case UV_ENOTSUP:
-		return (ISC_R_FAMILYNOSUPPORT);
+		return ISC_R_FAMILYNOSUPPORT;
 	case UV_ENOPROTOOPT:
 	case UV_EPROTONOSUPPORT:
-		return (ISC_R_INVALIDPROTO);
+		return ISC_R_INVALIDPROTO;
 	default:
 		if (dolog) {
 			UNEXPECTED_ERROR("unable to convert libuv error code "
@@ -97,7 +97,7 @@ isc__uverr2result(int uverr, bool dolog, const char *file, unsigned int line,
 					 func, file, line, uverr,
 					 uv_strerror(uverr));
 		}
-		return (ISC_R_UNEXPECTED);
+		return ISC_R_UNEXPECTED;
 	}
 }
 
@@ -106,29 +106,17 @@ static isc_mem_t *isc__uv_mctx = NULL;
 
 static void *
 isc__uv_malloc(size_t size) {
-	return (isc_mem_allocate(isc__uv_mctx, size));
+	return isc_mem_allocate(isc__uv_mctx, size);
 }
 
 static void *
 isc__uv_realloc(void *ptr, size_t size) {
-	return (isc_mem_reallocate(isc__uv_mctx, ptr, size));
+	return isc_mem_reallocate(isc__uv_mctx, ptr, size);
 }
 
 static void *
 isc__uv_calloc(size_t count, size_t size) {
-	void *ptr;
-	size_t res;
-#if HAVE_BUILTIN_MUL_OVERFLOW
-	bool overflow = __builtin_mul_overflow(count, size, &res);
-	RUNTIME_CHECK(!overflow);
-#else
-	res = count * size;
-	REQUIRE(count == 0 || res / count == size);
-#endif
-
-	ptr = isc_mem_allocatex(isc__uv_mctx, res, ISC_MEM_ZERO);
-
-	return (ptr);
+	return isc_mem_callocate(isc__uv_mctx, count, size);
 }
 
 static void
@@ -144,8 +132,8 @@ void
 isc__uv_initialize(void) {
 #if UV_VERSION_HEX >= UV_VERSION(1, 38, 0)
 	int r;
-	isc_mem_create(&isc__uv_mctx);
-	isc_mem_setname(isc__uv_mctx, "uv");
+	isc_mem_create("uv", &isc__uv_mctx);
+	isc_mem_setdebugging(isc__uv_mctx, 0);
 	isc_mem_setdestroycheck(isc__uv_mctx, false);
 
 	r = uv_replace_allocator(isc__uv_malloc, isc__uv_realloc,
@@ -158,7 +146,7 @@ void
 isc__uv_shutdown(void) {
 #if UV_VERSION_HEX >= UV_VERSION(1, 38, 0)
 	uv_library_shutdown();
-	isc_mem_destroy(&isc__uv_mctx);
+	isc_mem_detach(&isc__uv_mctx);
 #endif /* UV_VERSION_HEX < UV_VERSION(1, 38, 0) */
 }
 

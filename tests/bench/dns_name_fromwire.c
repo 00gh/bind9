@@ -17,12 +17,14 @@
 
 #include <isc/ascii.h>
 #include <isc/buffer.h>
+#include <isc/lib.h>
 #include <isc/random.h>
 #include <isc/time.h>
 #include <isc/util.h>
 
 #include <dns/compress.h>
 #include <dns/fixedname.h>
+#include <dns/lib.h>
 #include <dns/name.h>
 
 #include "old.h"
@@ -47,7 +49,7 @@ old_bench(const uint8_t *data, size_t size) {
 		}
 		count++;
 	}
-	return (count);
+	return count;
 }
 
 static uint32_t
@@ -70,7 +72,7 @@ new_bench(const uint8_t *data, size_t size) {
 		}
 		count++;
 	}
-	return (count);
+	return count;
 }
 
 static void

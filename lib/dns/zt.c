@@ -18,6 +18,7 @@
 
 #include <isc/atomic.h>
 #include <isc/file.h>
+#include <isc/log.h>
 #include <isc/magic.h>
 #include <isc/mem.h>
 #include <isc/result.h>
@@ -25,7 +26,6 @@
 #include <isc/tid.h>
 #include <isc/util.h>
 
-#include <dns/log.h>
 #include <dns/name.h>
 #include <dns/qp.h>
 #include <dns/rdataclass.h>
@@ -77,7 +77,7 @@ ztqpmakekey(dns_qpkey_t key, void *uctx ISC_ATTR_UNUSED, void *pval,
 	    uint32_t ival ISC_ATTR_UNUSED) {
 	dns_zone_t *zone = pval;
 	dns_name_t *name = dns_zone_getorigin(zone);
-	return (dns_qpkey_fromname(key, name));
+	return dns_qpkey_fromname(key, name, DNS_DBNAMESPACE_NORMAL);
 }
 
 static void
@@ -94,15 +94,14 @@ static dns_qpmethods_t ztqpmethods = {
 };
 
 void
-dns_zt_create(isc_mem_t *mctx, isc_loopmgr_t *loopmgr, dns_view_t *view,
-	      dns_zt_t **ztp) {
+dns_zt_create(isc_mem_t *mctx, dns_view_t *view, dns_zt_t **ztp) {
 	dns_qpmulti_t *multi = NULL;
 	dns_zt_t *zt = NULL;
 
 	REQUIRE(ztp != NULL && *ztp == NULL);
 	REQUIRE(view != NULL);
 
-	dns_qpmulti_create(mctx, loopmgr, &ztqpmethods, view, &multi);
+	dns_qpmulti_create(mctx, &ztqpmethods, view, &multi);
 
 	zt = isc_mem_get(mctx, sizeof(*zt));
 	*zt = (dns_zt_t){
@@ -146,7 +145,7 @@ dns_zt_mount(dns_zt_t *zt, dns_zone_t *zone) {
 	dns_qp_compact(qp, DNS_QPGC_MAYBE);
 	dns_qpmulti_commit(zt->multi, &qp);
 
-	return (result);
+	return result;
 }
 
 isc_result_t
@@ -157,11 +156,12 @@ dns_zt_unmount(dns_zt_t *zt, dns_zone_t *zone) {
 	REQUIRE(VALID_ZT(zt));
 
 	dns_qpmulti_write(zt->multi, &qp);
-	result = dns_qp_deletename(qp, dns_zone_getorigin(zone));
+	result = dns_qp_deletename(qp, dns_zone_getorigin(zone),
+				   DNS_DBNAMESPACE_NORMAL, NULL, NULL);
 	dns_qp_compact(qp, DNS_QPGC_MAYBE);
 	dns_qpmulti_commit(zt->multi, &qp);
 
-	return (result);
+	return result;
 }
 
 isc_result_t
@@ -170,25 +170,33 @@ dns_zt_find(dns_zt_t *zt, const dns_name_t *name, dns_ztfind_t options,
 	isc_result_t result;
 	dns_qpread_t qpr;
 	void *pval = NULL;
-	uint32_t ival;
 	dns_ztfind_t exactmask = DNS_ZTFIND_NOEXACT | DNS_ZTFIND_EXACT;
 	dns_ztfind_t exactopts = options & exactmask;
+	dns_qpchain_t chain;
 
 	REQUIRE(VALID_ZT(zt));
 	REQUIRE(exactopts != exactmask);
 
-	if (isc_tid() == ISC_TID_UNKNOWN) {
-		dns_qpmulti_lockedread(zt->multi, &qpr);
-	} else {
-		dns_qpmulti_query(zt->multi, &qpr);
-	}
+	dns_qpmulti_query(zt->multi, &qpr);
+
 	if (exactopts == DNS_ZTFIND_EXACT) {
-		result = dns_qp_getname(&qpr, name, &pval, &ival);
-	} else if (exactopts == DNS_ZTFIND_NOEXACT) {
-		result = dns_qp_findname_parent(&qpr, name, DNS_QPFIND_NOEXACT,
-						&pval, &ival);
+		result = dns_qp_getname(&qpr, name, DNS_DBNAMESPACE_NORMAL,
+					&pval, NULL);
 	} else {
-		result = dns_qp_findname_parent(&qpr, name, 0, &pval, &ival);
+		result = dns_qp_lookup(&qpr, name, DNS_DBNAMESPACE_NORMAL, NULL,
+				       NULL, &chain, &pval, NULL);
+		if (exactopts == DNS_ZTFIND_NOEXACT && result == ISC_R_SUCCESS)
+		{
+			/* get pval from the previous chain link */
+			int len = dns_qpchain_length(&chain);
+			if (len >= 2) {
+				dns_qpchain_node(&chain, len - 2, NULL, &pval,
+						 NULL);
+				result = DNS_R_PARTIALMATCH;
+			} else {
+				result = ISC_R_NOTFOUND;
+			}
+		}
 	}
 	dns_qpread_destroy(zt->multi, &qpr);
 
@@ -221,7 +229,7 @@ dns_zt_find(dns_zt_t *zt, const dns_name_t *name, dns_ztfind_t options,
 		}
 	}
 
-	return (result);
+	return result;
 }
 
 void
@@ -237,7 +245,7 @@ dns_zt_attach(dns_zt_t *zt, dns_zt_t **ztp) {
 static isc_result_t
 flush(dns_zone_t *zone, void *uap) {
 	UNUSED(uap);
-	return (dns_zone_flush(zone));
+	return dns_zone_flush(zone);
 }
 
 static void
@@ -283,13 +291,13 @@ load(dns_zone_t *zone, void *uap) {
 	{
 		result = ISC_R_SUCCESS;
 	}
-	return (result);
+	return result;
 }
 
 isc_result_t
 dns_zt_load(dns_zt_t *zt, bool stop, bool newonly) {
 	REQUIRE(VALID_ZT(zt));
-	return (dns_zt_apply(zt, stop, NULL, load, newonly ? &newonly : NULL));
+	return dns_zt_apply(zt, stop, NULL, load, newonly ? &newonly : NULL);
 }
 
 static void
@@ -320,7 +328,7 @@ loaded_one(void *uap) {
 		zt_destroy(zt);
 	}
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 /*
@@ -349,7 +357,7 @@ asyncload(dns_zone_t *zone, void *uap) {
 		isc_refcount_decrement1(&zt->references);
 		isc_refcount_decrement1(&zt->loads_pending);
 	}
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 isc_result_t
@@ -386,7 +394,7 @@ dns_zt_asyncload(dns_zt_t *zt, bool newonly, dns_zt_callback_t *loaddone,
 		loaded_all(params);
 	}
 
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -410,19 +418,19 @@ freezezones(dns_zone_t *zone, void *uap) {
 		if (raw != NULL) {
 			dns_zone_detach(&raw);
 		}
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	if (dns_zone_gettype(zone) != dns_zone_primary) {
 		if (raw != NULL) {
 			dns_zone_detach(&raw);
 		}
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	if (!dns_zone_isdynamic(zone, true)) {
 		if (raw != NULL) {
 			dns_zone_detach(&raw);
 		}
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	frozen = dns_zone_getupdatedisabled(zone);
@@ -460,14 +468,14 @@ freezezones(dns_zone_t *zone, void *uap) {
 			      sizeof(classstr));
 	dns_name_format(dns_zone_getorigin(zone), zonename, sizeof(zonename));
 	level = (result != ISC_R_SUCCESS) ? ISC_LOG_ERROR : ISC_LOG_DEBUG(1);
-	isc_log_write(dns_lctx, DNS_LOGCATEGORY_GENERAL, DNS_LOGMODULE_ZONE,
-		      level, "%s zone '%s/%s'%s%s: %s",
+	isc_log_write(DNS_LOGCATEGORY_GENERAL, DNS_LOGMODULE_ZONE, level,
+		      "%s zone '%s/%s'%s%s: %s",
 		      params->freeze ? "freezing" : "thawing", zonename,
 		      classstr, sep, vname, isc_result_totext(result));
 	if (raw != NULL) {
 		dns_zone_detach(&raw);
 	}
-	return (result);
+	return result;
 }
 
 isc_result_t
@@ -481,7 +489,7 @@ dns_zt_freezezones(dns_zt_t *zt, dns_view_t *view, bool freeze) {
 	if (tresult == ISC_R_NOTFOUND) {
 		tresult = ISC_R_SUCCESS;
 	}
-	return ((result == ISC_R_SUCCESS) ? tresult : result);
+	return (result == ISC_R_SUCCESS) ? tresult : result;
 }
 
 typedef void
@@ -491,7 +499,7 @@ static isc_result_t
 setview(dns_zone_t *zone, void *arg) {
 	setview_cb *cb = arg;
 	cb(zone);
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 void
@@ -512,7 +520,6 @@ dns_zt_apply(dns_zt_t *zt, bool stop, isc_result_t *sub,
 	dns_qpiter_t qpi;
 	dns_qpread_t qpr;
 	void *zone = NULL;
-	uint32_t ival;
 
 	REQUIRE(VALID_ZT(zt));
 	REQUIRE(action != NULL);
@@ -520,7 +527,7 @@ dns_zt_apply(dns_zt_t *zt, bool stop, isc_result_t *sub,
 	dns_qpmulti_query(zt->multi, &qpr);
 	dns_qpiter_init(&qpr, &qpi);
 
-	while (dns_qpiter_next(&qpi, &zone, &ival) == ISC_R_SUCCESS) {
+	while (dns_qpiter_next(&qpi, NULL, &zone, NULL) == ISC_R_SUCCESS) {
 		result = action(zone, uap);
 		if (tresult == ISC_R_SUCCESS) {
 			tresult = result;
@@ -531,9 +538,7 @@ dns_zt_apply(dns_zt_t *zt, bool stop, isc_result_t *sub,
 	}
 	dns_qpread_destroy(zt->multi, &qpr);
 
-	if (sub != NULL) {
-		*sub = tresult;
-	}
+	SET_IF_NOT_NULL(sub, tresult);
 
-	return (result);
+	return result;
 }

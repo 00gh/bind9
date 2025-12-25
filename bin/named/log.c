@@ -15,14 +15,9 @@
 
 #include <stdlib.h>
 
+#include <isc/log.h>
 #include <isc/result.h>
 #include <isc/util.h>
-
-#include <dns/log.h>
-
-#include <isccfg/log.h>
-
-#include <ns/log.h>
 
 #include <named/log.h>
 
@@ -30,52 +25,19 @@
 #define ISC_FACILITY LOG_DAEMON
 #endif /* ifndef ISC_FACILITY */
 
-/*%
- * When adding a new category, be sure to add the appropriate
- * \#define to <named/log.h> and to update the list in
- * bin/check/check-tool.c.
- */
-static isc_logcategory_t categories[] = { { "", 0 },
-					  { "unmatched", 0 },
-					  { NULL, 0 } };
-
-/*%
- * When adding a new module, be sure to add the appropriate
- * \#define to <dns/log.h>.
- */
-static isc_logmodule_t modules[] = {
-	{ "main", 0 }, { "server", 0 }, { "control", 0 }, { NULL, 0 }
-};
-
 isc_result_t
 named_log_init(bool safe) {
 	isc_result_t result;
 	isc_logconfig_t *lcfg = NULL;
-	isc_mem_t *log_mctx = NULL;
-
-	named_g_categories = categories;
-	named_g_modules = modules;
 
 	/*
-	 * Setup a logging context.
+	 * This is not technically needed, as we are calling named_log_init()
+	 * only at the start of named process.  But since the named binary is
+	 * the only place that also calls isc_logconfig_set(), this is a good
+	 * hygiene.
 	 */
-	isc_mem_create(&log_mctx);
-	isc_mem_setname(log_mctx, "named_log");
-	isc_log_create(log_mctx, &named_g_lctx, &lcfg);
-	isc_mem_detach(&log_mctx);
-
-	/*
-	 * named-checktool.c:setup_logging() needs to be kept in sync.
-	 */
-	isc_log_registercategories(named_g_lctx, named_g_categories);
-	isc_log_registermodules(named_g_lctx, named_g_modules);
-	isc_log_setcontext(named_g_lctx);
-	dns_log_init(named_g_lctx);
-	dns_log_setcontext(named_g_lctx);
-	cfg_log_init(named_g_lctx);
-	ns_log_init(named_g_lctx);
-	ns_log_setcontext(named_g_lctx);
-
+	rcu_read_lock();
+	lcfg = isc_logconfig_get();
 	if (safe) {
 		named_log_setsafechannels(lcfg);
 	} else {
@@ -88,15 +50,14 @@ named_log_init(bool safe) {
 	}
 
 	named_log_setdefaultsslkeylogfile(lcfg);
+	rcu_read_unlock();
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 
 cleanup:
-	isc_log_destroy(&named_g_lctx);
-	isc_log_setcontext(NULL);
-	dns_log_setcontext(NULL);
+	rcu_read_unlock();
 
-	return (result);
+	return result;
 }
 
 void
@@ -116,6 +77,16 @@ named_log_setdefaultchannels(isc_logconfig_t *lcfg) {
 		isc_log_createchannel(lcfg, "default_debug", ISC_LOG_TOFILE,
 				      ISC_LOG_DYNAMIC, &destination,
 				      ISC_LOG_PRINTTIME | ISC_LOG_DEBUGONLY);
+	} else if (named_g_logstderr && (named_g_logflags != 0)) {
+		/*
+		 * If the option -g is given, but we also requested iso
+		 * timestamps, we'll still need to override the "default_debug"
+		 * logger with a new one.
+		 */
+		isc_log_createchannel(lcfg, "default_debug", ISC_LOG_TOFILEDESC,
+				      ISC_LOG_DYNAMIC,
+				      ISC_LOGDESTINATION_STDERR,
+				      ISC_LOG_PRINTTIME | named_g_logflags);
 	}
 
 	if (named_g_logfile != NULL) {
@@ -139,7 +110,7 @@ named_log_setdefaultchannels(isc_logconfig_t *lcfg) {
 	/*
 	 * Set the initial debug level.
 	 */
-	isc_log_setdebuglevel(named_g_lctx, named_g_debuglevel);
+	isc_log_setdebuglevel(named_g_debuglevel);
 }
 
 void
@@ -154,9 +125,21 @@ named_log_setsafechannels(isc_logconfig_t *lcfg) {
 		 * Setting the debug level to zero should get the output
 		 * discarded a bit faster.
 		 */
-		isc_log_setdebuglevel(named_g_lctx, 0);
+		isc_log_setdebuglevel(0);
+	} else if (named_g_logflags != 0) {
+		/*
+		 * The -g option sets logstderr, and also sets logflags
+		 * to print ISO timestamps. Since that isn't the default
+		 * behavior, we need to override the "default_debug"
+		 * channel with a new one.
+		 */
+		isc_log_createchannel(lcfg, "default_debug", ISC_LOG_TOFILEDESC,
+				      ISC_LOG_DYNAMIC,
+				      ISC_LOGDESTINATION_STDERR,
+				      named_g_logflags);
+		isc_log_setdebuglevel(named_g_debuglevel);
 	} else {
-		isc_log_setdebuglevel(named_g_lctx, named_g_debuglevel);
+		UNREACHABLE();
 	}
 
 	if (named_g_logfile != NULL) {
@@ -199,7 +182,6 @@ named_log_setdefaultsslkeylogfile(isc_logconfig_t *lcfg) {
 			.maximum_size = 100 * 1024 * 1024,
 		},
 	};
-	isc_result_t result;
 
 	if (sslkeylogfile_path == NULL ||
 	    strcmp(sslkeylogfile_path, "config") == 0)
@@ -207,11 +189,10 @@ named_log_setdefaultsslkeylogfile(isc_logconfig_t *lcfg) {
 		return;
 	}
 
-	isc_log_createchannel(lcfg, "default_sslkeylogfile", ISC_LOG_TOFILE,
-			      ISC_LOG_INFO, &destination, 0);
-	result = isc_log_usechannel(lcfg, "default_sslkeylogfile",
-				    ISC_LOGCATEGORY_SSLKEYLOG, NULL);
-	RUNTIME_CHECK(result == ISC_R_SUCCESS);
+	isc_log_createandusechannel(lcfg, "default_sslkeylogfile",
+				    ISC_LOG_TOFILE, ISC_LOG_INFO, &destination,
+				    0, ISC_LOGCATEGORY_SSLKEYLOG,
+				    ISC_LOGMODULE_DEFAULT);
 }
 
 isc_result_t
@@ -219,7 +200,8 @@ named_log_setdefaultcategory(isc_logconfig_t *lcfg) {
 	isc_result_t result = ISC_R_SUCCESS;
 
 	result = isc_log_usechannel(lcfg, "default_debug",
-				    ISC_LOGCATEGORY_DEFAULT, NULL);
+				    ISC_LOGCATEGORY_DEFAULT,
+				    ISC_LOGMODULE_DEFAULT);
 	if (result != ISC_R_SUCCESS) {
 		goto cleanup;
 	}
@@ -228,16 +210,16 @@ named_log_setdefaultcategory(isc_logconfig_t *lcfg) {
 		if (named_g_logfile != NULL) {
 			result = isc_log_usechannel(lcfg, "default_logfile",
 						    ISC_LOGCATEGORY_DEFAULT,
-						    NULL);
+						    ISC_LOGMODULE_DEFAULT);
 		} else if (!named_g_nosyslog) {
 			result = isc_log_usechannel(lcfg, "default_syslog",
 						    ISC_LOGCATEGORY_DEFAULT,
-						    NULL);
+						    ISC_LOGMODULE_DEFAULT);
 		}
 	}
 
 cleanup:
-	return (result);
+	return result;
 }
 
 isc_result_t
@@ -245,13 +227,6 @@ named_log_setunmatchedcategory(isc_logconfig_t *lcfg) {
 	isc_result_t result;
 
 	result = isc_log_usechannel(lcfg, "null", NAMED_LOGCATEGORY_UNMATCHED,
-				    NULL);
-	return (result);
-}
-
-void
-named_log_shutdown(void) {
-	isc_log_destroy(&named_g_lctx);
-	isc_log_setcontext(NULL);
-	dns_log_setcontext(NULL);
+				    ISC_LOGMODULE_DEFAULT);
+	return result;
 }

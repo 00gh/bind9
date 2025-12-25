@@ -18,6 +18,8 @@
 #include <stdlib.h>
 
 #include <isc/buffer.h>
+#include <isc/dir.h>
+#include <isc/file.h>
 #include <isc/log.h>
 #include <isc/mem.h>
 #include <isc/netmgr.h>
@@ -38,6 +40,7 @@
 
 #include <dst/dst.h>
 
+#include <isccfg/check.h>
 #include <isccfg/grammar.h>
 #include <isccfg/namedconf.h>
 
@@ -63,11 +66,9 @@ options {\n\
 	geoip-directory \".\";\n"
 #endif /* if defined(HAVE_GEOIP2) */
 			    "\
-	heartbeat-interval 60;\n\
-	interface-interval 60;\n\
+	interface-interval 60m;\n\
 	listen-on {any;};\n\
 	listen-on-v6 {any;};\n\
-#	lock-file \"" NAMED_LOCALSTATEDIR "/run/named/named.lock\";\n\
 	match-mapped-addresses no;\n\
 	max-ixfr-ratio 100%;\n\
 	max-rsa-exponent-size 0; /* no limit */\n\
@@ -97,10 +98,13 @@ options {\n\
 #endif
 			    "\
 	prefetch 2 9;\n\
+#	querylog <boolean>;\n\
 	recursing-file \"named.recursing\";\n\
 	recursive-clients 1000;\n\
 	request-nsid false;\n\
+	request-zoneversion false;\n\
 	resolver-query-timeout 10;\n\
+#	responselog <boolean>;\n\
 	rrset-order { order random; };\n\
 	secroots-file \"named.secroots\";\n\
 	send-cookie true;\n\
@@ -110,6 +114,9 @@ options {\n\
 #	session-keyfile \"" NAMED_LOCALSTATEDIR "/run/named/session.key\";\n\
 	session-keyname local-ddns;\n\
 	startup-notify-rate 20;\n\
+	sig0checks-quota 1;\n\
+	sig0key-checks-limit 16;\n\
+	sig0message-checks-limit 2;\n\
 	statistics-file \"named.stats\";\n\
 	tcp-advertised-timeout 300;\n\
 	tcp-clients 150;\n\
@@ -117,6 +124,7 @@ options {\n\
 	tcp-initial-timeout 300;\n\
 	tcp-keepalive-timeout 300;\n\
 	tcp-listen-queue 10;\n\
+	tcp-primaries-timeout 150;\n\
 	tcp-receive-buffer 0;\n\
 	tcp-send-buffer 0;\n\
 #	tkey-domain <none>\n\
@@ -133,6 +141,8 @@ options {\n\
 	/* view */\n\
 	allow-new-zones no;\n\
 	allow-notify {none;};\n\
+	allow-proxy {none;};\n\
+	allow-proxy-on {any;};\n\
 	allow-query-cache { localnets; localhost; };\n\
 	allow-query-cache-on { any; };\n\
 	allow-recursion { localnets; localhost; };\n\
@@ -149,9 +159,6 @@ options {\n\
 	clients-per-query 10;\n\
 	dnssec-accept-expired no;\n\
 	dnssec-validation " VALIDATION_DEFAULT "; \n"
-#ifdef USE_DNSRPS
-			    "	dnsrps-library \"" DNSRPS_LIBRPZ_PATH "\";\n"
-#endif /* ifdef USE_DNSRPS */
 #ifdef HAVE_DNSTAP
 			    "	dnstap-identity hostname;\n"
 #endif /* ifdef HAVE_DNSTAP */
@@ -168,7 +175,9 @@ options {\n\
 	max-clients-per-query 100;\n\
 	max-ncache-ttl 10800; /* 3 hours */\n\
 	max-recursion-depth 7;\n\
-	max-recursion-queries 100;\n\
+	max-recursion-queries 50;\n\
+	max-query-count 200;\n\
+	max-query-restarts 11;\n\
 	max-stale-ttl 86400; /* 1 day */\n\
 	message-compression yes;\n\
 	min-ncache-ttl 0; /* 0 hours */\n\
@@ -187,12 +196,10 @@ options {\n\
 	recursion true;\n\
 	request-expire true;\n\
 	request-ixfr true;\n\
+	request-ixfr-max-diffs 0;\n\
 	require-server-cookie no;\n\
-	resolver-nonbackoff-tries 3;\n\
-	resolver-retry-interval 800; /* in milliseconds */\n\
 	root-key-sentinel yes;\n\
 	servfail-ttl 1;\n\
-#	sortlist <none>\n\
 	stale-answer-client-timeout off;\n\
 	stale-answer-enable false;\n\
 	stale-answer-ttl 30; /* 30 seconds */\n\
@@ -201,51 +208,52 @@ options {\n\
 	synth-from-dnssec yes;\n\
 #	topology <none>\n\
 	transfer-format many-answers;\n\
+	resolver-use-dns64 false;\n\
 	v6-bias 50;\n\
 	zero-no-soa-ttl-cache no;\n\
 \n\
 	/* zone */\n\
 	allow-query {any;};\n\
 	allow-query-on {any;};\n\
-	allow-transfer {any;};\n\
+	allow-transfer {none;};\n\
 #	also-notify <none>\n\
 	check-integrity yes;\n\
 	check-mx-cname warn;\n\
 	check-sibling yes;\n\
 	check-srv-cname warn;\n\
 	check-wildcard yes;\n\
-	dialup no;\n\
-	dnssec-dnskey-kskonly yes;\n\
 	dnssec-loadkeys-interval 60;\n\
-	dnssec-update-mode maintain;\n\
 #	forward <none>\n\
 #	forwarders <none>\n\
 #	inline-signing no;\n\
 	ixfr-from-differences false;\n\
 	max-journal-size default;\n\
 	max-records 0;\n\
+	max-records-per-type 100;\n\
 	max-refresh-time 2419200; /* 4 weeks */\n\
 	max-retry-time 1209600; /* 2 weeks */\n\
+	max-types-per-name 100;\n\
 	max-transfer-idle-in 60;\n\
 	max-transfer-idle-out 60;\n\
 	max-transfer-time-in 120;\n\
 	max-transfer-time-out 120;\n\
 	min-refresh-time 300;\n\
 	min-retry-time 500;\n\
+	min-transfer-rate-in 10240 5;\n\
 	multi-master no;\n\
 	notify yes;\n\
+	notify-defer 0;\n\
 	notify-delay 5;\n\
 	notify-to-soa no;\n\
+	provide-zoneversion yes;\n\
+	send-report-channel .;\n\
 	serial-update-method increment;\n\
 	sig-signing-nodes 100;\n\
 	sig-signing-signatures 10;\n\
 	sig-signing-type 65534;\n\
-	sig-validity-interval 30; /* days */\n\
-	dnskey-sig-validity 0; /* default: sig-validity-interval */\n\
 	transfer-source *;\n\
 	transfer-source-v6 *;\n\
 	try-tcp-refresh yes; /* BIND 8 compat */\n\
-	update-check-ksk yes;\n\
 	zero-no-soa-ttl yes;\n\
 	zone-statistics terse;\n\
 };\n\
@@ -259,6 +267,7 @@ view \"_bind\" chaos {\n\
 	notify no;\n\
 	allow-new-zones no;\n\
 	max-cache-size 2M;\n\
+	provide-zoneversion no;\n\
 \n\
 	# Prevent use of this zone in DNS amplified reflection DoS attacks\n\
 	rate-limit {\n\
@@ -296,11 +305,15 @@ dnssec-policy \"default\" {\n\
 		csk key-directory lifetime unlimited algorithm 13;\n\
 	};\n\
 \n\
+	cdnskey yes;\n\
 	cds-digest-types { 2; };\n\
 	dnskey-ttl " DNS_KASP_KEY_TTL ";\n\
+	inline-signing yes;\n\
+	offline-ksk no;\n\
 	publish-safety " DNS_KASP_PUBLISH_SAFETY "; \n\
 	retire-safety " DNS_KASP_RETIRE_SAFETY "; \n\
 	purge-keys " DNS_KASP_PURGE_KEYS "; \n\
+	signatures-jitter " DNS_KASP_SIG_JITTER "; \n\
 	signatures-refresh " DNS_KASP_SIG_REFRESH "; \n\
 	signatures-validity " DNS_KASP_SIG_VALIDITY "; \n\
 	signatures-validity-dnskey " DNS_KASP_SIG_VALIDITY_DNSKEY "; \n\
@@ -311,7 +324,9 @@ dnssec-policy \"default\" {\n\
 };\n\
 \n\
 dnssec-policy \"insecure\" {\n\
+	max-zone-ttl 0; \n\
 	keys { };\n\
+	inline-signing yes;\n\
 };\n\
 \n\
 "
@@ -327,15 +342,15 @@ dnssec-policy \"insecure\" {\n\
 
 			    "# END TRUST ANCHORS\n\
 \n\
-primaries " DEFAULT_IANA_ROOT_ZONE_PRIMARIES " {\n\
-	2001:500:200::b;	# b.root-servers.net\n\
+remote-servers " DEFAULT_IANA_ROOT_ZONE_PRIMARIES " {\n\
+	2801:1b8:10::b;		# b.root-servers.net\n\
 	2001:500:2::c;		# c.root-servers.net\n\
 	2001:500:2f::f;		# f.root-servers.net\n\
 	2001:500:12::d0d;	# g.root-servers.net\n\
 	2001:7fd::1;		# k.root-servers.net\n\
 	2620:0:2830:202::132;	# xfr.cjr.dns.icann.org\n\
 	2620:0:2d0:202::132;	# xfr.lax.dns.icann.org\n\
-	199.9.14.201;		# b.root-servers.net\n\
+	170.247.170.2;		# b.root-servers.net\n\
 	192.33.4.12;		# c.root-servers.net\n\
 	192.5.5.241;		# f.root-servers.net\n\
 	192.112.36.4;		# g.root-servers.net\n\
@@ -351,13 +366,107 @@ named_config_parsedefaults(cfg_parser_t *parser, cfg_obj_t **conf) {
 
 	isc_buffer_init(&b, defaultconf, sizeof(defaultconf) - 1);
 	isc_buffer_add(&b, sizeof(defaultconf) - 1);
-	return (cfg_parse_buffer(parser, &b, __FILE__, 0, &cfg_type_namedconf,
-				 CFG_PCTX_NODEPRECATED, conf));
+	return cfg_parse_buffer(parser, &b, __FILE__, 0, &cfg_type_namedconf,
+				CFG_PCTX_NODEPRECATED | CFG_PCTX_NOOBSOLETE |
+					CFG_PCTX_NOEXPERIMENTAL,
+				conf);
+}
+
+/*
+ * This function is called as soon as the 'directory' statement has been
+ * parsed.  This can be extended to support other options if necessary.
+ */
+static isc_result_t
+directory_callback(const char *clausename, const cfg_obj_t *obj, void *arg) {
+	isc_result_t result;
+	const char *directory;
+
+	REQUIRE(strcasecmp("directory", clausename) == 0);
+
+	UNUSED(arg);
+	UNUSED(clausename);
+
+	/*
+	 * Change directory.
+	 */
+	directory = cfg_obj_asstring(obj);
+
+	if (!isc_file_ischdiridempotent(directory)) {
+		cfg_obj_log(obj, ISC_LOG_WARNING,
+			    "option 'directory' contains relative path '%s'",
+			    directory);
+	}
+
+	if (!isc_file_isdirwritable(directory)) {
+		isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+			      ISC_LOG_ERROR, "directory '%s' is not writable",
+			      directory);
+		return ISC_R_NOPERM;
+	}
+
+	result = isc_dir_chdir(directory);
+	if (result != ISC_R_SUCCESS) {
+		cfg_obj_log(obj, ISC_LOG_ERROR,
+			    "change directory to '%s' failed: %s", directory,
+			    isc_result_totext(result));
+		return result;
+	}
+
+	char cwd[PATH_MAX];
+	if (getcwd(cwd, sizeof(cwd)) == cwd) {
+		isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+			      ISC_LOG_INFO, "the working directory is now '%s'",
+			      cwd);
+	}
+
+	return ISC_R_SUCCESS;
+}
+
+isc_result_t
+named_config_parsefile(cfg_parser_t *parser, cfg_obj_t **conf) {
+	isc_result_t result;
+
+	REQUIRE(parser);
+	REQUIRE(conf && *conf == NULL);
+
+	isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+		      ISC_LOG_INFO, "parsing user configuration from '%s'",
+		      named_g_conffile);
+
+	cfg_parser_setcallback(parser, directory_callback, NULL);
+	result = cfg_parse_file(parser, named_g_conffile, &cfg_type_namedconf,
+				conf);
+	if (result != ISC_R_SUCCESS) {
+		goto cleanup;
+	}
+
+	/*
+	 * Check the validity of the configuration.
+	 *
+	 * (Ignore plugin parameters for now; they will be
+	 * checked later when the modules are actually loaded and
+	 * registered.)
+	 */
+	result = isccfg_check_namedconf(*conf, BIND_CHECK_ALGORITHMS,
+					isc_g_mctx);
+	if (result != ISC_R_SUCCESS) {
+		goto cleanup;
+	}
+
+	goto out;
+
+cleanup:
+	if (*conf) {
+		cfg_obj_destroy(parser, conf);
+	}
+
+out:
+	return result;
 }
 
 const char *
 named_config_getdefault(void) {
-	return (defaultconf);
+	return defaultconf;
 }
 
 isc_result_t
@@ -367,19 +476,35 @@ named_config_get(cfg_obj_t const *const *maps, const char *name,
 
 	for (i = 0; maps[i] != NULL; i++) {
 		if (cfg_map_get(maps[i], name, obj) == ISC_R_SUCCESS) {
-			return (ISC_R_SUCCESS);
+			return ISC_R_SUCCESS;
 		}
 	}
-	return (ISC_R_NOTFOUND);
+	return ISC_R_NOTFOUND;
+}
+
+isc_result_t
+named_config_findopt(const cfg_obj_t *opts1, const cfg_obj_t *opts2,
+		     const char *name, const cfg_obj_t **objp) {
+	isc_result_t result = ISC_R_NOTFOUND;
+
+	REQUIRE(*objp == NULL);
+
+	if (opts1 != NULL) {
+		result = cfg_map_get(opts1, name, objp);
+	}
+	if (*objp == NULL && opts2 != NULL) {
+		result = cfg_map_get(opts2, name, objp);
+	}
+
+	return result;
 }
 
 isc_result_t
 named_checknames_get(const cfg_obj_t **maps, const char *const names[],
 		     const cfg_obj_t **obj) {
-	const cfg_listelt_t *element;
-	const cfg_obj_t *checknames;
-	const cfg_obj_t *type;
-	const cfg_obj_t *value;
+	const cfg_obj_t *checknames = NULL;
+	const cfg_obj_t *type = NULL;
+	const cfg_obj_t *value = NULL;
 	int i;
 
 	REQUIRE(maps != NULL);
@@ -396,11 +521,9 @@ named_checknames_get(const cfg_obj_t **maps, const char *const names[],
 			 */
 			if (checknames != NULL && !cfg_obj_islist(checknames)) {
 				*obj = checknames;
-				return (ISC_R_SUCCESS);
+				return ISC_R_SUCCESS;
 			}
-			for (element = cfg_list_first(checknames);
-			     element != NULL; element = cfg_list_next(element))
-			{
+			CFG_LIST_FOREACH (checknames, element) {
 				value = cfg_listelt_value(element);
 				type = cfg_tuple_get(value, "type");
 
@@ -410,25 +533,24 @@ named_checknames_get(const cfg_obj_t **maps, const char *const names[],
 					{
 						*obj = cfg_tuple_get(value,
 								     "mode");
-						return (ISC_R_SUCCESS);
+						return ISC_R_SUCCESS;
 					}
 				}
 			}
 		}
 	}
-	return (ISC_R_NOTFOUND);
+	return ISC_R_NOTFOUND;
 }
 
 int
 named_config_listcount(const cfg_obj_t *list) {
-	const cfg_listelt_t *e;
 	int i = 0;
 
-	for (e = cfg_list_first(list); e != NULL; e = cfg_list_next(e)) {
+	CFG_LIST_FOREACH (list, e) {
 		i++;
 	}
 
-	return (i);
+	return i;
 }
 
 isc_result_t
@@ -439,16 +561,16 @@ named_config_getclass(const cfg_obj_t *classobj, dns_rdataclass_t defclass,
 
 	if (!cfg_obj_isstring(classobj)) {
 		*classp = defclass;
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	r.base = UNCONST(cfg_obj_asstring(classobj));
 	r.length = strlen(r.base);
 	result = dns_rdataclass_fromtext(classp, &r);
 	if (result != ISC_R_SUCCESS) {
-		cfg_obj_log(classobj, named_g_lctx, ISC_LOG_ERROR,
-			    "unknown class '%s'", r.base);
+		cfg_obj_log(classobj, ISC_LOG_ERROR, "unknown class '%s'",
+			    r.base);
 	}
-	return (result);
+	return result;
 }
 
 isc_result_t
@@ -459,16 +581,16 @@ named_config_gettype(const cfg_obj_t *typeobj, dns_rdatatype_t deftype,
 
 	if (!cfg_obj_isstring(typeobj)) {
 		*typep = deftype;
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	r.base = UNCONST(cfg_obj_asstring(typeobj));
 	r.length = strlen(r.base);
 	result = dns_rdatatype_fromtext(typep, &r);
 	if (result != ISC_R_SUCCESS) {
-		cfg_obj_log(typeobj, named_g_lctx, ISC_LOG_ERROR,
-			    "unknown type '%s'", r.base);
+		cfg_obj_log(typeobj, ISC_LOG_ERROR, "unknown type '%s'",
+			    r.base);
 	}
-	return (result);
+	return result;
 }
 
 dns_zonetype_t
@@ -494,15 +616,14 @@ named_config_getzonetype(const cfg_obj_t *zonetypeobj) {
 	} else {
 		UNREACHABLE();
 	}
-	return (ztype);
+	return ztype;
 }
 
-static isc_result_t
-getremotesdef(const cfg_obj_t *cctx, const char *list, const char *name,
-	      const cfg_obj_t **ret) {
+isc_result_t
+named_config_getremotesdef(const cfg_obj_t *cctx, const char *list,
+			   const char *name, const cfg_obj_t **ret) {
 	isc_result_t result;
 	const cfg_obj_t *obj = NULL;
-	const cfg_listelt_t *elt;
 
 	REQUIRE(cctx != NULL);
 	REQUIRE(name != NULL);
@@ -510,37 +631,19 @@ getremotesdef(const cfg_obj_t *cctx, const char *list, const char *name,
 
 	result = cfg_map_get(cctx, list, &obj);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
-	elt = cfg_list_first(obj);
-	while (elt != NULL) {
+	CFG_LIST_FOREACH (obj, elt) {
 		obj = cfg_listelt_value(elt);
 		if (strcasecmp(cfg_obj_asstring(cfg_tuple_get(obj, "name")),
 			       name) == 0)
 		{
 			*ret = obj;
-			return (ISC_R_SUCCESS);
+			return ISC_R_SUCCESS;
 		}
-		elt = cfg_list_next(elt);
 	}
-	return (ISC_R_NOTFOUND);
-}
 
-isc_result_t
-named_config_getremotesdef(const cfg_obj_t *cctx, const char *list,
-			   const char *name, const cfg_obj_t **ret) {
-	isc_result_t result;
-
-	if (strcmp(list, "parental-agents") == 0) {
-		return (getremotesdef(cctx, list, name, ret));
-	} else if (strcmp(list, "primaries") == 0) {
-		result = getremotesdef(cctx, list, name, ret);
-		if (result != ISC_R_SUCCESS) {
-			result = getremotesdef(cctx, "masters", name, ret);
-		}
-		return (result);
-	}
-	return (ISC_R_NOTFOUND);
+	return ISC_R_NOTFOUND;
 }
 
 static isc_result_t
@@ -555,50 +658,47 @@ named_config_getname(isc_mem_t *mctx, const cfg_obj_t *obj,
 
 	if (!cfg_obj_isstring(obj)) {
 		*namep = NULL;
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	*namep = isc_mem_get(mctx, sizeof(**namep));
-	dns_name_init(*namep, NULL);
+	dns_name_init(*namep);
 
 	objstr = cfg_obj_asstring(obj);
 	isc_buffer_constinit(&b, objstr, strlen(objstr));
 	isc_buffer_add(&b, strlen(objstr));
 	dns_fixedname_init(&fname);
 	result = dns_name_fromtext(dns_fixedname_name(&fname), &b, dns_rootname,
-				   0, NULL);
+				   0);
 	if (result != ISC_R_SUCCESS) {
 		isc_mem_put(mctx, *namep, sizeof(**namep));
-		*namep = NULL;
-		return (result);
+		return result;
 	}
 	dns_name_dup(dns_fixedname_name(&fname), mctx, *namep);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
-#define grow_array(mctx, array, newlen, oldlen)                       \
-	if (newlen >= oldlen) {                                       \
-		size_t newsize = (newlen + 16) * sizeof(array[0]);    \
-		size_t oldsize = oldlen * sizeof(array[0]);           \
-		array = isc_mem_regetx(mctx, array, oldsize, newsize, \
-				       ISC_MEM_ZERO);                 \
-		oldlen = newlen + 16;                                 \
+#define grow_array(mctx, array, newlen, oldlen)                          \
+	if (newlen >= oldlen) {                                          \
+		array = isc_mem_creget(mctx, array, oldlen, newlen + 16, \
+				       sizeof(array[0]));                \
+		oldlen = newlen + 16;                                    \
 	}
 
-#define shrink_array(mctx, array, newlen, oldlen)                     \
-	if (newlen < oldlen) {                                        \
-		size_t newsize = newlen * sizeof(array[0]);           \
-		size_t oldsize = oldlen * sizeof(array[0]);           \
-		array = isc_mem_regetx(mctx, array, oldsize, newsize, \
-				       ISC_MEM_ZERO);                 \
-		oldlen = newlen;                                      \
+#define shrink_array(mctx, array, newlen, oldlen)                   \
+	if (newlen < oldlen) {                                      \
+		array = isc_mem_creget(mctx, array, oldlen, newlen, \
+				       sizeof(array[0]));           \
+		oldlen = newlen;                                    \
 	}
+
+static const char *remotesnames[4] = { "remote-servers", "parental-agents",
+				       "primaries", "masters" };
 
 isc_result_t
-named_config_getipandkeylist(const cfg_obj_t *config, const char *listtype,
-			     const cfg_obj_t *list, isc_mem_t *mctx,
-			     dns_ipkeylist_t *ipkl) {
+named_config_getipandkeylist(const cfg_obj_t *config, const cfg_obj_t *list,
+			     isc_mem_t *mctx, dns_ipkeylist_t *ipkl) {
 	uint32_t addrcount = 0, srccount = 0;
 	uint32_t keycount = 0, tlscount = 0;
 	uint32_t listcount = 0, l = 0, i = 0;
@@ -661,7 +761,7 @@ newlist:
 	if (cfg_obj_isuint32(portobj)) {
 		uint32_t val = cfg_obj_asuint32(portobj);
 		if (val > UINT16_MAX) {
-			cfg_obj_log(portobj, named_g_lctx, ISC_LOG_ERROR,
+			cfg_obj_log(portobj, ISC_LOG_ERROR,
 				    "port '%u' out of range", val);
 			result = ISC_R_RANGE;
 			goto cleanup;
@@ -680,8 +780,6 @@ newlist:
 	} else {
 		isc_sockaddr_any6(&src6);
 	}
-
-	result = ISC_R_NOMEMORY;
 
 	element = cfg_list_first(addrlist);
 resume:
@@ -713,17 +811,22 @@ resume:
 				continue;
 			}
 			list = NULL;
-			tresult = named_config_getremotesdef(config, listtype,
-							     listname, &list);
+			tresult = ISC_R_NOTFOUND;
+			for (size_t n = 0; n < ARRAY_SIZE(remotesnames); n++) {
+				tresult = named_config_getremotesdef(
+					config, remotesnames[n], listname,
+					&list);
+				if (tresult == ISC_R_SUCCESS) {
+					break;
+				}
+			}
 			if (tresult == ISC_R_NOTFOUND) {
-				cfg_obj_log(addr, named_g_lctx, ISC_LOG_ERROR,
-					    "%s \"%s\" not found", listtype,
+				cfg_obj_log(addr, ISC_LOG_ERROR,
+					    "remote-servers \"%s\" not found",
 					    listname);
-
-				result = tresult;
-				goto cleanup;
 			}
 			if (tresult != ISC_R_SUCCESS) {
+				result = tresult;
 				goto cleanup;
 			}
 			lists[l++].name = listname;
@@ -809,10 +912,10 @@ resume:
 	shrink_array(mctx, sources, i, srccount);
 
 	if (lists != NULL) {
-		isc_mem_put(mctx, lists, listcount * sizeof(lists[0]));
+		isc_mem_cput(mctx, lists, listcount, sizeof(lists[0]));
 	}
 	if (stack != NULL) {
-		isc_mem_put(mctx, stack, stackcount * sizeof(stack[0]));
+		isc_mem_cput(mctx, stack, stackcount, sizeof(stack[0]));
 	}
 
 	INSIST(keycount == addrcount);
@@ -826,11 +929,11 @@ resume:
 	ipkl->count = addrcount;
 	ipkl->allocated = addrcount;
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 
 cleanup:
 	if (addrs != NULL) {
-		isc_mem_put(mctx, addrs, addrcount * sizeof(addrs[0]));
+		isc_mem_cput(mctx, addrs, addrcount, sizeof(addrs[0]));
 	}
 	if (keys != NULL) {
 		for (size_t j = 0; j < i; j++) {
@@ -842,7 +945,7 @@ cleanup:
 			}
 			isc_mem_put(mctx, keys[j], sizeof(*keys[j]));
 		}
-		isc_mem_put(mctx, keys, keycount * sizeof(keys[0]));
+		isc_mem_cput(mctx, keys, keycount, sizeof(keys[0]));
 	}
 	if (tlss != NULL) {
 		for (size_t j = 0; j < i; j++) {
@@ -854,18 +957,18 @@ cleanup:
 			}
 			isc_mem_put(mctx, tlss[j], sizeof(*tlss[j]));
 		}
-		isc_mem_put(mctx, tlss, tlscount * sizeof(tlss[0]));
+		isc_mem_cput(mctx, tlss, tlscount, sizeof(tlss[0]));
 	}
 	if (sources != NULL) {
-		isc_mem_put(mctx, sources, srccount * sizeof(sources[0]));
+		isc_mem_cput(mctx, sources, srccount, sizeof(sources[0]));
 	}
 	if (lists != NULL) {
-		isc_mem_put(mctx, lists, listcount * sizeof(lists[0]));
+		isc_mem_cput(mctx, lists, listcount, sizeof(lists[0]));
 	}
 	if (stack != NULL) {
-		isc_mem_put(mctx, stack, stackcount * sizeof(stack[0]));
+		isc_mem_cput(mctx, stack, stackcount, sizeof(stack[0]));
 	}
-	return (result);
+	return result;
 }
 
 isc_result_t
@@ -882,19 +985,18 @@ named_config_getport(const cfg_obj_t *config, const char *type,
 	if (options != NULL) {
 		maps[i++] = options;
 	}
-	maps[i++] = named_g_defaults;
+	maps[i++] = named_g_defaultoptions;
 	maps[i] = NULL;
 
 	result = named_config_get(maps, type, &portobj);
 	INSIST(result == ISC_R_SUCCESS);
 	if (cfg_obj_asuint32(portobj) >= UINT16_MAX) {
-		cfg_obj_log(portobj, named_g_lctx, ISC_LOG_ERROR,
-			    "port '%u' out of range",
+		cfg_obj_log(portobj, ISC_LOG_ERROR, "port '%u' out of range",
 			    cfg_obj_asuint32(portobj));
-		return (ISC_R_RANGE);
+		return ISC_R_RANGE;
 	}
 	*portp = (in_port_t)cfg_obj_asuint32(portobj);
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 struct keyalgorithms {
@@ -921,14 +1023,8 @@ struct keyalgorithms {
 		   { NULL, hmacnone, DST_ALG_UNKNOWN, 0 } };
 
 isc_result_t
-named_config_getkeyalgorithm(const char *str, const dns_name_t **name,
+named_config_getkeyalgorithm(const char *str, unsigned int *typep,
 			     uint16_t *digestbits) {
-	return (named_config_getkeyalgorithm2(str, name, NULL, digestbits));
-}
-
-isc_result_t
-named_config_getkeyalgorithm2(const char *str, const dns_name_t **name,
-			      unsigned int *typep, uint16_t *digestbits) {
 	int i;
 	size_t len = 0;
 	uint16_t bits;
@@ -944,51 +1040,22 @@ named_config_getkeyalgorithm2(const char *str, const dns_name_t **name,
 		}
 	}
 	if (algorithms[i].str == NULL) {
-		return (ISC_R_NOTFOUND);
+		return ISC_R_NOTFOUND;
 	}
 	if (str[len] == '-') {
 		result = isc_parse_uint16(&bits, str + len + 1, 10);
 		if (result != ISC_R_SUCCESS) {
-			return (result);
+			return result;
 		}
 		if (bits > algorithms[i].size) {
-			return (ISC_R_RANGE);
+			return ISC_R_RANGE;
 		}
 	} else if (algorithms[i].size == 0) {
 		bits = 128;
 	} else {
 		bits = algorithms[i].size;
 	}
-
-	if (name != NULL) {
-		switch (algorithms[i].hmac) {
-		case hmacmd5:
-			*name = dns_tsig_hmacmd5_name;
-			break;
-		case hmacsha1:
-			*name = dns_tsig_hmacsha1_name;
-			break;
-		case hmacsha224:
-			*name = dns_tsig_hmacsha224_name;
-			break;
-		case hmacsha256:
-			*name = dns_tsig_hmacsha256_name;
-			break;
-		case hmacsha384:
-			*name = dns_tsig_hmacsha384_name;
-			break;
-		case hmacsha512:
-			*name = dns_tsig_hmacsha512_name;
-			break;
-		default:
-			UNREACHABLE();
-		}
-	}
-	if (typep != NULL) {
-		*typep = algorithms[i].type;
-	}
-	if (digestbits != NULL) {
-		*digestbits = bits;
-	}
-	return (ISC_R_SUCCESS);
+	SET_IF_NOT_NULL(typep, algorithms[i].type);
+	SET_IF_NOT_NULL(digestbits, bits);
+	return ISC_R_SUCCESS;
 }

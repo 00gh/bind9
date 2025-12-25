@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -24,11 +25,14 @@
 #include <cmocka.h>
 
 #include <isc/job.h>
+#include <isc/lib.h>
 #include <isc/quota.h>
 #include <isc/result.h>
 #include <isc/thread.h>
 #include <isc/util.h>
 #include <isc/uv.h>
+
+#include "thread_p.h"
 
 #include <tests/isc.h>
 
@@ -52,6 +56,11 @@ ISC_RUN_TEST_IMPL(isc_quota_get_set) {
 	assert_int_equal(isc_quota_getused(&quota), 1);
 	isc_quota_release(&quota);
 	assert_int_equal(isc_quota_getused(&quota), 0);
+
+	/* Unlimited */
+	isc_quota_max(&quota, 0);
+	isc_quota_soft(&quota, 0);
+
 	isc_quota_destroy(&quota);
 }
 
@@ -232,7 +241,7 @@ static void *
 quota_release(void *arg) {
 	uv_sleep(10);
 	isc_quota_release((isc_quota_t *)arg);
-	return (NULL);
+	return NULL;
 }
 
 static void
@@ -257,12 +266,13 @@ quota_thread(void *qtip) {
 					  &g_threads[tnum]);
 		}
 	}
-	return (NULL);
+	return NULL;
 }
 
 ISC_RUN_TEST_IMPL(isc_quota_callback_mt) {
-	UNUSED(state);
 	int i;
+
+	isc_thread_setstacksize(THREAD_MINSTACKSIZE);
 
 	isc_quota_init(&quota, 100);
 	static qthreadinfo_t qtis[10];

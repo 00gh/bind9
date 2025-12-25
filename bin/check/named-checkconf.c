@@ -22,6 +22,7 @@
 #include <isc/commandline.h>
 #include <isc/dir.h>
 #include <isc/hash.h>
+#include <isc/lib.h>
 #include <isc/log.h>
 #include <isc/mem.h>
 #include <isc/result.h>
@@ -30,7 +31,7 @@
 
 #include <dns/db.h>
 #include <dns/fixedname.h>
-#include <dns/log.h>
+#include <dns/lib.h>
 #include <dns/name.h>
 #include <dns/rdataclass.h>
 #include <dns/rootns.h>
@@ -42,10 +43,6 @@
 
 #include "check-tool.h"
 
-static const char *program = "named-checkconf";
-
-isc_log_t *logc = NULL;
-
 #define CHECK(r)                             \
 	do {                                 \
 		result = (r);                \
@@ -54,7 +51,7 @@ isc_log_t *logc = NULL;
 	} while (0)
 
 /*% usage */
-noreturn static void
+ISC_NORETURN static void
 usage(void);
 
 static void
@@ -62,8 +59,8 @@ usage(void) {
 	fprintf(stderr,
 		"usage: %s [-achijlvz] [-p [-x]] [-t directory] "
 		"[named.conf]\n",
-		program);
-	exit(1);
+		isc_commandline_progname);
+	exit(EXIT_SUCCESS);
 }
 
 /*% directory callback */
@@ -83,13 +80,13 @@ directory_callback(const char *clausename, const cfg_obj_t *obj, void *arg) {
 	directory = cfg_obj_asstring(obj);
 	result = isc_dir_chdir(directory);
 	if (result != ISC_R_SUCCESS) {
-		cfg_obj_log(obj, logc, ISC_LOG_ERROR,
+		cfg_obj_log(obj, ISC_LOG_ERROR,
 			    "change directory to '%s' failed: %s\n", directory,
 			    isc_result_totext(result));
-		return (result);
+		return result;
 	}
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static bool
@@ -97,26 +94,25 @@ get_maps(const cfg_obj_t **maps, const char *name, const cfg_obj_t **obj) {
 	int i;
 	for (i = 0;; i++) {
 		if (maps[i] == NULL) {
-			return (false);
+			return false;
 		}
 		if (cfg_map_get(maps[i], name, obj) == ISC_R_SUCCESS) {
-			return (true);
+			return true;
 		}
 	}
 }
 
 static bool
 get_checknames(const cfg_obj_t **maps, const cfg_obj_t **obj) {
-	const cfg_listelt_t *element;
-	const cfg_obj_t *checknames;
-	const cfg_obj_t *type;
-	const cfg_obj_t *value;
+	const cfg_obj_t *checknames = NULL;
+	const cfg_obj_t *type = NULL;
+	const cfg_obj_t *value = NULL;
 	isc_result_t result;
 	int i;
 
 	for (i = 0;; i++) {
 		if (maps[i] == NULL) {
-			return (false);
+			return false;
 		}
 		checknames = NULL;
 		result = cfg_map_get(maps[i], "check-names", &checknames);
@@ -125,11 +121,9 @@ get_checknames(const cfg_obj_t **maps, const cfg_obj_t **obj) {
 		}
 		if (checknames != NULL && !cfg_obj_islist(checknames)) {
 			*obj = checknames;
-			return (true);
+			return true;
 		}
-		for (element = cfg_list_first(checknames); element != NULL;
-		     element = cfg_list_next(element))
-		{
+		CFG_LIST_FOREACH (checknames, element) {
 			value = cfg_listelt_value(element);
 			type = cfg_tuple_get(value, "type");
 			if ((strcasecmp(cfg_obj_asstring(type), "primary") !=
@@ -139,43 +133,42 @@ get_checknames(const cfg_obj_t **maps, const cfg_obj_t **obj) {
 				continue;
 			}
 			*obj = cfg_tuple_get(value, "mode");
-			return (true);
+			return true;
 		}
 	}
 }
 
 static isc_result_t
-configure_hint(const char *zfile, const char *zclass, isc_mem_t *mctx) {
+configure_hint(const char *zfile, const char *zclass) {
 	isc_result_t result;
 	dns_db_t *db = NULL;
 	dns_rdataclass_t rdclass;
 	isc_textregion_t r;
 
 	if (zfile == NULL) {
-		return (ISC_R_FAILURE);
+		return ISC_R_FAILURE;
 	}
 
 	r.base = UNCONST(zclass);
 	r.length = strlen(zclass);
 	result = dns_rdataclass_fromtext(&rdclass, &r);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
-	result = dns_rootns_create(mctx, rdclass, zfile, &db);
+	result = dns_rootns_create(isc_g_mctx, rdclass, zfile, &db);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	dns_db_detach(&db);
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 /*% configure the zone */
 static isc_result_t
 configure_zone(const char *vclass, const char *view, const cfg_obj_t *zconfig,
-	       const cfg_obj_t *vconfig, const cfg_obj_t *config,
-	       isc_mem_t *mctx, bool list) {
+	       const cfg_obj_t *vconfig, const cfg_obj_t *config, bool list) {
 	int i = 0;
 	isc_result_t result;
 	const char *zclass;
@@ -224,31 +217,33 @@ configure_zone(const char *vclass, const char *view, const cfg_obj_t *zconfig,
 		printf("%s %s %s in-view %s\n", zname, zclass, view, inview);
 	}
 	if (inviewobj != NULL) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	cfg_map_get(zoptions, "type", &typeobj);
 	if (typeobj == NULL) {
-		return (ISC_R_FAILURE);
+		return ISC_R_FAILURE;
 	}
 
 	if (list) {
 		const char *ztype = cfg_obj_asstring(typeobj);
 		printf("%s %s %s %s\n", zname, zclass, view, ztype);
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	/*
 	 * Skip checks when using an alternate data source.
 	 */
 	cfg_map_get(zoptions, "database", &dbobj);
-	if (dbobj != NULL && strcmp("rbt", cfg_obj_asstring(dbobj)) != 0) {
-		return (ISC_R_SUCCESS);
+	if (dbobj != NULL &&
+	    strcmp(ZONEDB_DEFAULT, cfg_obj_asstring(dbobj)) != 0)
+	{
+		return ISC_R_SUCCESS;
 	}
 
 	cfg_map_get(zoptions, "dlz", &dlzobj);
 	if (dlzobj != NULL) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	cfg_map_get(zoptions, "file", &fileobj);
@@ -262,12 +257,12 @@ configure_zone(const char *vclass, const char *view, const cfg_obj_t *zconfig,
 	 * master and redirect
 	 */
 	if (strcasecmp(cfg_obj_asstring(typeobj), "hint") == 0) {
-		return (configure_hint(zfile, zclass, mctx));
+		return configure_hint(zfile, zclass);
 	} else if ((strcasecmp(cfg_obj_asstring(typeobj), "primary") != 0) &&
 		   (strcasecmp(cfg_obj_asstring(typeobj), "master") != 0) &&
 		   (strcasecmp(cfg_obj_asstring(typeobj), "redirect") != 0))
 	{
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	/*
@@ -280,12 +275,12 @@ configure_zone(const char *vclass, const char *view, const cfg_obj_t *zconfig,
 		}
 
 		if (primariesobj != NULL) {
-			return (ISC_R_SUCCESS);
+			return ISC_R_SUCCESS;
 		}
 	}
 
 	if (zfile == NULL) {
-		return (ISC_R_FAILURE);
+		return ISC_R_FAILURE;
 	}
 
 	obj = NULL;
@@ -457,22 +452,21 @@ configure_zone(const char *vclass, const char *view, const cfg_obj_t *zconfig,
 		zone_options |= DNS_ZONEOPT_CHECKTTL;
 	}
 
-	result = load_zone(mctx, zname, zfile, masterformat, zclass, maxttl,
-			   NULL);
+	result = load_zone(isc_g_mctx, zname, zfile, masterformat, zclass,
+			   maxttl, NULL);
 	if (result != ISC_R_SUCCESS) {
 		fprintf(stderr, "%s/%s/%s: %s\n", view, zname, zclass,
 			isc_result_totext(result));
 	}
-	return (result);
+	return result;
 }
 
 /*% configure a view */
 static isc_result_t
 configure_view(const char *vclass, const char *view, const cfg_obj_t *config,
-	       const cfg_obj_t *vconfig, isc_mem_t *mctx, bool list) {
-	const cfg_listelt_t *element;
-	const cfg_obj_t *voptions;
-	const cfg_obj_t *zonelist;
+	       const cfg_obj_t *vconfig, bool list) {
+	const cfg_obj_t *voptions = NULL;
+	const cfg_obj_t *zonelist = NULL;
 	isc_result_t result = ISC_R_SUCCESS;
 	isc_result_t tresult;
 
@@ -488,17 +482,15 @@ configure_view(const char *vclass, const char *view, const cfg_obj_t *config,
 		(void)cfg_map_get(config, "zone", &zonelist);
 	}
 
-	for (element = cfg_list_first(zonelist); element != NULL;
-	     element = cfg_list_next(element))
-	{
+	CFG_LIST_FOREACH (zonelist, element) {
 		const cfg_obj_t *zconfig = cfg_listelt_value(element);
 		tresult = configure_zone(vclass, view, zconfig, vconfig, config,
-					 mctx, list);
+					 list);
 		if (tresult != ISC_R_SUCCESS) {
 			result = tresult;
 		}
 	}
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -508,29 +500,25 @@ config_getclass(const cfg_obj_t *classobj, dns_rdataclass_t defclass,
 
 	if (!cfg_obj_isstring(classobj)) {
 		*classp = defclass;
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	r.base = UNCONST(cfg_obj_asstring(classobj));
 	r.length = strlen(r.base);
-	return (dns_rdataclass_fromtext(classp, &r));
+	return dns_rdataclass_fromtext(classp, &r);
 }
 
 /*% load zones from the configuration */
 static isc_result_t
-load_zones_fromconfig(const cfg_obj_t *config, isc_mem_t *mctx,
-		      bool list_zones) {
-	const cfg_listelt_t *element;
-	const cfg_obj_t *views;
-	const cfg_obj_t *vconfig;
+load_zones_fromconfig(const cfg_obj_t *config, bool list_zones) {
+	const cfg_obj_t *views = NULL;
+	const cfg_obj_t *vconfig = NULL;
 	isc_result_t result = ISC_R_SUCCESS;
 	isc_result_t tresult;
 
 	views = NULL;
 
 	(void)cfg_map_get(config, "view", &views);
-	for (element = cfg_list_first(views); element != NULL;
-	     element = cfg_list_next(element))
-	{
+	CFG_LIST_FOREACH (views, element) {
 		const cfg_obj_t *classobj;
 		dns_rdataclass_t viewclass;
 		const char *vname;
@@ -554,7 +542,7 @@ load_zones_fromconfig(const cfg_obj_t *config, isc_mem_t *mctx,
 
 		dns_rdataclass_format(viewclass, buf, sizeof(buf));
 		vname = cfg_obj_asstring(cfg_tuple_get(vconfig, "name"));
-		tresult = configure_view(buf, vname, config, vconfig, mctx,
+		tresult = configure_view(buf, vname, config, vconfig,
 					 list_zones);
 		if (tresult != ISC_R_SUCCESS) {
 			result = tresult;
@@ -562,7 +550,7 @@ load_zones_fromconfig(const cfg_obj_t *config, isc_mem_t *mctx,
 	}
 
 	if (views == NULL) {
-		tresult = configure_view("IN", "_default", config, NULL, mctx,
+		tresult = configure_view("IN", "_default", config, NULL,
 					 list_zones);
 		if (tresult != ISC_R_SUCCESS) {
 			result = tresult;
@@ -570,7 +558,7 @@ load_zones_fromconfig(const cfg_obj_t *config, isc_mem_t *mctx,
 	}
 
 cleanup:
-	return (result);
+	return result;
 }
 
 static void
@@ -589,36 +577,37 @@ main(int argc, char **argv) {
 	cfg_parser_t *parser = NULL;
 	cfg_obj_t *config = NULL;
 	const char *conffile = NULL;
-	isc_mem_t *mctx = NULL;
 	isc_result_t result = ISC_R_SUCCESS;
-	bool cleanup_dst = true;
 	bool load_zones = false;
 	bool list_zones = false;
 	bool print = false;
 	bool nodeprecate = false;
+	bool allconfigs = false;
 	unsigned int flags = 0;
 	unsigned int checkflags = BIND_CHECK_PLUGINS | BIND_CHECK_ALGORITHMS;
+
+	isc_commandline_init(argc, argv);
 
 	isc_commandline_errprint = false;
 
 	/*
 	 * Process memory debugging argument first.
 	 */
-#define CMDLINE_FLAGS "acdhijlm:t:pvxz"
+#define CMDLINE_FLAGS "acdhijlm:nt:pvxz"
 	while ((c = isc_commandline_parse(argc, argv, CMDLINE_FLAGS)) != -1) {
 		switch (c) {
 		case 'm':
 			if (strcasecmp(isc_commandline_argument, "record") == 0)
 			{
-				isc_mem_debugging |= ISC_MEM_DEBUGRECORD;
+				isc_mem_debugon(ISC_MEM_DEBUGRECORD);
 			}
 			if (strcasecmp(isc_commandline_argument, "trace") == 0)
 			{
-				isc_mem_debugging |= ISC_MEM_DEBUGTRACE;
+				isc_mem_debugon(ISC_MEM_DEBUGTRACE);
 			}
 			if (strcasecmp(isc_commandline_argument, "usage") == 0)
 			{
-				isc_mem_debugging |= ISC_MEM_DEBUGUSAGE;
+				isc_mem_debugon(ISC_MEM_DEBUGUSAGE);
 			}
 			break;
 		default:
@@ -626,8 +615,6 @@ main(int argc, char **argv) {
 		}
 	}
 	isc_commandline_reset = true;
-
-	isc_mem_create(&mctx);
 
 	while ((c = isc_commandline_parse(argc, argv, CMDLINE_FLAGS)) != EOF) {
 		switch (c) {
@@ -656,6 +643,10 @@ main(int argc, char **argv) {
 			break;
 
 		case 'm':
+			break;
+
+		case 'n':
+			allconfigs = true;
 			break;
 
 		case 't':
@@ -690,31 +681,33 @@ main(int argc, char **argv) {
 		case '?':
 			if (isc_commandline_option != '?') {
 				fprintf(stderr, "%s: invalid argument -%c\n",
-					program, isc_commandline_option);
+					isc_commandline_progname,
+					isc_commandline_option);
 			}
 			FALLTHROUGH;
 		case 'h':
-			isc_mem_detach(&mctx);
 			usage();
 
 		default:
-			fprintf(stderr, "%s: unhandled option -%c\n", program,
+			fprintf(stderr, "%s: unhandled option -%c\n",
+				isc_commandline_progname,
 				isc_commandline_option);
 			CHECK(ISC_R_FAILURE);
 		}
 	}
 
 	if (((flags & CFG_PRINTER_XKEY) != 0) && !print) {
-		fprintf(stderr, "%s: -x cannot be used without -p\n", program);
+		fprintf(stderr, "%s: -x cannot be used without -p\n",
+			isc_commandline_progname);
 		CHECK(ISC_R_FAILURE);
 	}
 	if (print && list_zones) {
-		fprintf(stderr, "%s: -l cannot be used with -p\n", program);
+		fprintf(stderr, "%s: -l cannot be used with -p\n",
+			isc_commandline_progname);
 		CHECK(ISC_R_FAILURE);
 	}
 
 	if (isc_commandline_index + 1 < argc) {
-		isc_mem_detach(&mctx);
 		usage();
 	}
 	if (argv[isc_commandline_index] != NULL) {
@@ -724,22 +717,22 @@ main(int argc, char **argv) {
 		conffile = NAMED_CONFFILE;
 	}
 
-	CHECK(setup_logging(mctx, stdout, &logc));
+	CHECK(setup_logging(stdout));
 
-	CHECK(dst_lib_init(mctx, NULL));
-	cleanup_dst = true;
-
-	CHECK(cfg_parser_create(mctx, logc, &parser));
+	CHECK(cfg_parser_create(isc_g_mctx, &parser));
 
 	if (nodeprecate) {
 		cfg_parser_setflags(parser, CFG_PCTX_NODEPRECATED, true);
 	}
+	if (allconfigs) {
+		cfg_parser_setflags(parser, CFG_PCTX_ALLCONFIGS, true);
+	}
 	cfg_parser_setcallback(parser, directory_callback, NULL);
 
 	CHECK(cfg_parse_file(parser, conffile, &cfg_type_namedconf, &config));
-	CHECK(isccfg_check_namedconf(config, checkflags, logc, mctx));
+	CHECK(isccfg_check_namedconf(config, checkflags, isc_g_mctx));
 	if (load_zones || list_zones) {
-		CHECK(load_zones_fromconfig(config, mctx, list_zones));
+		CHECK(load_zones_fromconfig(config, list_zones));
 	}
 
 	if (print) {
@@ -755,17 +748,5 @@ cleanup:
 		cfg_parser_destroy(&parser);
 	}
 
-	if (cleanup_dst) {
-		dst_lib_destroy();
-	}
-
-	if (logc != NULL) {
-		isc_log_destroy(&logc);
-	}
-
-	if (mctx != NULL) {
-		isc_mem_destroy(&mctx);
-	}
-
-	return (result == ISC_R_SUCCESS ? 0 : 1);
+	return result == ISC_R_SUCCESS ? 0 : 1;
 }

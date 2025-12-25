@@ -23,6 +23,7 @@ Manual Pages
 .. include:: ../../bin/dnssec/dnssec-importkey.rst
 .. include:: ../../bin/dnssec/dnssec-keyfromlabel.rst
 .. include:: ../../bin/dnssec/dnssec-keygen.rst
+.. include:: ../../bin/dnssec/dnssec-ksr.rst
 .. include:: ../../bin/dnssec/dnssec-revoke.rst
 .. include:: ../../bin/dnssec/dnssec-settime.rst
 .. include:: ../../bin/dnssec/dnssec-signzone.rst
@@ -35,6 +36,7 @@ Manual Pages
 .. include:: ../../bin/check/named-checkzone.rst
 .. include:: ../../bin/check/named-compilezone.rst
 .. include:: ../../bin/tools/named-journalprint.rst
+.. include:: ../../bin/tools/named-makejournal.rst
 .. include:: ../../bin/tools/named-nzd2nzf.rst
 .. include:: ../../bin/tools/named-rrchecker.rst
 .. include:: ../../bin/named/named.conf.rst

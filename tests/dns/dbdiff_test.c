@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -22,11 +23,13 @@
 #define UNIT_TESTING
 #include <cmocka.h>
 
+#include <isc/lib.h>
 #include <isc/util.h>
 
 #include <dns/db.h>
 #include <dns/dbiterator.h>
 #include <dns/journal.h>
+#include <dns/lib.h>
 #include <dns/name.h>
 
 #include <tests/dns.h>
@@ -58,7 +61,7 @@ ISC_RUN_TEST_IMPL(diffx_same) {
 	test_create(TESTS_DIR "/testdata/diff/zone1.data", &olddb,
 		    TESTS_DIR "/testdata/diff/zone1.data", &newdb);
 
-	dns_diff_init(mctx, &diff);
+	dns_diff_init(isc_g_mctx, &diff);
 
 	result = dns_db_diffx(&diff, newdb, NULL, olddb, NULL, NULL);
 	assert_int_equal(result, ISC_R_SUCCESS);
@@ -73,7 +76,6 @@ ISC_RUN_TEST_IMPL(diffx_same) {
 /* dns_db_diffx of zone with record added */
 ISC_RUN_TEST_IMPL(diffx_add) {
 	dns_db_t *newdb = NULL, *olddb = NULL;
-	dns_difftuple_t *tuple;
 	isc_result_t result;
 	dns_diff_t diff;
 	int count = 0;
@@ -83,15 +85,13 @@ ISC_RUN_TEST_IMPL(diffx_add) {
 	test_create(TESTS_DIR "/testdata/diff/zone1.data", &olddb,
 		    TESTS_DIR "/testdata/diff/zone2.data", &newdb);
 
-	dns_diff_init(mctx, &diff);
+	dns_diff_init(isc_g_mctx, &diff);
 
 	result = dns_db_diffx(&diff, newdb, NULL, olddb, NULL, NULL);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	assert_false(ISC_LIST_EMPTY(diff.tuples));
-	for (tuple = ISC_LIST_HEAD(diff.tuples); tuple != NULL;
-	     tuple = ISC_LIST_NEXT(tuple, link))
-	{
+	ISC_LIST_FOREACH (diff.tuples, tuple, link) {
 		assert_int_equal(tuple->op, DNS_DIFFOP_ADD);
 		count++;
 	}
@@ -105,7 +105,6 @@ ISC_RUN_TEST_IMPL(diffx_add) {
 /* dns_db_diffx of zone with record removed */
 ISC_RUN_TEST_IMPL(diffx_remove) {
 	dns_db_t *newdb = NULL, *olddb = NULL;
-	dns_difftuple_t *tuple;
 	isc_result_t result;
 	dns_diff_t diff;
 	int count = 0;
@@ -115,15 +114,13 @@ ISC_RUN_TEST_IMPL(diffx_remove) {
 	test_create(TESTS_DIR "/testdata/diff/zone1.data", &olddb,
 		    TESTS_DIR "/testdata/diff/zone3.data", &newdb);
 
-	dns_diff_init(mctx, &diff);
+	dns_diff_init(isc_g_mctx, &diff);
 
 	result = dns_db_diffx(&diff, newdb, NULL, olddb, NULL, NULL);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	assert_false(ISC_LIST_EMPTY(diff.tuples));
-	for (tuple = ISC_LIST_HEAD(diff.tuples); tuple != NULL;
-	     tuple = ISC_LIST_NEXT(tuple, link))
-	{
+	ISC_LIST_FOREACH (diff.tuples, tuple, link) {
 		assert_int_equal(tuple->op, DNS_DIFFOP_DEL);
 		count++;
 	}

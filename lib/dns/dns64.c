@@ -24,6 +24,7 @@
 #include <dns/acl.h>
 #include <dns/dns64.h>
 #include <dns/rdata.h>
+#include <dns/rdatalist.h>
 #include <dns/rdataset.h>
 
 struct dns_dns64 {
@@ -49,7 +50,7 @@ struct dns_dns64 {
 	ISC_LINK(dns_dns64_t) link;
 };
 
-isc_result_t
+void
 dns_dns64_create(isc_mem_t *mctx, const isc_netaddr_t *prefix,
 		 unsigned int prefixlen, const isc_netaddr_t *suffix,
 		 dns_acl_t *clients, dns_acl_t *mapped, dns_acl_t *excluded,
@@ -100,11 +101,10 @@ dns_dns64_create(isc_mem_t *mctx, const isc_netaddr_t *prefix,
 	dns64->mctx = NULL;
 	isc_mem_attach(mctx, &dns64->mctx);
 	*dns64p = dns64;
-	return (ISC_R_SUCCESS);
 }
 
 void
-dns_dns64_destroy(dns_dns64_t **dns64p) {
+dns_dns64_destroy(dns_dns64list_t *list, dns_dns64_t **dns64p) {
 	dns_dns64_t *dns64;
 
 	REQUIRE(dns64p != NULL && *dns64p != NULL);
@@ -112,7 +112,7 @@ dns_dns64_destroy(dns_dns64_t **dns64p) {
 	dns64 = *dns64p;
 	*dns64p = NULL;
 
-	REQUIRE(!ISC_LINK_LINKED(dns64, link));
+	ISC_LIST_UNLINK(*list, dns64, link);
 
 	if (dns64->clients != NULL) {
 		dns_acl_detach(&dns64->clients);
@@ -137,23 +137,23 @@ dns_dns64_aaaafroma(const dns_dns64_t *dns64, const isc_netaddr_t *reqaddr,
 	if ((dns64->flags & DNS_DNS64_RECURSIVE_ONLY) != 0 &&
 	    (flags & DNS_DNS64_RECURSIVE) == 0)
 	{
-		return (DNS_R_DISALLOWED);
+		return DNS_R_DISALLOWED;
 	}
 
 	if ((dns64->flags & DNS_DNS64_BREAK_DNSSEC) == 0 &&
 	    (flags & DNS_DNS64_DNSSEC) != 0)
 	{
-		return (DNS_R_DISALLOWED);
+		return DNS_R_DISALLOWED;
 	}
 
-	if (dns64->clients != NULL) {
+	if (dns64->clients != NULL && reqaddr != NULL) {
 		result = dns_acl_match(reqaddr, reqsigner, dns64->clients, env,
 				       &match, NULL);
 		if (result != ISC_R_SUCCESS) {
-			return (result);
+			return result;
 		}
 		if (match <= 0) {
-			return (DNS_R_DISALLOWED);
+			return DNS_R_DISALLOWED;
 		}
 	}
 
@@ -166,10 +166,10 @@ dns_dns64_aaaafroma(const dns_dns64_t *dns64, const isc_netaddr_t *reqaddr,
 		result = dns_acl_match(&netaddr, NULL, dns64->mapped, env,
 				       &match, NULL);
 		if (result != ISC_R_SUCCESS) {
-			return (result);
+			return result;
 		}
 		if (match <= 0) {
-			return (DNS_R_DISALLOWED);
+			return DNS_R_DISALLOWED;
 		}
 	}
 
@@ -191,23 +191,12 @@ dns_dns64_aaaafroma(const dns_dns64_t *dns64, const isc_netaddr_t *reqaddr,
 	}
 	/* Copy suffix. */
 	memmove(aaaa + nbytes, dns64->bits + nbytes, 16 - nbytes);
-	return (ISC_R_SUCCESS);
-}
-
-dns_dns64_t *
-dns_dns64_next(dns_dns64_t *dns64) {
-	dns64 = ISC_LIST_NEXT(dns64, link);
-	return (dns64);
+	return ISC_R_SUCCESS;
 }
 
 void
 dns_dns64_append(dns_dns64list_t *list, dns_dns64_t *dns64) {
 	ISC_LIST_APPEND(*list, dns64, link);
-}
-
-void
-dns_dns64_unlink(dns_dns64list_t *list, dns_dns64_t *dns64) {
-	ISC_LIST_UNLINK(*list, dns64, link);
 }
 
 bool
@@ -281,10 +270,7 @@ dns_dns64_aaaaok(const dns_dns64_t *dns64, const isc_netaddr_t *reqaddr,
 
 		i = 0;
 		ok = 0;
-		for (result = dns_rdataset_first(rdataset);
-		     result == ISC_R_SUCCESS;
-		     result = dns_rdataset_next(rdataset))
-		{
+		DNS_RDATASET_FOREACH (rdataset) {
 			dns_rdata_t rdata = DNS_RDATA_INIT;
 			if (aaaaok == NULL || !aaaaok[i]) {
 				dns_rdataset_current(rdataset, &rdata);
@@ -321,7 +307,7 @@ done:
 			aaaaok[i] = true;
 		}
 	}
-	return (found ? answer : true);
+	return found ? answer : true;
 }
 
 /*
@@ -387,7 +373,7 @@ search(const dns_rdata_t *rd1, const dns_rdata_t *rd2, unsigned int plen) {
 			/* Does the prefix match? */
 			while ((j * 8U) < plen) {
 				if (rd1->data[j] != rd2->data[j]) {
-					return (0);
+					return 0;
 				}
 				j++;
 			}
@@ -402,13 +388,13 @@ search(const dns_rdata_t *rd1, const dns_rdata_t *rd2, unsigned int plen) {
 			}
 		}
 		if (j == 16U) {
-			return (prefixes[i].plen);
+			return prefixes[i].plen;
 		}
 		if (rd2 != NULL) {
-			return (0);
+			return 0;
 		}
 	}
-	return (0);
+	return 0;
 }
 
 isc_result_t
@@ -418,7 +404,6 @@ dns_dns64_findprefix(dns_rdataset_t *rdataset, isc_netprefix_t *prefix,
 	unsigned int oplen, iplen;
 	size_t count = 0;
 	struct in6_addr ina6;
-	isc_result_t result;
 
 	REQUIRE(prefix != NULL && len != NULL && *len != 0U);
 	REQUIRE(rdataset != NULL && rdataset->type == dns_rdatatype_aaaa);
@@ -428,9 +413,7 @@ dns_dns64_findprefix(dns_rdataset_t *rdataset, isc_netprefix_t *prefix,
 	dns_rdataset_clone(rdataset, &outer);
 	dns_rdataset_clone(rdataset, &inner);
 
-	for (result = dns_rdataset_first(&outer); result == ISC_R_SUCCESS;
-	     result = dns_rdataset_next(&outer))
-	{
+	DNS_RDATASET_FOREACH (&outer) {
 		dns_rdata_t rd1 = DNS_RDATA_INIT;
 		dns_rdataset_current(&outer, &rd1);
 		oplen = 0;
@@ -442,43 +425,108 @@ dns_dns64_findprefix(dns_rdataset_t *rdataset, isc_netprefix_t *prefix,
 		}
 
 		/* Look for the 192.0.0.171 match. */
-		for (result = dns_rdataset_first(&inner);
-		     result == ISC_R_SUCCESS;
-		     result = dns_rdataset_next(&inner))
-		{
+		bool matched = false;
+		DNS_RDATASET_FOREACH (&inner) {
 			dns_rdata_t rd2 = DNS_RDATA_INIT;
 
 			dns_rdataset_current(&inner, &rd2);
 			iplen = search(&rd2, &rd1, oplen);
-			if (iplen == 0) {
-				continue;
-			}
-			INSIST(iplen == oplen);
-			if (count >= *len) {
-				count++;
-				break;
-			}
+			if (iplen != 0) {
+				matched = true;
+				INSIST(iplen == oplen);
+				if (count >= *len) {
+					count++;
+					break;
+				}
 
-			/* We have a prefix. */
-			memset(ina6.s6_addr, 0, sizeof(ina6.s6_addr));
-			memmove(ina6.s6_addr, rd1.data, oplen / 8);
-			isc_netaddr_fromin6(&prefix[count].addr, &ina6);
-			prefix[count].prefixlen = oplen;
-			count++;
-			break;
+				/* We have a prefix. */
+				memset(ina6.s6_addr, 0, sizeof(ina6.s6_addr));
+				memmove(ina6.s6_addr, rd1.data, oplen / 8);
+				isc_netaddr_fromin6(&prefix[count].addr, &ina6);
+				prefix[count].prefixlen = oplen;
+				count++;
+			}
 		}
 		/* Didn't find a match look for a different prefix length. */
-		if (result == ISC_R_NOMORE) {
+		if (!matched) {
 			goto resume;
 		}
 	}
 	if (count == 0U) {
-		return (ISC_R_NOTFOUND);
+		return ISC_R_NOTFOUND;
 	}
 	if (count > *len) {
 		*len = count;
-		return (ISC_R_NOSPACE);
+		return ISC_R_NOSPACE;
 	}
 	*len = count;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
+}
+
+isc_result_t
+dns_dns64_apply(isc_mem_t *mctx, dns_dns64list_t dns64s, unsigned int count,
+		dns_message_t *message, dns_aclenv_t *env, isc_sockaddr_t *peer,
+		dns_name_t *reqsigner, unsigned int flags, dns_rdataset_t *a,
+		dns_rdataset_t **aaaap) {
+	isc_result_t result;
+	dns_rdatalist_t *aaaalist = NULL;
+	isc_buffer_t *buffer = NULL;
+	isc_netaddr_t netaddr;
+
+	REQUIRE(aaaap != NULL && *aaaap == NULL);
+	REQUIRE(a->type == dns_rdatatype_a);
+
+	isc_netaddr_fromsockaddr(&netaddr, peer);
+
+	isc_buffer_allocate(mctx, &buffer, count * 16 * dns_rdataset_count(a));
+
+	dns_message_gettemprdatalist(message, &aaaalist);
+	aaaalist->rdclass = dns_rdataclass_in;
+	aaaalist->type = dns_rdatatype_aaaa;
+
+	DNS_RDATASET_FOREACH (a) {
+		dns_rdata_t rdata = DNS_RDATA_INIT;
+		dns_rdataset_current(a, &rdata);
+
+		ISC_LIST_FOREACH (dns64s, dns64, link) {
+			dns_rdata_t *dns64_rdata = NULL;
+			isc_region_t r;
+
+			isc_buffer_availableregion(buffer, &r);
+			INSIST(r.length >= 16);
+			result = dns_dns64_aaaafroma(dns64, &netaddr, reqsigner,
+						     env, flags, rdata.data,
+						     r.base);
+			if (result != ISC_R_SUCCESS) {
+				continue;
+			}
+			isc_buffer_add(buffer, 16);
+			isc_buffer_remainingregion(buffer, &r);
+			isc_buffer_forward(buffer, 16);
+			dns_message_gettemprdata(message, &dns64_rdata);
+			dns_rdata_fromregion(dns64_rdata, dns_rdataclass_in,
+					     dns_rdatatype_aaaa, &r);
+			ISC_LIST_APPEND(aaaalist->rdata, dns64_rdata, link);
+		}
+	}
+
+	if (!ISC_LIST_EMPTY(aaaalist->rdata)) {
+		dns_rdataset_t *aaaa = NULL;
+		dns_message_gettemprdataset(message, &aaaa);
+		dns_rdatalist_tordataset(aaaalist, aaaa);
+		dns_message_takebuffer(message, &buffer);
+		aaaa->trust = a->trust;
+		*aaaap = aaaa;
+		return ISC_R_SUCCESS;
+	}
+
+	/* No applicable dns64; free the resources */
+	isc_buffer_free(&buffer);
+	ISC_LIST_FOREACH (aaaalist->rdata, rdata, link) {
+		ISC_LIST_UNLINK(aaaalist->rdata, rdata, link);
+		dns_message_puttemprdata(message, &rdata);
+	}
+	dns_message_puttemprdatalist(message, &aaaalist);
+
+	return ISC_R_NOMORE;
 }

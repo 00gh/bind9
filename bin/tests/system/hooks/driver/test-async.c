@@ -32,7 +32,6 @@
 
 #include <ns/client.h>
 #include <ns/hooks.h>
-#include <ns/log.h>
 #include <ns/query.h>
 #include <ns/types.h>
 
@@ -54,7 +53,6 @@ typedef struct async_instance {
 	isc_mem_t *mctx;
 	isc_ht_t *ht;
 	isc_mutex_t hlock;
-	isc_log_t *lctx;
 } async_instance_t;
 
 typedef struct state {
@@ -106,8 +104,8 @@ logmsg(const char *fmt, ...) {
 	va_list ap;
 
 	va_start(ap, fmt);
-	isc_log_write(ns_lctx, NS_LOGCATEGORY_GENERAL, NS_LOGMODULE_HOOKS,
-		      ISC_LOG_INFO, fmt, ap);
+	isc_log_write(NS_LOGCATEGORY_GENERAL, NS_LOGMODULE_HOOKS, ISC_LOG_INFO,
+		      fmt, ap);
 	va_end(ap);
 }
 
@@ -126,16 +124,15 @@ logmsg(const char *fmt, ...) {
  */
 isc_result_t
 plugin_register(const char *parameters, const void *cfg, const char *cfg_file,
-		unsigned long cfg_line, isc_mem_t *mctx, isc_log_t *lctx,
-		void *actx, ns_hooktable_t *hooktable, void **instp) {
+		unsigned long cfg_line, isc_mem_t *mctx, void *actx,
+		ns_hooktable_t *hooktable, void **instp) {
 	async_instance_t *inst = NULL;
 
 	UNUSED(parameters);
 	UNUSED(cfg);
 	UNUSED(actx);
 
-	isc_log_write(lctx, NS_LOGCATEGORY_GENERAL, NS_LOGMODULE_HOOKS,
-		      ISC_LOG_INFO,
+	isc_log_write(NS_LOGCATEGORY_GENERAL, NS_LOGMODULE_HOOKS, ISC_LOG_INFO,
 		      "registering 'test-async' module from %s:%lu", cfg_file,
 		      cfg_line);
 
@@ -153,22 +150,20 @@ plugin_register(const char *parameters, const void *cfg, const char *cfg_file,
 
 	*instp = inst;
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 isc_result_t
 plugin_check(const char *parameters, const void *cfg, const char *cfg_file,
-	     unsigned long cfg_line, isc_mem_t *mctx, isc_log_t *lctx,
-	     void *actx) {
+	     unsigned long cfg_line, isc_mem_t *mctx, void *actx) {
 	UNUSED(parameters);
 	UNUSED(cfg);
 	UNUSED(cfg_file);
 	UNUSED(cfg_line);
 	UNUSED(mctx);
-	UNUSED(lctx);
 	UNUSED(actx);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 /*
@@ -195,7 +190,7 @@ plugin_destroy(void **instp) {
  */
 int
 plugin_version(void) {
-	return (NS_PLUGIN_VERSION);
+	return NS_PLUGIN_VERSION;
 }
 
 static state_t *
@@ -208,7 +203,7 @@ client_state_get(const query_ctx_t *qctx, async_instance_t *inst) {
 			     sizeof(qctx->client), (void **)&state);
 	UNLOCK(&inst->hlock);
 
-	return (result == ISC_R_SUCCESS ? state : NULL);
+	return result == ISC_R_SUCCESS ? state : NULL;
 }
 
 static void
@@ -258,7 +253,7 @@ async_qctx_initialize(void *arg, void *cbdata, isc_result_t *resp) {
 		client_state_create(qctx, inst);
 	}
 
-	return (NS_HOOK_CONTINUE);
+	return NS_HOOK_CONTINUE;
 }
 
 static void
@@ -304,7 +299,7 @@ doasync(query_ctx_t *qctx, isc_mem_t *mctx, void *arg, isc_loop_t *loop,
 	isc_async_run(loop, cb, rev);
 
 	*ctxp = ctx;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static ns_hookresult_t
@@ -321,7 +316,7 @@ async_query_done_begin(void *arg, void *cbdata, isc_result_t *resp) {
 	if (state->async) {
 		/* resuming */
 		state->async = false;
-		return (NS_HOOK_CONTINUE);
+		return NS_HOOK_CONTINUE;
 	}
 
 	/* initial call */
@@ -329,7 +324,7 @@ async_query_done_begin(void *arg, void *cbdata, isc_result_t *resp) {
 	state->hookpoint = NS_QUERY_DONE_BEGIN;
 	state->origresult = *resp;
 	ns_query_hookasync(qctx, doasync, state);
-	return (NS_HOOK_RETURN);
+	return NS_HOOK_RETURN;
 }
 
 static ns_hookresult_t
@@ -341,10 +336,10 @@ async_qctx_destroy(void *arg, void *cbdata, isc_result_t *resp) {
 	*resp = ISC_R_UNSET;
 
 	if (!qctx->detach_client) {
-		return (NS_HOOK_CONTINUE);
+		return NS_HOOK_CONTINUE;
 	}
 
 	client_state_destroy(qctx, inst);
 
-	return (NS_HOOK_CONTINUE);
+	return NS_HOOK_CONTINUE;
 }

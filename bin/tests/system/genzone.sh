@@ -33,9 +33,8 @@ cat <<EOF
 					3600 )
 EOF
 
-for n
-do
-	cat <<EOF
+for n; do
+  cat <<EOF
 @			NS	ns${n}
 ns${n}			A	10.53.0.${n}
 EOF
@@ -96,7 +95,7 @@ hinfo02			HINFO	PC NetBSD
 
 ; type 14
 minfo01			MINFO	rmailbx emailbx
-minfo02			MINFO	. . 
+minfo02			MINFO	. .
 
 ; type 15
 mx01			MX	10 mail
@@ -121,7 +120,7 @@ txt15			TXT	"bar\\;"
 
 ; type 17
 rp01			RP	mbox-dname txt-dname
-rp02			RP	. . 
+rp02			RP	. .
 
 ; type 18
 afsdb01			AFSDB	0 hostname
@@ -154,7 +153,7 @@ nsap-ptr01		NSAP-PTR .
 
 ; type 24
 ;sig01			SIG	NXT 1 3 ( 3600 20000102030405
-;				19961211100908 2143 foo.nil. 
+;				19961211100908 2143 foo.nil.
 ;				MxFcby9k/yvedMfQgKzhH5er0Mu/vILz45I
 ;				kskceFGgiWCn/GxHhai6VAuHAoNUz4YoU1t
 ;				VfSCSqQYn6//11U6Nld80jEeC8aTrO+KKmCaY= )
@@ -205,7 +204,7 @@ atma03			ATMA	1234567890abcdef
 atma04			ATMA	f.e.d.c.b.a.0.9.8.7.6.5.4.3.2.1
 
 ; type 35
-naptr01			NAPTR   0 0 "" "" "" . 
+naptr01			NAPTR   0 0 "" "" "" .
 naptr02			NAPTR   65535 65535 blurgh blorf blllbb foo.
 naptr02			NAPTR   65535 65535 "blurgh" "blorf" "blllbb" foo.
 
@@ -214,7 +213,7 @@ kx01			KX	10 kdc
 kx02			KX	10 .
 
 ; type 37
-cert01			CERT	65534 65535 254 ( 
+cert01			CERT	65534 65535 254 (
 				MxFcby9k/yvedMfQgKzhH5er0Mu/vILz45I
 				kskceFGgiWCn/GxHhai6VAuHAoNUz4YoU1t
 				VfSCSqQYn6//11U6Nld80jEeC8aTrO+KKmCaY= )
@@ -266,7 +265,7 @@ ipseckey05		IPSECKEY	( 10 2 2
 
 ; type 46
 rrsig01			RRSIG	NSEC 1 3 ( 3600 20000102030405
-				19961211100908 2143 foo.nil. 
+				19961211100908 2143 foo.nil.
 				MxFcby9k/yvedMfQgKzhH5er0Mu/vILz45I
 				kskceFGgiWCn/GxHhai6VAuHAoNUz4YoU1t
 				VfSCSqQYn6//11U6Nld80jEeC8aTrO+KKmCaY= )
@@ -278,7 +277,7 @@ nsec03			NSEC	. TYPE1
 nsec04			NSEC	. TYPE127
 
 ; type 48
-dnskey01		DNSKEY	512 ( 255 1 AQMFD5raczCJHViKtLYhWGz8hMY
+@			DNSKEY	512 ( 255 1 AQMFD5raczCJHViKtLYhWGz8hMY
 				9UGRuniJDBzC7w0aRyzWZriO6i2odGWWQVucZqKV
 				sENW91IOW4vqudngPZsY3GvQ/xVA8/7pyFj6b7Esg
 				a60zyGW6LFe9r8n6paHrlG5ojqf0BaqHT+8= )
@@ -366,11 +365,11 @@ openpgpkey		OPENPGPKEY	( AQMFD5raczCJHViKtLYhWGz8hMY
 				sENW91IOW4vqudngPZsY3GvQ/xVA8/7pyFj6b7Esg
 				a60zyGW6LFe9r8n6paHrlG5ojqf0BaqHT+8= )
 
-;type	62
+; type 62
 csync01			CSYNC	0 0 A NS AAAA
 csync02			CSYNC	0 0
 
-;type	63
+; type 63
 zonemd01		ZONEMD	2019020700 1 1 (
                                 C220B8A6ED5728A971902F7E3D4FD93A
                                 DEEA88B0453C2E8E8C863D465AB06CF3
@@ -382,8 +381,18 @@ zonemd02		ZONEMD	2019020700 1 2 (
                                 4E114D884E66F176EAB121CB02DB7D65
                                 2E0CC4827E7A3204F166B47E5613FD27
 				)
+; type 64
+svcb0			SVCB	0 example.net.
+svcb1			SVCB	1 . port=60
 
-; type 64 -- 98 (unassigned)
+; type 65
+https0			HTTPS	0 example.net.
+https1			HTTPS	1 . port=60
+
+; type 66
+dsync01			DSYNC	CDS NOTIFY 53 .
+
+; type 68 -- 98 (unassigned)
 
 ; type 99
 spf01			SPF	"v=spf1 -all"
@@ -479,7 +488,16 @@ amtrelay04		AMTRELAY 0 0 2 ::
 amtrelay05		AMTRELAY 0 0 3 example.net.
 amtrelay06		AMTRELAY \# 2 0004
 
-; type 261 -- 32767 (unassigned)
+; type 261
+resinfo			RESINFO	qnamemin exterr=15,16,17 infourl=https://resolver.example.com/guide
+
+; type 262
+wallet			WALLET	currency-identifer wallet-identifier
+wallet-multiple		WALLET	currency-identifer1 wallet-identifier1
+wallet-multiple		WALLET	currency-identifer1 wallet-identifier2
+wallet-multiple		WALLET	currency-identifer2 wallet-identifier3
+
+; type 265 -- 32767 (unassigned)
 
 ; type 32768
 ta			TA	30795 1 1 (
@@ -495,15 +513,9 @@ dlv			DLV	30795 1 1 (
 
 ; type 65280-65534 (private use)
 
-https0			HTTPS	0 example.net.
-https1			HTTPS	1 . port=60
-
-svcb0			SVCB	0 example.net.
-svcb1			SVCB	1 . port=60
-
 ; keydata (internal type used for managed keys)
 keydata			TYPE65533	\# 0
-keydata			TYPE65533	\# 6 010203040506 
+keydata			TYPE65533	\# 6 010203040506
 keydata			TYPE65533	\# 18 010203040506010203040506010203040506
 
 ; type 65535 (reserved)

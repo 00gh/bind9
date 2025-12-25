@@ -27,6 +27,7 @@ options {
 	listen-on-v6 { none; };
 	allow-transfer { any; };
 	recursion no;
+	dnssec-validation no;
 };
 
 key rndc_key {
@@ -41,6 +42,5 @@ controls {
 zone "nsec3-xfr-inline.kasp" {
 	type primary;
 	file "nsec3-xfr-inline.kasp.db";
-	inline-signing yes;
 	dnssec-policy "nsec3";
 };

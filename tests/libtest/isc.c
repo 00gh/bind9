@@ -32,12 +32,8 @@
 
 #include <tests/isc.h>
 
-isc_mem_t *mctx = NULL;
-isc_log_t *lctx = NULL;
-isc_loop_t *mainloop = NULL;
-isc_loopmgr_t *loopmgr = NULL;
-isc_nm_t *netmgr = NULL;
 unsigned int workers = 0;
+bool debug = false;
 
 static void
 adjustnofile(void) {
@@ -66,64 +62,53 @@ setup_workers(void **state ISC_ATTR_UNUSED) {
 	}
 	INSIST(workers != 0);
 
-	return (0);
+	return 0;
 }
 
 int
 setup_mctx(void **state ISC_ATTR_UNUSED) {
-	isc_mem_debugging |= ISC_MEM_DEBUGRECORD;
-	isc_mem_create(&mctx);
+	isc_mem_debugon(ISC_MEM_DEBUGRECORD);
 
-	return (0);
+	return 0;
 }
 
 int
 teardown_mctx(void **state ISC_ATTR_UNUSED) {
-	isc_mem_destroy(&mctx);
-
-	return (0);
+	return 0;
 }
 
 int
 setup_loopmgr(void **state ISC_ATTR_UNUSED) {
-	REQUIRE(mctx != NULL);
+	REQUIRE(isc_g_mctx != NULL);
 
 	setup_workers(state);
 
-	isc_loopmgr_create(mctx, workers, &loopmgr);
-	mainloop = isc_loop_main(loopmgr);
+	isc_loopmgr_create(isc_g_mctx, workers);
 
-	return (0);
+	return 0;
 }
 
 int
 teardown_loopmgr(void **state ISC_ATTR_UNUSED) {
-	REQUIRE(netmgr == NULL);
+	isc_loopmgr_destroy();
 
-	mainloop = NULL;
-	isc_loopmgr_destroy(&loopmgr);
-
-	return (0);
+	return 0;
 }
 
 int
 setup_netmgr(void **state ISC_ATTR_UNUSED) {
-	REQUIRE(loopmgr != NULL);
-
 	adjustnofile();
 
-	isc_netmgr_create(mctx, loopmgr, &netmgr);
+	isc_netmgr_create(isc_g_mctx);
 
-	return (0);
+	return 0;
 }
 
 int
 teardown_netmgr(void **state ISC_ATTR_UNUSED) {
-	REQUIRE(loopmgr != NULL);
+	isc_netmgr_destroy();
 
-	isc_netmgr_destroy(&netmgr);
-
-	return (0);
+	return 0;
 }
 
 int
@@ -131,7 +116,7 @@ setup_managers(void **state) {
 	setup_loopmgr(state);
 	setup_netmgr(state);
 
-	return (0);
+	return 0;
 }
 
 int
@@ -139,5 +124,5 @@ teardown_managers(void **state) {
 	teardown_netmgr(state);
 	teardown_loopmgr(state);
 
-	return (0);
+	return 0;
 }

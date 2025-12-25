@@ -42,22 +42,35 @@
  ***	Imports
  ***/
 
+/* Add -DDNS_CACHE_TRACE=1 to CFLAGS for detailed reference tracing */
+
 #include <stdbool.h>
 
-#include <isc/lang.h>
+#include <isc/refcount.h>
 #include <isc/stats.h>
 #include <isc/stdtime.h>
 
 #include <dns/types.h>
 
-ISC_LANG_BEGINDECLS
-
 /***
  ***	Functions
  ***/
+
+#if DNS_CACHE_TRACE
+#define dns_cache_ref(ptr)   dns_cache__ref(ptr, __func__, __FILE__, __LINE__)
+#define dns_cache_unref(ptr) dns_cache__unref(ptr, __func__, __FILE__, __LINE__)
+#define dns_cache_attach(ptr, ptrp) \
+	dns_cache__attach(ptr, ptrp, __func__, __FILE__, __LINE__)
+#define dns_cache_detach(ptrp) \
+	dns_cache__detach(ptrp, __func__, __FILE__, __LINE__)
+ISC_REFCOUNT_TRACE_DECL(dns_cache);
+#else
+ISC_REFCOUNT_DECL(dns_cache);
+#endif
+
 isc_result_t
-dns_cache_create(isc_loopmgr_t *loopmgr, dns_rdataclass_t rdclass,
-		 const char *cachename, dns_cache_t **cachep);
+dns_cache_create(dns_rdataclass_t rdclass, const char *cachename,
+		 isc_mem_t *mctx, dns_cache_t **cachep);
 /*%<
  * Create a new DNS cache.
  *
@@ -68,6 +81,8 @@ dns_cache_create(isc_loopmgr_t *loopmgr, dns_rdataclass_t rdclass,
  *\li	'loopmgr' is a valid loop manager.
  *
  *\li	'cachename' is a valid string.  This must not be NULL.
+
+ *\li	'mctx' is a valid memory context.
  *
  *\li	'cachep' is a valid pointer, and *cachep == NULL
  *
@@ -78,40 +93,6 @@ dns_cache_create(isc_loopmgr_t *loopmgr, dns_rdataclass_t rdclass,
  * Returns:
  *
  *\li	#ISC_R_SUCCESS
- *\li	#ISC_R_NOMEMORY
- */
-
-void
-dns_cache_attach(dns_cache_t *cache, dns_cache_t **targetp);
-/*%<
- * Attach *targetp to cache.
- *
- * Requires:
- *
- *\li	'cache' is a valid cache.
- *
- *\li	'targetp' points to a NULL dns_cache_t *.
- *
- * Ensures:
- *
- *\li	*targetp is attached to cache.
- */
-
-void
-dns_cache_detach(dns_cache_t **cachep);
-/*%<
- * Detach *cachep from its cache.
- *
- * Requires:
- *
- *\li	'cachep' points to a valid cache.
- *
- * Ensures:
- *
- *\li	*cachep is NULL.
- *
- *\li	If '*cachep' is the last reference to the cache,
- *		all resources used by the cache will be freed
  */
 
 void
@@ -208,7 +189,6 @@ dns_cache_flush(dns_cache_t *cache);
  *
  * Returns:
  *\li	#ISC_R_SUCCESS
- *\li	#ISC_R_NOMEMORY
  */
 
 isc_result_t
@@ -223,7 +203,6 @@ dns_cache_flushnode(dns_cache_t *cache, const dns_name_t *name, bool tree);
  *
  * Returns:
  *\li	#ISC_R_SUCCESS
- *\li	#ISC_R_NOMEMORY
  *\li	other error returns.
  */
 
@@ -239,7 +218,6 @@ dns_cache_flushname(dns_cache_t *cache, const dns_name_t *name);
  *
  * Returns:
  *\li	#ISC_R_SUCCESS
- *\li	#ISC_R_NOMEMORY
  *\li	other error returns.
  */
 
@@ -261,6 +239,18 @@ dns_cache_updatestats(dns_cache_t *cache, isc_result_t result);
  * Update cache statistics based on result code in 'result'
  */
 
+void
+dns_cache_setmaxrrperset(dns_cache_t *cache, uint32_t value);
+/*%<
+ * Set the maximum resource records per RRSet that can be cached.
+ */
+
+void
+dns_cache_setmaxtypepername(dns_cache_t *cache, uint32_t value);
+/*%<
+ * Set the maximum resource record types per owner name that can be cached.
+ */
+
 #ifdef HAVE_LIBXML2
 int
 dns_cache_renderxml(dns_cache_t *cache, void *writer0);
@@ -276,5 +266,3 @@ dns_cache_renderjson(dns_cache_t *cache, void *cstats0);
  * Render cache statistics and status in JSON
  */
 #endif /* HAVE_JSON_C */
-
-ISC_LANG_ENDDECLS

@@ -34,7 +34,7 @@ isc_backtrace(void **addrs, int maxaddrs) {
 	 * See notes in backtrace.h.
 	 */
 	if (addrs == NULL || maxaddrs <= 0) {
-		return (-1);
+		return -1;
 	}
 
 	/*
@@ -43,17 +43,17 @@ isc_backtrace(void **addrs, int maxaddrs) {
 	 */
 	n = backtrace(addrs, maxaddrs);
 	if (n < 2) {
-		return (-1);
+		return -1;
 	}
 	n--;
 	memmove(addrs, &addrs[1], sizeof(addrs[0]) * n);
 
-	return (n);
+	return n;
 }
 
 char **
 isc_backtrace_symbols(void *const *buffer, int size) {
-	return (backtrace_symbols(buffer, size));
+	return backtrace_symbols(buffer, size);
 }
 
 void
@@ -62,8 +62,8 @@ isc_backtrace_symbols_fd(void *const *buffer, int size, int fd) {
 }
 
 void
-isc_backtrace_log(isc_log_t *lctx, isc_logcategory_t *category,
-		  isc_logmodule_t *module, int level) {
+isc_backtrace_log(isc_logcategory_t category, isc_logmodule_t module,
+		  int level) {
 	void *tracebuf[ISC_BACKTRACE_MAXFRAME];
 	int nframes;
 	char **strs;
@@ -77,7 +77,7 @@ isc_backtrace_log(isc_log_t *lctx, isc_logcategory_t *category,
 		return;
 	}
 	for (int i = 0; i < nframes; i++) {
-		isc_log_write(lctx, category, module, level, "%s", strs[i]);
+		isc_log_write(category, module, level, "%s", strs[i]);
 	}
 }
 
@@ -88,7 +88,7 @@ isc_backtrace(void **addrs, int maxaddrs) {
 	UNUSED(addrs);
 	UNUSED(maxaddrs);
 
-	return (-1);
+	return -1;
 }
 
 char **
@@ -96,7 +96,7 @@ isc_backtrace_symbols(void *const *buffer, int size) {
 	UNUSED(buffer);
 	UNUSED(size);
 
-	return (NULL);
+	return NULL;
 }
 
 void
@@ -107,9 +107,8 @@ isc_backtrace_symbols_fd(void *const *buffer, int size, int fd) {
 }
 
 void
-isc_backtrace_log(isc_log_t *lctx, isc_logcategory_t *category,
-		  isc_logmodule_t *module, int level) {
-	UNUSED(lctx);
+isc_backtrace_log(isc_logcategory_t category, isc_logmodule_t module,
+		  int level) {
 	UNUSED(category);
 	UNUSED(module);
 	UNUSED(level);

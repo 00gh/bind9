@@ -45,16 +45,18 @@
 #include <inttypes.h>
 #include <stdbool.h>
 
-#include <dns/types.h>
+#include <isc/loop.h>
+#include <isc/mem.h>
+#include <isc/stdtime.h>
 
-ISC_LANG_BEGINDECLS
+#include <dns/types.h>
 
 /***
  ***	Functions
  ***/
 
-isc_result_t
-dns_badcache_init(isc_mem_t *mctx, unsigned int size, dns_badcache_t **bcp);
+dns_badcache_t *
+dns_badcache_new(isc_mem_t *mctx);
 /*%
  * Allocate and initialize a badcache and store it in '*bcp'.
  *
@@ -75,28 +77,25 @@ dns_badcache_destroy(dns_badcache_t **bcp);
 
 void
 dns_badcache_add(dns_badcache_t *bc, const dns_name_t *name,
-		 dns_rdatatype_t type, bool update, uint32_t flags,
-		 isc_time_t *expire);
+		 dns_rdatatype_t type, uint32_t flags, isc_stdtime_t expire);
 /*%
- * Adds a badcache entry to the badcache 'bc' for name 'name' and
- * type 'type'.  If an entry already exists, then it will be updated if
- * 'update' is true.  The entry will be stored with flags 'flags'
- * and expiration date 'expire'.
+ * Adds a badcache entry to the badcache 'bc' for name 'name' and type 'type'.
+ * If an entry already exists, then it will be updated.  The entry will be
+ * stored with flags 'flags' and expiration date 'expire'.
  *
  * Requires:
  * \li	bc to be a valid badcache.
  * \li	name != NULL
- * \li	expire != NULL
  */
 
-bool
+isc_result_t
 dns_badcache_find(dns_badcache_t *bc, const dns_name_t *name,
-		  dns_rdatatype_t type, uint32_t *flagp, isc_time_t *now);
+		  dns_rdatatype_t type, uint32_t *flagp, isc_stdtime_t now);
 /*%
- * Returns true if a record is found in the badcache 'bc' matching
+ * Returns ISC_R_SUCCESS if a record is found in the badcache 'bc' matching
  * 'name' and 'type', with an expiration date later than 'now'.
  * If 'flagp' is not NULL, then '*flagp' is updated to the flags
- * that were stored in the badcache entry.  Returns false if
+ * that were stored in the badcache entry.  Returns ISC_R_NOTFOUND if
  * no matching record is found.
  *
  * Requires:
@@ -145,5 +144,3 @@ dns_badcache_print(dns_badcache_t *bc, const char *cachename, FILE *fp);
  * \li	cachename != NULL
  * \li	fp != NULL
  */
-
-ISC_LANG_ENDDECLS

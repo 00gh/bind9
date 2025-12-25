@@ -11,22 +11,26 @@
 # information regarding copyright ownership.
 ############################################################################
 
+import json
+import os
+import sys
+
+from pathlib import Path
+
 #
 # Configuration file for the Sphinx documentation builder.
 #
 # This file only contains a selection of the most common options. For a full
 # list see the documentation:
-# http://www.sphinx-doc.org/en/master/config
+# https://www.sphinx-doc.org/en/master/config
 
 # -- Path setup --------------------------------------------------------------
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
-#
-# import os
-# import sys
-# sys.path.insert(0, os.path.abspath('.'))
+
+sys.path.append(str(Path(__file__).resolve().parent.parent / "misc"))
 
 # -- Project information -----------------------------------------------------
 
@@ -41,9 +45,7 @@ author = "Internet Systems Consortium"
 
 # -- General configuration ---------------------------------------------------
 
-# Build man pages directly in _build/man/, not in _build/man/<section>/.
-# This is what the shell code in Makefile.am expects.
-man_make_section_directory = False
+man_make_section_directory = True
 
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
@@ -101,6 +103,13 @@ man_pages = [
     ),
     ("dnssec-keygen", "dnssec-keygen", "DNSSEC key generation tool", author, 1),
     (
+        "dnssec-ksr",
+        "dnssec-ksr",
+        "create signed key response (SKR) files for offline KSK setups",
+        author,
+        1,
+    ),
+    (
         "dnssec-revoke",
         "dnssec-revoke",
         "set the REVOKED bit on a DNSSEC key",
@@ -116,13 +125,6 @@ man_pages = [
     ),
     ("dnssec-signzone", "dnssec-signzone", "DNSSEC zone signing tool", author, 1),
     ("dnssec-verify", "dnssec-verify", "DNSSEC zone verification tool", author, 1),
-    (
-        "dnstap-read",
-        "dnstap-read",
-        "print dnstap data in human-readable form",
-        author,
-        1,
-    ),
     (
         "filter-aaaa",
         "filter-aaaa",
@@ -168,9 +170,9 @@ man_pages = [
         1,
     ),
     (
-        "named-nzd2nzf",
-        "named-nzd2nzf",
-        "convert an NZD database to NZF text format",
+        "named-makejournal",
+        "named-makejournal",
+        "create a journal from zone files",
         author,
         1,
     ),
@@ -192,17 +194,64 @@ man_pages = [
     ("tsig-keygen", "tsig-keygen", "TSIG key generation tool", author, 8),
 ]
 
+bind_optional_pages = {
+    "dnstap-read": (
+        "dnstap-read",
+        "dnstap-read",
+        "print dnstap data in human-readable form",
+        author,
+        1,
+    ),
+    "named-nzd2nzf": (
+        "named-nzd2nzf",
+        "named-nzd2nzf",
+        "convert an NZD database to NZF text format",
+        author,
+        1,
+    ),
+}
+
+bind_build_root = os.getenv("BIND_BUILD_ROOT")
+if bind_build_root is None:
+    man_pages.extend(bind_optional_pages.values())
+else:
+    bind_build_path = Path(bind_build_root).resolve()
+    with open(
+        bind_build_path / "meson-info" / "intro-targets.json", encoding="utf-8"
+    ) as f:
+        for target in json.load(f):
+            if target["name"] in bind_optional_pages:
+                page = bind_optional_pages.pop(target["name"])
+                man_pages.append(page)
+
+    # Delete artifacts if an optional binary is no longer built.
+    # This happens when the build directory is reconfigured to exclude
+    # dnstap etc.
+    #
+    # Meson can't handle this because:
+    # - "man.p" is under our control
+    # - Meson just expects an entire folder as an output, this is just how sphinx works.
+    for unused in bind_optional_pages.values():
+        doctree = bind_build_path / "man.p" / f"{unused[0]}.doctree"
+        if doctree.exists():
+            doctree.unlink()
+
+        page = bind_build_path / "man" / f"man{unused[4]}" / f"{unused[0]}.{unused[4]}"
+        if page.exists():
+            page.unlink()
+
+
 #
-# The rst_epilog will be completely overwritten from the Makefile,
-# the definition here is provided purely for situations when
-# sphinx-build is run by hand.
+# The rst_epilog will be completely overwritten from meson
+# the definition here is provided for when manpages are generated
+# from built-in dist templates inside meson.
 #
 rst_epilog = """
-.. |rndc_conf| replace:: ``@sysconfdir@/rndc.conf``
-.. |rndc_key| replace:: ``@sysconfdir@/rndc.key``
-.. |named_conf| replace:: ``@sysconfdir@/named.conf``
-.. |named_pid| replace:: ``@runstatedir@/named.pid``
-.. |session_key| replace:: ``@runstatedir@/session.key``
+.. |rndc_conf| replace:: ``@SYSCONFDIR@/rndc.conf``
+.. |rndc_key| replace:: ``@SYSCONFDIR@/rndc.key``
+.. |named_conf| replace:: ``@SYSCONFDIR@/named.conf``
+.. |named_pid| replace:: ``@RUNSTATEDIR@/named.pid``
+.. |session_key| replace:: ``@RUNSTATEDIR@/session.key``
 """
 
 

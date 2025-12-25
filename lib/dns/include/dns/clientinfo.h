@@ -44,8 +44,6 @@
 
 #include <dns/ecs.h>
 
-ISC_LANG_BEGINDECLS
-
 /*****
 ***** Types
 *****/
@@ -53,7 +51,7 @@ ISC_LANG_BEGINDECLS
 #define DNS_CLIENTINFO_VERSION 3
 /*
  * Any updates to this structure should also be applied in
- * contrib/modules/dlz/dlz_minmal.h.
+ * https://gitlab.isc.org/isc-projects/dlz-modules/-/raw/main/modules/include/dlz_minimal.h
  */
 typedef struct dns_clientinfo {
 	uint16_t  version;
@@ -70,7 +68,7 @@ typedef isc_result_t (*dns_clientinfo_sourceip_t)(dns_clientinfo_t *client,
 
 /*
  * Any updates to this structure should also be applied in
- * contrib/modules/dlz/dlz_minmal.h.
+ * https://gitlab.isc.org/isc-projects/dlz-modules/-/raw/main/modules/include/dlz_minimal.h
  */
 typedef struct dns_clientinfomethods {
 	uint16_t		  version;
@@ -98,5 +96,3 @@ dns_clientinfo_setecs(dns_clientinfo_t *ci, dns_ecs_t *ecs);
  * Set the ECS client data associated with a clientinfo object 'ci'.
  * If 'ecs' is NULL, initialize ci->ecs to 0/0/0; otherwise copy it.
  */
-
-ISC_LANG_ENDDECLS

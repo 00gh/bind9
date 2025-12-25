@@ -98,11 +98,11 @@ up-to-date DNSSEC practices:
         type primary;
         file "dnssec.example.db";
         dnssec-policy default;
-        inline-signing yes;
     };
 
 The :any:`dnssec-policy` statement requires dynamic DNS to be set up, or
-:any:`inline-signing` to be enabled. In the example above we use the latter.
+:any:`inline-signing` to be enabled. In the example above we use the latter,
+because the ``default`` policy uses :any:`inline-signing`.
 
 This is sufficient to create the necessary signing keys, and generate
 ``DNSKEY``, ``RRSIG``, and ``NSEC`` records for the zone. BIND also takes
@@ -174,7 +174,6 @@ by configuring parental agents:
         type primary;
         file "dnssec.example.db";
         dnssec-policy default;
-        inline-signing yes;
         parental-agents { 192.0.2.1; };
         checkds explicit;
     };
@@ -196,6 +195,11 @@ respectively.
 To roll a key sooner than scheduled, or to roll a key that
 has an unlimited lifetime, use:
 :option:`rndc dnssec -rollover -key 12345 dnssec.example. <rndc dnssec>`.
+
+You can pregenerate keys and save them in the key directory. As long as the
+key has no timing metadata set, it may be selected as a successor in the
+upcoming key rollover. To pregenerate keys without setting key timing metadata,
+use the `-G` option: ``dnssec-keygen -G dnssec.example.``.
 
 To revert a signed zone back to an insecure zone, change
 the zone configuration to use the built-in "insecure" policy. Detailed
@@ -228,7 +232,7 @@ There are several tools available to manually sign a zone.
 
 To set up a DNSSEC secure zone manually, a series of steps
 must be followed. Please see chapter
-:ref:`advanced_discussions_manual_key_management_and_signing` in the
+:ref:`advanced_discussions_manual_signing` in the
 :doc:`dnssec-guide` for more information.
 
 Monitoring with Private Type Records

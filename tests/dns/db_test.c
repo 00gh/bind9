@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -21,9 +22,12 @@
 #define UNIT_TESTING
 #include <cmocka.h>
 
+#include <isc/lib.h>
+
 #include <dns/db.h>
 #include <dns/dbiterator.h>
 #include <dns/journal.h>
+#include <dns/lib.h>
 #include <dns/name.h>
 #include <dns/rdatalist.h>
 
@@ -38,15 +42,14 @@
  */
 
 /* test multiple calls to dns_db_getoriginnode */
-ISC_RUN_TEST_IMPL(getoriginnode) {
+ISC_LOOP_TEST_IMPL(getoriginnode) {
 	dns_db_t *db = NULL;
 	dns_dbnode_t *node = NULL;
 	isc_result_t result;
 
-	UNUSED(state);
-
-	result = dns_db_create(mctx, "rbt", dns_rootname, dns_dbtype_zone,
-			       dns_rdataclass_in, 0, NULL, &db);
+	result = dns_db_create(isc_g_mctx, ZONEDB_DEFAULT, dns_rootname,
+			       dns_dbtype_zone, dns_rdataclass_in, 0, NULL,
+			       &db);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	result = dns_db_getoriginnode(db, &node);
@@ -58,18 +61,18 @@ ISC_RUN_TEST_IMPL(getoriginnode) {
 	dns_db_detachnode(db, &node);
 
 	dns_db_detach(&db);
+	isc_loopmgr_shutdown();
 }
 
 /* test getservestalettl and setservestalettl */
-ISC_RUN_TEST_IMPL(getsetservestalettl) {
+ISC_LOOP_TEST_IMPL(getsetservestalettl) {
 	dns_db_t *db = NULL;
 	isc_result_t result;
 	dns_ttl_t ttl;
 
-	UNUSED(state);
-
-	result = dns_db_create(mctx, "rbt", dns_rootname, dns_dbtype_cache,
-			       dns_rdataclass_in, 0, NULL, &db);
+	result = dns_db_create(isc_g_mctx, CACHEDB_DEFAULT, dns_rootname,
+			       dns_dbtype_cache, dns_rdataclass_in, 0, NULL,
+			       &db);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	ttl = 5000;
@@ -87,10 +90,11 @@ ISC_RUN_TEST_IMPL(getsetservestalettl) {
 	assert_int_equal(ttl, 6 * 3600);
 
 	dns_db_detach(&db);
+	isc_loopmgr_shutdown();
 }
 
 /* check DNS_DBFIND_STALEOK works */
-ISC_RUN_TEST_IMPL(dns_dbfind_staleok) {
+ISC_LOOP_TEST_IMPL(dns_dbfind_staleok) {
 	dns_db_t *db = NULL;
 	dns_dbnode_t *node = NULL;
 	dns_fixedname_t example_fixed;
@@ -104,16 +108,15 @@ ISC_RUN_TEST_IMPL(dns_dbfind_staleok) {
 	isc_result_t result;
 	unsigned char data[] = { 0x0a, 0x00, 0x00, 0x01 };
 
-	UNUSED(state);
-
-	result = dns_db_create(mctx, "rbt", dns_rootname, dns_dbtype_cache,
-			       dns_rdataclass_in, 0, NULL, &db);
+	result = dns_db_create(isc_g_mctx, CACHEDB_DEFAULT, dns_rootname,
+			       dns_dbtype_cache, dns_rdataclass_in, 0, NULL,
+			       &db);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	example = dns_fixedname_initname(&example_fixed);
 	found = dns_fixedname_initname(&found_fixed);
 
-	result = dns_name_fromstring(example, "example", 0, NULL);
+	result = dns_name_fromstring(example, "example", dns_rootname, 0, NULL);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	/*
@@ -176,9 +179,7 @@ ISC_RUN_TEST_IMPL(dns_dbfind_staleok) {
 		do {
 			count++;
 			assert_in_range(count, 1, 21); /* loop sanity */
-			assert_int_equal(rdataset.attributes &
-						 DNS_RDATASETATTR_STALE,
-					 0);
+			assert_int_equal(rdataset.attributes.stale, false);
 			assert_true(rdataset.ttl > 0);
 			dns_db_detachnode(db, &node);
 			dns_rdataset_disassociate(&rdataset);
@@ -212,9 +213,8 @@ ISC_RUN_TEST_IMPL(dns_dbfind_staleok) {
 				count++;
 				assert_in_range(count, 0, 49); /* loop sanity */
 				assert_int_equal(result, ISC_R_SUCCESS);
-				assert_int_equal(rdataset.attributes &
-							 DNS_RDATASETATTR_STALE,
-						 DNS_RDATASETATTR_STALE);
+				assert_int_equal(rdataset.attributes.stale,
+						 true);
 				dns_db_detachnode(db, &node);
 				dns_rdataset_disassociate(&rdataset);
 
@@ -239,17 +239,17 @@ ISC_RUN_TEST_IMPL(dns_dbfind_staleok) {
 	}
 
 	dns_db_detach(&db);
+	isc_loopmgr_shutdown();
 }
 
 /* database class */
-ISC_RUN_TEST_IMPL(class) {
+ISC_LOOP_TEST_IMPL(class) {
 	isc_result_t result;
 	dns_db_t *db = NULL;
 
-	UNUSED(state);
-
-	result = dns_db_create(mctx, "rbt", dns_rootname, dns_dbtype_zone,
-			       dns_rdataclass_in, 0, NULL, &db);
+	result = dns_db_create(isc_g_mctx, ZONEDB_DEFAULT, dns_rootname,
+			       dns_dbtype_zone, dns_rdataclass_in, 0, NULL,
+			       &db);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	result = dns_db_load(db, TESTS_DIR "/testdata/db/data.db",
@@ -259,18 +259,18 @@ ISC_RUN_TEST_IMPL(class) {
 	assert_int_equal(dns_db_class(db), dns_rdataclass_in);
 
 	dns_db_detach(&db);
+	isc_loopmgr_shutdown();
 }
 
 /* database type */
-ISC_RUN_TEST_IMPL(dbtype) {
+ISC_LOOP_TEST_IMPL(dbtype) {
 	isc_result_t result;
 	dns_db_t *db = NULL;
 
-	UNUSED(state);
-
 	/* DB has zone semantics */
-	result = dns_db_create(mctx, "rbt", dns_rootname, dns_dbtype_zone,
-			       dns_rdataclass_in, 0, NULL, &db);
+	result = dns_db_create(isc_g_mctx, ZONEDB_DEFAULT, dns_rootname,
+			       dns_dbtype_zone, dns_rdataclass_in, 0, NULL,
+			       &db);
 	assert_int_equal(result, ISC_R_SUCCESS);
 	result = dns_db_load(db, TESTS_DIR "/testdata/db/data.db",
 			     dns_masterformat_text, 0);
@@ -280,19 +280,18 @@ ISC_RUN_TEST_IMPL(dbtype) {
 	dns_db_detach(&db);
 
 	/* DB has cache semantics */
-	result = dns_db_create(mctx, "rbt", dns_rootname, dns_dbtype_cache,
-			       dns_rdataclass_in, 0, NULL, &db);
-	assert_int_equal(result, ISC_R_SUCCESS);
-	result = dns_db_load(db, TESTS_DIR "/testdata/db/data.db",
-			     dns_masterformat_text, 0);
+	result = dns_db_create(isc_g_mctx, CACHEDB_DEFAULT, dns_rootname,
+			       dns_dbtype_cache, dns_rdataclass_in, 0, NULL,
+			       &db);
 	assert_int_equal(result, ISC_R_SUCCESS);
 	assert_true(dns_db_iscache(db));
 	assert_false(dns_db_iszone(db));
 	dns_db_detach(&db);
+	isc_loopmgr_shutdown();
 }
 
 /* database versions */
-ISC_RUN_TEST_IMPL(version) {
+ISC_LOOP_TEST_IMPL(version) {
 	isc_result_t result;
 	dns_fixedname_t fname, ffound;
 	dns_name_t *name, *foundname;
@@ -300,8 +299,6 @@ ISC_RUN_TEST_IMPL(version) {
 	dns_dbversion_t *ver = NULL, *new = NULL;
 	dns_dbnode_t *node = NULL;
 	dns_rdataset_t rdataset;
-
-	UNUSED(state);
 
 	result = dns_test_loaddb(&db, dns_dbtype_zone, "test.test",
 				 TESTS_DIR "/testdata/db/data.db");
@@ -351,20 +348,53 @@ ISC_RUN_TEST_IMPL(version) {
 	result = dns_db_find(db, name, ver, dns_rdatatype_a, 0, 0, &node,
 			     foundname, &rdataset, NULL);
 	assert_int_equal(result, ISC_R_SUCCESS);
-	dns_rdataset_disassociate(&rdataset);
 	dns_db_detachnode(db, &node);
+
+	/* Now we create a node with an empty parent */
+	result = dns_db_newversion(db, &new);
+	dns_test_namefromstring("long.ent.name.test.test.", &fname);
+	result = dns_db_findnode(db, name, true, &node);
+	assert_int_equal(result, ISC_R_SUCCESS);
+	result = dns_db_addrdataset(db, node, new, 0, &rdataset, 0, NULL);
+	assert_int_equal(result, ISC_R_SUCCESS);
+	dns_rdataset_disassociate(&rdataset);
+	dns_rdataset_init(&rdataset);
+
+	/* look up the ENT; it should be empty */
+	dns_test_namefromstring("ent.name.test.test.", &fname);
+	dns_db_detachnode(db, &node);
+	result = dns_db_find(db, name, new, dns_rdatatype_a, 0, 0, &node,
+			     foundname, &rdataset, NULL);
+	assert_int_equal(result, DNS_R_EMPTYNAME);
+
+	/* ... but then we roll it back... */
+	dns_db_closeversion(db, &new, false);
+
+	/* ... and the ENT should be NXDOMAIN now */
+	dns_test_namefromstring("ent.name.test.test.", &fname);
+	result = dns_db_find(db, name, ver, dns_rdatatype_a, 0, 0, &node,
+			     foundname, &rdataset, NULL);
+	assert_int_equal(result, DNS_R_NXDOMAIN);
+
+	if (dns_rdataset_isassociated(&rdataset)) {
+		dns_rdataset_disassociate(&rdataset);
+	}
+	if (node != NULL) {
+		dns_db_detachnode(db, &node);
+	}
 	dns_db_closeversion(db, &ver, false);
 
 	dns_db_detach(&db);
+	isc_loopmgr_shutdown();
 }
 
 ISC_TEST_LIST_START
-ISC_TEST_ENTRY(getoriginnode)
-ISC_TEST_ENTRY(getsetservestalettl)
-ISC_TEST_ENTRY(dns_dbfind_staleok)
-ISC_TEST_ENTRY(class)
-ISC_TEST_ENTRY(dbtype)
-ISC_TEST_ENTRY(version)
+ISC_TEST_ENTRY_CUSTOM(getoriginnode, setup_managers, teardown_managers)
+ISC_TEST_ENTRY_CUSTOM(getsetservestalettl, setup_managers, teardown_managers)
+ISC_TEST_ENTRY_CUSTOM(dns_dbfind_staleok, setup_managers, teardown_managers)
+ISC_TEST_ENTRY_CUSTOM(class, setup_managers, teardown_managers)
+ISC_TEST_ENTRY_CUSTOM(dbtype, setup_managers, teardown_managers)
+ISC_TEST_ENTRY_CUSTOM(version, setup_managers, teardown_managers)
 ISC_TEST_LIST_END
 
 ISC_TEST_MAIN

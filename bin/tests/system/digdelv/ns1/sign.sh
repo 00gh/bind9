@@ -16,16 +16,16 @@
 
 set -e
 
-(cd ../ns2 && $SHELL sign.sh )
+(cd ../ns2 && $SHELL sign.sh)
 
 cp "../ns2/dsset-example." .
 
-ksk=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone .)
+ksk=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" .)
 
 cp root.db.in root.db
 
-"$SIGNER" -Sgz -f root.db -o . root.db.in > /dev/null 2>&1
+"$SIGNER" -Sgz -f root.db -o . root.db.in >/dev/null 2>&1
 
-keyfile_to_key_id "$ksk" > keyid
-grep -Ev '^;' < "$ksk.key" | cut -f 7- -d ' ' > keydata
-keyfile_to_initial_keys "$ksk" > anchor.dnskey
+keyfile_to_key_id "$ksk" >keyid
+grep -Ev '^;' <"$ksk.key" | cut -f 7- -d ' ' >keydata
+keyfile_to_initial_keys "$ksk" >anchor.dnskey

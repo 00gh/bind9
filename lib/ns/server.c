@@ -35,11 +35,10 @@
 		RUNTIME_CHECK(result == ISC_R_SUCCESS); \
 	} while (0)
 
-isc_result_t
+void
 ns_server_create(isc_mem_t *mctx, ns_matchview_t matchingview,
 		 ns_server_t **sctxp) {
-	ns_server_t *sctx;
-	isc_result_t result;
+	ns_server_t *sctx = NULL;
 
 	REQUIRE(sctxp != NULL && *sctxp == NULL);
 
@@ -56,24 +55,28 @@ ns_server_create(isc_mem_t *mctx, ns_matchview_t matchingview,
 
 	isc_mem_attach(mctx, &sctx->mctx);
 
+	/*
+	 * See here for more details:
+	 * https://github.com/jemalloc/jemalloc/issues/2483
+	 */
+
 	isc_refcount_init(&sctx->references, 1);
 
 	isc_quota_init(&sctx->xfroutquota, 10);
 	isc_quota_init(&sctx->tcpquota, 10);
 	isc_quota_init(&sctx->recursionquota, 100);
 	isc_quota_init(&sctx->updquota, 100);
+	isc_quota_init(&sctx->sig0checksquota, 1);
 	ISC_LIST_INIT(sctx->http_quotas);
 	isc_mutex_init(&sctx->http_quotas_lock);
 
-	CHECKFATAL(dns_tkeyctx_create(mctx, &sctx->tkeyctx));
+	ns_stats_create(mctx, ns_statscounter_max, &sctx->nsstats);
 
-	CHECKFATAL(ns_stats_create(mctx, ns_statscounter_max, &sctx->nsstats));
+	dns_rdatatypestats_create(mctx, &sctx->rcvquerystats);
 
-	CHECKFATAL(dns_rdatatypestats_create(mctx, &sctx->rcvquerystats));
+	dns_opcodestats_create(mctx, &sctx->opcodestats);
 
-	CHECKFATAL(dns_opcodestats_create(mctx, &sctx->opcodestats));
-
-	CHECKFATAL(dns_rcodestats_create(mctx, &sctx->rcodestats));
+	dns_rcodestats_create(mctx, &sctx->rcodestats);
 
 	isc_histomulti_create(mctx, DNS_SIZEHISTO_SIGBITSIN,
 			      &sctx->udpinstats4);
@@ -103,8 +106,6 @@ ns_server_create(isc_mem_t *mctx, ns_matchview_t matchingview,
 
 	sctx->magic = SCTX_MAGIC;
 	*sctxp = sctx;
-
-	return (ISC_R_SUCCESS);
 }
 
 void
@@ -126,29 +127,26 @@ ns_server_detach(ns_server_t **sctxp) {
 	*sctxp = NULL;
 
 	if (isc_refcount_decrement(&sctx->references) == 1) {
-		ns_altsecret_t *altsecret;
-		isc_quota_t *http_quota;
-
-		while ((altsecret = ISC_LIST_HEAD(sctx->altsecrets)) != NULL) {
+		ISC_LIST_FOREACH (sctx->altsecrets, altsecret, link) {
 			ISC_LIST_UNLINK(sctx->altsecrets, altsecret, link);
 			isc_mem_put(sctx->mctx, altsecret, sizeof(*altsecret));
 		}
 
+		if (sctx->sig0checksquota_exempt != NULL) {
+			dns_acl_detach(&sctx->sig0checksquota_exempt);
+		}
+
+		isc_quota_destroy(&sctx->sig0checksquota);
 		isc_quota_destroy(&sctx->updquota);
 		isc_quota_destroy(&sctx->recursionquota);
 		isc_quota_destroy(&sctx->tcpquota);
 		isc_quota_destroy(&sctx->xfroutquota);
 
-		http_quota = ISC_LIST_HEAD(sctx->http_quotas);
-		while (http_quota != NULL) {
-			isc_quota_t *next = NULL;
-
-			next = ISC_LIST_NEXT(http_quota, link);
+		ISC_LIST_FOREACH (sctx->http_quotas, http_quota, link) {
 			ISC_LIST_DEQUEUE(sctx->http_quotas, http_quota, link);
 			isc_quota_destroy(http_quota);
 			isc_mem_put(sctx->mctx, http_quota,
 				    sizeof(*http_quota));
-			http_quota = next;
 		}
 		isc_mutex_destroy(&sctx->http_quotas_lock);
 
@@ -215,14 +213,13 @@ ns_server_setserverid(ns_server_t *sctx, const char *serverid) {
 
 	if (sctx->server_id != NULL) {
 		isc_mem_free(sctx->mctx, sctx->server_id);
-		sctx->server_id = NULL;
 	}
 
 	if (serverid != NULL) {
 		sctx->server_id = isc_mem_strdup(sctx->mctx, serverid);
 	}
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 void
@@ -239,7 +236,7 @@ bool
 ns_server_getoption(ns_server_t *sctx, unsigned int option) {
 	REQUIRE(SCTX_VALID(sctx));
 
-	return ((sctx->options & option) != 0);
+	return (sctx->options & option) != 0;
 }
 
 void

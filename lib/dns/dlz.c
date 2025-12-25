@@ -56,10 +56,10 @@
 
 #include <isc/buffer.h>
 #include <isc/commandline.h>
+#include <isc/log.h>
 #include <isc/magic.h>
 #include <isc/mem.h>
 #include <isc/netmgr.h>
-#include <isc/once.h>
 #include <isc/random.h>
 #include <isc/rwlock.h>
 #include <isc/string.h>
@@ -68,10 +68,11 @@
 #include <dns/db.h>
 #include <dns/dlz.h>
 #include <dns/fixedname.h>
-#include <dns/log.h>
 #include <dns/master.h>
 #include <dns/ssu.h>
 #include <dns/zone.h>
+
+#include "dlz_p.h"
 
 /***
  *** Supported DLZ DB Implementations Registry
@@ -79,12 +80,16 @@
 
 static ISC_LIST(dns_dlzimplementation_t) dlz_implementations;
 static isc_rwlock_t dlz_implock;
-static isc_once_t once = ISC_ONCE_INIT;
 
-static void
-dlz_initialize(void) {
+void
+dns__dlz_initialize(void) {
 	isc_rwlock_init(&dlz_implock);
 	ISC_LIST_INIT(dlz_implementations);
+}
+
+void
+dns__dlz_shutdown(void) {
+	isc_rwlock_destroy(&dlz_implock);
 }
 
 /*%
@@ -92,16 +97,12 @@ dlz_initialize(void) {
  */
 static dns_dlzimplementation_t *
 dlz_impfind(const char *name) {
-	dns_dlzimplementation_t *imp;
-
-	for (imp = ISC_LIST_HEAD(dlz_implementations); imp != NULL;
-	     imp = ISC_LIST_NEXT(imp, link))
-	{
+	ISC_LIST_FOREACH (dlz_implementations, imp, link) {
 		if (strcasecmp(name, imp->name) == 0) {
-			return (imp);
+			return imp;
 		}
 	}
-	return (NULL);
+	return NULL;
 }
 
 /***
@@ -113,7 +114,6 @@ dns_dlzallowzonexfr(dns_view_t *view, const dns_name_t *name,
 		    const isc_sockaddr_t *clientaddr, dns_db_t **dbp) {
 	isc_result_t result = ISC_R_NOTFOUND;
 	dns_dlzallowzonexfr_t allowzonexfr;
-	dns_dlzdb_t *dlzdb;
 
 	/*
 	 * Performs checks to make sure data is as we expect it to be.
@@ -124,9 +124,7 @@ dns_dlzallowzonexfr(dns_view_t *view, const dns_name_t *name,
 	/*
 	 * Find a driver in which the zone exists and transfer is supported
 	 */
-	for (dlzdb = ISC_LIST_HEAD(view->dlz_searched); dlzdb != NULL;
-	     dlzdb = ISC_LIST_NEXT(dlzdb, link))
-	{
+	ISC_LIST_FOREACH (view->dlz_searched, dlzdb, link) {
 		REQUIRE(DNS_DLZ_VALID(dlzdb));
 
 		allowzonexfr = dlzdb->implementation->methods->allowzonexfr;
@@ -142,7 +140,7 @@ dns_dlzallowzonexfr(dns_view_t *view, const dns_name_t *name,
 		case ISC_R_SUCCESS:
 		case ISC_R_NOPERM:
 		case ISC_R_DEFAULT:
-			return (result);
+			return result;
 		default:
 			break;
 		}
@@ -152,7 +150,7 @@ dns_dlzallowzonexfr(dns_view_t *view, const dns_name_t *name,
 		result = ISC_R_NOTFOUND;
 	}
 
-	return (result);
+	return result;
 }
 
 isc_result_t
@@ -163,12 +161,6 @@ dns_dlzcreate(isc_mem_t *mctx, const char *dlzname, const char *drivername,
 	dns_dlzdb_t *db = NULL;
 
 	/*
-	 * initialize the dlz_implementations list, this is guaranteed
-	 * to only really happen once.
-	 */
-	isc_once_do(&once, dlz_initialize);
-
-	/*
 	 * Performs checks to make sure data is as we expect it to be.
 	 */
 	REQUIRE(dbp != NULL && *dbp == NULL);
@@ -177,9 +169,8 @@ dns_dlzcreate(isc_mem_t *mctx, const char *dlzname, const char *drivername,
 	REQUIRE(mctx != NULL);
 
 	/* write log message */
-	isc_log_write(dns_lctx, DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ,
-		      ISC_LOG_INFO, "Loading '%s' using driver %s", dlzname,
-		      drivername);
+	isc_log_write(DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ, ISC_LOG_INFO,
+		      "Loading '%s' using driver %s", dlzname, drivername);
 
 	/* lock the dlz_implementations list so we can search it. */
 	RWLOCK(&dlz_implock, isc_rwlocktype_read);
@@ -189,13 +180,13 @@ dns_dlzcreate(isc_mem_t *mctx, const char *dlzname, const char *drivername,
 	if (impinfo == NULL) {
 		RWUNLOCK(&dlz_implock, isc_rwlocktype_read);
 
-		isc_log_write(dns_lctx, DNS_LOGCATEGORY_DATABASE,
-			      DNS_LOGMODULE_DLZ, ISC_LOG_ERROR,
+		isc_log_write(DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ,
+			      ISC_LOG_ERROR,
 			      "unsupported DLZ database driver '%s'."
 			      "  %s not loaded.",
 			      drivername, dlzname);
 
-		return (ISC_R_NOTFOUND);
+		return ISC_R_NOTFOUND;
 	}
 
 	/* Allocate memory to hold the DLZ database driver */
@@ -221,18 +212,18 @@ dns_dlzcreate(isc_mem_t *mctx, const char *dlzname, const char *drivername,
 
 	db->magic = DNS_DLZ_MAGIC;
 	isc_mem_attach(mctx, &db->mctx);
-	isc_log_write(dns_lctx, DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ,
+	isc_log_write(DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ,
 		      ISC_LOG_DEBUG(2), "DLZ driver loaded successfully.");
 	*dbp = db;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 failure:
-	isc_log_write(dns_lctx, DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ,
+	isc_log_write(DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ,
 		      ISC_LOG_ERROR, "DLZ driver failed to load.");
 
 	/* impinfo->methods->create failed. */
 	isc_mem_free(mctx, db->dlzname);
 	isc_mem_put(mctx, db, sizeof(*db));
-	return (result);
+	return result;
 }
 
 void
@@ -241,7 +232,7 @@ dns_dlzdestroy(dns_dlzdb_t **dbp) {
 	dns_dlzdb_t *db;
 
 	/* Write debugging message to log */
-	isc_log_write(dns_lctx, DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ,
+	isc_log_write(DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ,
 		      ISC_LOG_DEBUG(2), "Unloading DLZ driver.");
 
 	/*
@@ -277,7 +268,7 @@ dns_dlzregister(const char *drivername, const dns_dlzmethods_t *methods,
 	dns_dlzimplementation_t *dlz_imp;
 
 	/* Write debugging message to log */
-	isc_log_write(dns_lctx, DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ,
+	isc_log_write(DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ,
 		      ISC_LOG_DEBUG(2), "Registering DLZ driver '%s'",
 		      drivername);
 
@@ -292,12 +283,6 @@ dns_dlzregister(const char *drivername, const dns_dlzmethods_t *methods,
 	REQUIRE(mctx != NULL);
 	REQUIRE(dlzimp != NULL && *dlzimp == NULL);
 
-	/*
-	 * initialize the dlz_implementations list, this is guaranteed
-	 * to only really happen once.
-	 */
-	isc_once_do(&once, dlz_initialize);
-
 	/* lock the dlz_implementations list so we can modify it. */
 	RWLOCK(&dlz_implock, isc_rwlocktype_write);
 
@@ -307,11 +292,11 @@ dns_dlzregister(const char *drivername, const dns_dlzmethods_t *methods,
 	 */
 	dlz_imp = dlz_impfind(drivername);
 	if (dlz_imp != NULL) {
-		isc_log_write(dns_lctx, DNS_LOGCATEGORY_DATABASE,
-			      DNS_LOGMODULE_DLZ, ISC_LOG_DEBUG(2),
+		isc_log_write(DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ,
+			      ISC_LOG_DEBUG(2),
 			      "DLZ Driver '%s' already registered", drivername);
 		RWUNLOCK(&dlz_implock, isc_rwlocktype_write);
-		return (ISC_R_EXISTS);
+		return ISC_R_EXISTS;
 	}
 
 	/*
@@ -341,7 +326,7 @@ dns_dlzregister(const char *drivername, const dns_dlzmethods_t *methods,
 	/* Pass back the dlz_implementation that we created. */
 	*dlzimp = dlz_imp;
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 /*%
@@ -353,7 +338,7 @@ dns_dlzregister(const char *drivername, const dns_dlzmethods_t *methods,
  */
 isc_result_t
 dns_dlzstrtoargv(isc_mem_t *mctx, char *s, unsigned int *argcp, char ***argvp) {
-	return (isc_commandline_strtoargv(mctx, s, argcp, argvp, 0));
+	return isc_commandline_strtoargv(mctx, s, argcp, argvp, 0);
 }
 
 /*%
@@ -365,19 +350,13 @@ dns_dlzunregister(dns_dlzimplementation_t **dlzimp) {
 	dns_dlzimplementation_t *dlz_imp;
 
 	/* Write debugging message to log */
-	isc_log_write(dns_lctx, DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ,
+	isc_log_write(DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ,
 		      ISC_LOG_DEBUG(2), "Unregistering DLZ driver.");
 
 	/*
 	 * Performs checks to make sure data is as we expect it to be.
 	 */
 	REQUIRE(dlzimp != NULL && *dlzimp != NULL);
-
-	/*
-	 * initialize the dlz_implementations list, this is guaranteed
-	 * to only really happen once.
-	 */
-	isc_once_do(&once, dlz_initialize);
 
 	dlz_imp = *dlzimp;
 
@@ -424,15 +403,15 @@ dns_dlz_writeablezone(dns_view_t *view, dns_dlzdb_t *dlzdb,
 	isc_buffer_add(&buffer, strlen(zone_name));
 	dns_fixedname_init(&fixorigin);
 	result = dns_name_fromtext(dns_fixedname_name(&fixorigin), &buffer,
-				   dns_rootname, 0, NULL);
+				   dns_rootname, 0);
 	if (result != ISC_R_SUCCESS) {
 		goto cleanup;
 	}
 	origin = dns_fixedname_name(&fixorigin);
 
 	if (!dlzdb->search) {
-		isc_log_write(dns_lctx, DNS_LOGCATEGORY_DATABASE,
-			      DNS_LOGMODULE_DLZ, ISC_LOG_WARNING,
+		isc_log_write(DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ,
+			      ISC_LOG_WARNING,
 			      "DLZ %s has 'search no;', but attempted to "
 			      "register writeable zone %s.",
 			      dlzdb->dlzname, zone_name);
@@ -441,7 +420,7 @@ dns_dlz_writeablezone(dns_view_t *view, dns_dlzdb_t *dlzdb,
 	}
 
 	/* See if the zone already exists */
-	result = dns_view_findzone(view, origin, &dupzone);
+	result = dns_view_findzone(view, origin, DNS_ZTFIND_EXACT, &dupzone);
 	if (result == ISC_R_SUCCESS) {
 		dns_zone_detach(&dupzone);
 		result = ISC_R_EXISTS;
@@ -450,14 +429,8 @@ dns_dlz_writeablezone(dns_view_t *view, dns_dlzdb_t *dlzdb,
 	INSIST(dupzone == NULL);
 
 	/* Create it */
-	result = dns_zone_create(&zone, view->mctx, 0);
-	if (result != ISC_R_SUCCESS) {
-		goto cleanup;
-	}
-	result = dns_zone_setorigin(zone, origin);
-	if (result != ISC_R_SUCCESS) {
-		goto cleanup;
-	}
+	dns_zone_create(&zone, view->mctx, 0);
+	dns_zone_setorigin(zone, origin);
 	dns_zone_setview(zone, view);
 
 	dns_zone_setadded(zone, true);
@@ -479,7 +452,7 @@ cleanup:
 		dns_zone_detach(&zone);
 	}
 
-	return (result);
+	return result;
 }
 
 /*%
@@ -498,14 +471,14 @@ dns_dlzconfigure(dns_view_t *view, dns_dlzdb_t *dlzdb,
 	impl = dlzdb->implementation;
 
 	if (impl->methods->configure == NULL) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	dlzdb->configure_callback = callback;
 
 	result = impl->methods->configure(impl->driverarg, dlzdb->dbdata, view,
 					  dlzdb);
-	return (result);
+	return result;
 }
 
 bool
@@ -521,13 +494,13 @@ dns_dlz_ssumatch(dns_dlzdb_t *dlzdatabase, const dns_name_t *signer,
 	impl = dlzdatabase->implementation;
 
 	if (impl->methods->ssumatch == NULL) {
-		isc_log_write(dns_lctx, DNS_LOGCATEGORY_DATABASE,
-			      DNS_LOGMODULE_DLZ, ISC_LOG_INFO,
+		isc_log_write(DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ,
+			      ISC_LOG_INFO,
 			      "No ssumatch method for DLZ database");
-		return (false);
+		return false;
 	}
 
 	r = impl->methods->ssumatch(signer, name, tcpaddr, type, key,
 				    impl->driverarg, dlzdatabase->dbdata);
-	return (r);
+	return r;
 }

@@ -72,27 +72,18 @@
 #include <sys/socket.h> /* Contractual promise. */
 #include <sys/types.h>
 
-#include <isc/lang.h>
 #include <isc/types.h>
 
 #ifndef IN6ADDR_LOOPBACK_INIT
 #ifdef s6_addr
 /*% IPv6 address loopback init */
-#define IN6ADDR_LOOPBACK_INIT                                                  \
-	{                                                                      \
-		{                                                              \
-			{                                                      \
-				0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 \
-			}                                                      \
-		}                                                              \
-	}
-#else /* ifdef s6_addr */
 #define IN6ADDR_LOOPBACK_INIT                                          \
 	{                                                              \
-		{                                                      \
-			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 \
-		}                                                      \
+		{ { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } } \
 	}
+#else /* ifdef s6_addr */
+#define IN6ADDR_LOOPBACK_INIT \
+	{ { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } }
 #endif /* ifdef s6_addr */
 #endif /* ifndef IN6ADDR_LOOPBACK_INIT */
 
@@ -101,20 +92,11 @@
 /*% IPv6 v4mapped prefix init */
 #define IN6ADDR_V4MAPPED_INIT                                                \
 	{                                                                    \
-		{                                                            \
-			{                                                    \
-				0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, \
-					0, 0, 0                              \
-			}                                                    \
-		}                                                            \
+		{ { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0 } } \
 	}
 #else /* ifdef s6_addr */
-#define IN6ADDR_V4MAPPED_INIT                                                \
-	{                                                                    \
-		{                                                            \
-			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0 \
-		}                                                            \
-	}
+#define IN6ADDR_V4MAPPED_INIT \
+	{ { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0 } }
 #endif /* ifdef s6_addr */
 #endif /* ifndef IN6ADDR_V4MAPPED_INIT */
 
@@ -191,66 +173,35 @@
 
 /*% Is IP address multicast? */
 #define ISC_IPADDR_ISMULTICAST(i) \
-	(((uint32_t)(i)&ISC__IPADDR(0xf0000000)) == ISC__IPADDR(0xe0000000))
+	(((uint32_t)(i) & ISC__IPADDR(0xf0000000)) == ISC__IPADDR(0xe0000000))
 
 #define ISC_IPADDR_ISEXPERIMENTAL(i) \
-	(((uint32_t)(i)&ISC__IPADDR(0xf0000000)) == ISC__IPADDR(0xf0000000))
+	(((uint32_t)(i) & ISC__IPADDR(0xf0000000)) == ISC__IPADDR(0xf0000000))
 
 /***
  *** Functions.
  ***/
 
-ISC_LANG_BEGINDECLS
-
 isc_result_t
 isc_net_probeipv4(void);
 /*%<
- * Check if the system's kernel supports IPv4.
+ * Check if the IPv4 has been disabled.
  *
  * Returns:
  *
  *\li	#ISC_R_SUCCESS		IPv4 is supported.
- *\li	#ISC_R_NOTFOUND		IPv4 is not supported.
  *\li	#ISC_R_DISABLED		IPv4 is disabled.
- *\li	#ISC_R_UNEXPECTED
  */
 
 isc_result_t
 isc_net_probeipv6(void);
 /*%<
- * Check if the system's kernel supports IPv6.
+ * Check if the IPv6 has been disabled.
  *
  * Returns:
  *
  *\li	#ISC_R_SUCCESS		IPv6 is supported.
- *\li	#ISC_R_NOTFOUND		IPv6 is not supported.
  *\li	#ISC_R_DISABLED		IPv6 is disabled.
- *\li	#ISC_R_UNEXPECTED
- */
-
-isc_result_t
-isc_net_probe_ipv6only(void);
-/*%<
- * Check if the system's kernel supports the IPV6_V6ONLY socket option.
- *
- * Returns:
- *
- *\li	#ISC_R_SUCCESS		the option is supported for both TCP and UDP.
- *\li	#ISC_R_NOTFOUND		IPv6 itself or the option is not supported.
- *\li	#ISC_R_UNEXPECTED
- */
-
-isc_result_t
-isc_net_probe_ipv6pktinfo(void);
-/*
- * Check if the system's kernel supports the IPV6_(RECV)PKTINFO socket option
- * for UDP sockets.
- *
- * Returns:
- *
- * \li	#ISC_R_SUCCESS		the option is supported.
- * \li	#ISC_R_NOTFOUND		IPv6 itself or the option is not supported.
- * \li	#ISC_R_UNEXPECTED
  */
 
 void
@@ -264,12 +215,6 @@ isc_net_enableipv4(void);
 
 void
 isc_net_enableipv6(void);
-
-isc_result_t
-isc_net_probeunix(void);
-/*
- * Returns whether UNIX domain sockets are supported.
- */
 
 isc_result_t
 isc_net_getudpportrange(int af, in_port_t *low, in_port_t *high);
@@ -287,5 +232,3 @@ isc_net_getudpportrange(int af, in_port_t *low, in_port_t *high);
  *\li	*low and *high will be the ports specifying the low and high ends of
  *	the range.
  */
-
-ISC_LANG_ENDDECLS

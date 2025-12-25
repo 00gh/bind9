@@ -25,22 +25,21 @@
 
 #include <isc/atomic.h>
 #include <isc/commandline.h>
-#include <isc/condition.h>
 #include <isc/job.h>
+#include <isc/lib.h>
 #include <isc/loop.h>
 #include <isc/mem.h>
 #include <isc/os.h>
 #include <isc/time.h>
 #include <isc/timer.h>
 #include <isc/util.h>
-#include <isc/uv.h>
 
 #include "timer.c"
 
 #include <tests/isc.h>
 
 /* Set to true (or use -v option) for verbose output */
-static bool verbose = false;
+static bool verbose = true;
 
 #define FUDGE_SECONDS	  0	    /* in absence of clock_getres() */
 #define FUDGE_NANOSECONDS 500000000 /* in absence of clock_getres() */
@@ -71,7 +70,7 @@ setup_test_run(void *data) {
 	lasttime = isc_time_now();
 	UNLOCK(&lasttime_mx);
 
-	isc_timer_create(mainloop, action, (void *)timertype, &timer);
+	isc_timer_create(isc_loop_main(), action, (void *)timertype, &timer);
 	isc_timer_start(timer, timertype, interval);
 }
 
@@ -89,8 +88,8 @@ setup_test(isc_timertype_t timertype, isc_interval_t *interval,
 
 	atomic_store(&errcnt, ISC_R_SUCCESS);
 
-	isc_loop_setup(mainloop, setup_test_run, &arg);
-	isc_loopmgr_run(loopmgr);
+	isc_loop_setup(isc_loop_main(), setup_test_run, &arg);
+	isc_loopmgr_run();
 
 	assert_int_equal(atomic_load(&errcnt), ISC_R_SUCCESS);
 
@@ -169,7 +168,7 @@ ticktock(void *arg) {
 	if (atomic_load(&eventcnt) == nevents) {
 		endtime = isc_time_now();
 		isc_timer_destroy(&timer);
-		isc_loopmgr_shutdown(loopmgr);
+		isc_loopmgr_shutdown();
 	}
 }
 
@@ -232,7 +231,7 @@ test_idle(void *arg) {
 	isc_mutex_unlock(&lasttime_mx);
 
 	isc_timer_destroy(&timer);
-	isc_loopmgr_shutdown(loopmgr);
+	isc_loopmgr_shutdown();
 }
 
 /* timer type once idles out */
@@ -301,7 +300,7 @@ test_reset(void *arg) {
 		}
 	} else {
 		isc_timer_destroy(&timer);
-		isc_loopmgr_shutdown(loopmgr);
+		isc_loopmgr_shutdown();
 	}
 }
 
@@ -346,6 +345,7 @@ tick_event(void *arg) {
 	 */
 	if (tick == 0) {
 		isc_timer_destroy(&tickertimer);
+		isc_loopmgr_shutdown();
 	}
 }
 
@@ -362,7 +362,6 @@ once_event(void *arg) {
 	 */
 	atomic_store(&startflag, true);
 
-	isc_loopmgr_shutdown(loopmgr);
 	isc_timer_destroy(&oncetimer);
 }
 
@@ -393,14 +392,14 @@ ISC_LOOP_TEST_SETUP_TEARDOWN_IMPL(purge) {
 	isc_interval_set(&interval, seconds, 0);
 
 	tickertimer = NULL;
-	isc_timer_create(mainloop, tick_event, NULL, &tickertimer);
+	isc_timer_create(isc_loop_main(), tick_event, NULL, &tickertimer);
 	isc_timer_start(tickertimer, isc_timertype_ticker, &interval);
 
 	oncetimer = NULL;
 
 	isc_interval_set(&interval, (seconds * 2) + 1, 0);
 
-	isc_timer_create(mainloop, once_event, NULL, &oncetimer);
+	isc_timer_create(isc_loop_main(), once_event, NULL, &oncetimer);
 	isc_timer_start(oncetimer, isc_timertype_once, &interval);
 }
 
@@ -408,15 +407,15 @@ ISC_LOOP_TEST_SETUP_TEARDOWN_IMPL(purge) {
  * Set of tests that check whether the rescheduling works as expected.
  */
 
-uint64_t timer_start;
-uint64_t timer_stop;
+isc_time_t timer_start;
+isc_time_t timer_stop;
 uint64_t timer_expect;
 uint64_t timer_ticks;
 isc_interval_t timer_interval;
 isc_timertype_t timer_type;
 
 ISC_LOOP_TEARDOWN_IMPL(timer_expect) {
-	uint64_t diff = (timer_stop - timer_start) / 1000000000;
+	uint64_t diff = isc_time_microdiff(&timer_stop, &timer_start) / 1000000;
 	assert_true(diff == timer_expect);
 }
 
@@ -424,15 +423,15 @@ static void
 timer_event(void *arg ISC_ATTR_UNUSED) {
 	if (--timer_ticks == 0) {
 		isc_timer_destroy(&timer);
-		isc_loopmgr_shutdown(loopmgr);
-		timer_stop = uv_hrtime();
+		isc_loopmgr_shutdown();
+		timer_stop = isc_loop_now(isc_loop());
 	} else {
 		isc_timer_start(timer, timer_type, &timer_interval);
 	}
 }
 
 ISC_LOOP_SETUP_IMPL(reschedule_up) {
-	timer_start = uv_hrtime();
+	timer_start = isc_loop_now(isc_loop());
 	timer_expect = 1;
 	timer_ticks = 1;
 	timer_type = isc_timertype_once;
@@ -440,19 +439,19 @@ ISC_LOOP_SETUP_IMPL(reschedule_up) {
 
 ISC_LOOP_TEST_CUSTOM_IMPL(reschedule_up, setup_loop_reschedule_up,
 			  teardown_loop_timer_expect) {
-	isc_timer_create(mainloop, timer_event, NULL, &timer);
+	isc_timer_create(isc_loop_main(), timer_event, NULL, &timer);
 
 	/* Schedule the timer to fire immediately */
 	isc_interval_set(&timer_interval, 0, 0);
 	isc_timer_start(timer, timer_type, &timer_interval);
 
-	/* And then reschedule it to 2 seconds */
+	/* And then reschedule it to 1 second */
 	isc_interval_set(&timer_interval, 1, 0);
 	isc_timer_start(timer, timer_type, &timer_interval);
 }
 
 ISC_LOOP_SETUP_IMPL(reschedule_down) {
-	timer_start = uv_hrtime();
+	timer_start = isc_loop_now(isc_loop());
 	timer_expect = 0;
 	timer_ticks = 1;
 	timer_type = isc_timertype_once;
@@ -460,9 +459,9 @@ ISC_LOOP_SETUP_IMPL(reschedule_down) {
 
 ISC_LOOP_TEST_CUSTOM_IMPL(reschedule_down, setup_loop_reschedule_down,
 			  teardown_loop_timer_expect) {
-	isc_timer_create(mainloop, timer_event, NULL, &timer);
+	isc_timer_create(isc_loop_main(), timer_event, NULL, &timer);
 
-	/* Schedule the timer to fire at 1 second */
+	/* Schedule the timer to fire at 10 seconds */
 	isc_interval_set(&timer_interval, 10, 0);
 	isc_timer_start(timer, timer_type, &timer_interval);
 
@@ -472,7 +471,7 @@ ISC_LOOP_TEST_CUSTOM_IMPL(reschedule_down, setup_loop_reschedule_down,
 }
 
 ISC_LOOP_SETUP_IMPL(reschedule_from_callback) {
-	timer_start = uv_hrtime();
+	timer_start = isc_loop_now(isc_loop());
 	timer_expect = 1;
 	timer_ticks = 2;
 	timer_type = isc_timertype_once;
@@ -481,21 +480,21 @@ ISC_LOOP_SETUP_IMPL(reschedule_from_callback) {
 ISC_LOOP_TEST_CUSTOM_IMPL(reschedule_from_callback,
 			  setup_loop_reschedule_from_callback,
 			  teardown_loop_timer_expect) {
-	isc_timer_create(mainloop, timer_event, NULL, &timer);
+	isc_timer_create(isc_loop_main(), timer_event, NULL, &timer);
 
 	isc_interval_set(&timer_interval, 0, NS_PER_SEC / 2);
 	isc_timer_start(timer, timer_type, &timer_interval);
 }
 
 ISC_LOOP_SETUP_IMPL(zero) {
-	timer_start = uv_hrtime();
+	timer_start = isc_loop_now(isc_loop());
 	timer_expect = 0;
 	timer_ticks = 1;
 	timer_type = isc_timertype_once;
 }
 
 ISC_LOOP_TEST_CUSTOM_IMPL(zero, setup_loop_zero, teardown_loop_timer_expect) {
-	isc_timer_create(mainloop, timer_event, NULL, &timer);
+	isc_timer_create(isc_loop_main(), timer_event, NULL, &timer);
 
 	/* Schedule the timer to fire immediately (in the next event loop) */
 	isc_interval_set(&timer_interval, 0, 0);
@@ -503,7 +502,7 @@ ISC_LOOP_TEST_CUSTOM_IMPL(zero, setup_loop_zero, teardown_loop_timer_expect) {
 }
 
 ISC_LOOP_SETUP_IMPL(reschedule_ticker) {
-	timer_start = uv_hrtime();
+	timer_start = isc_loop_now(isc_loop());
 	timer_expect = 1;
 	timer_ticks = 5;
 	timer_type = isc_timertype_ticker;
@@ -511,7 +510,7 @@ ISC_LOOP_SETUP_IMPL(reschedule_ticker) {
 
 ISC_LOOP_TEST_CUSTOM_IMPL(reschedule_ticker, setup_loop_reschedule_ticker,
 			  teardown_loop_timer_expect) {
-	isc_timer_create(mainloop, timer_event, NULL, &timer);
+	isc_timer_create(isc_loop_main(), timer_event, NULL, &timer);
 
 	/* Schedule the timer to fire immediately (in the next event loop) */
 	isc_interval_set(&timer_interval, 0, 0);

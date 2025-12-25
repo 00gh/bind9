@@ -13,6 +13,7 @@
 
 #include <inttypes.h>
 
+#include <isc/hashmap.h>
 #include <isc/list.h>
 #include <isc/mem.h>
 #include <isc/netaddr.h>
@@ -22,8 +23,8 @@
 #include <isc/sockaddr.h>
 #include <isc/util.h>
 
+#include <dns/fixedname.h>
 #include <dns/name.h>
-#include <dns/rbt.h>
 #include <dns/transport.h>
 
 #define TRANSPORT_MAGIC	     ISC_MAGIC('T', 'r', 'n', 's')
@@ -37,7 +38,7 @@ struct dns_transport_list {
 	isc_refcount_t references;
 	isc_mem_t *mctx;
 	isc_rwlock_t lock;
-	dns_rbt_t *transports[DNS_TRANSPORT_COUNT];
+	isc_hashmap_t *transports[DNS_TRANSPORT_COUNT];
 };
 
 typedef enum ternary { ter_none = 0, ter_true = 1, ter_false = 2 } ternary_t;
@@ -47,6 +48,8 @@ struct dns_transport {
 	isc_refcount_t references;
 	isc_mem_t *mctx;
 	dns_transport_type_t type;
+	dns_fixedname_t fn;
+	dns_name_t *name;
 	struct {
 		char *tlsname;
 		char *certfile;
@@ -54,6 +57,7 @@ struct dns_transport {
 		char *cafile;
 		char *remote_hostname;
 		char *ciphers;
+		char *cipher_suites;
 		uint32_t protocol_versions;
 		ternary_t prefer_server_ciphers;
 		bool always_verify_remote;
@@ -64,81 +68,79 @@ struct dns_transport {
 	} doh;
 };
 
-static void
-free_dns_transport(void *node, void *arg) {
+static bool
+transport_match(void *node, const void *key) {
 	dns_transport_t *transport = node;
 
-	REQUIRE(node != NULL);
-
-	UNUSED(arg);
-
-	dns_transport_detach(&transport);
+	return dns_name_equal(transport->name, key);
 }
 
 static isc_result_t
 list_add(dns_transport_list_t *list, const dns_name_t *name,
 	 const dns_transport_type_t type, dns_transport_t *transport) {
 	isc_result_t result;
-	dns_rbt_t *rbt = NULL;
+	isc_hashmap_t *hm = NULL;
 
 	RWLOCK(&list->lock, isc_rwlocktype_write);
-	rbt = list->transports[type];
-	INSIST(rbt != NULL);
+	hm = list->transports[type];
+	INSIST(hm != NULL);
 
-	result = dns_rbt_addname(rbt, name, transport);
-
+	transport->name = dns_fixedname_initname(&transport->fn);
+	dns_name_copy(name, transport->name);
+	result = isc_hashmap_add(hm, dns_name_hash(name), transport_match, name,
+				 transport, NULL);
 	RWUNLOCK(&list->lock, isc_rwlocktype_write);
 
-	return (result);
+	return result;
 }
 
 dns_transport_type_t
-dns_transport_get_type(dns_transport_t *transport) {
+dns_transport_get_type(const dns_transport_t *transport) {
 	REQUIRE(VALID_TRANSPORT(transport));
 
-	return (transport->type);
+	return transport->type;
 }
 
 char *
-dns_transport_get_certfile(dns_transport_t *transport) {
+dns_transport_get_certfile(const dns_transport_t *transport) {
 	REQUIRE(VALID_TRANSPORT(transport));
 
-	return (transport->tls.certfile);
+	return transport->tls.certfile;
 }
 
 char *
-dns_transport_get_keyfile(dns_transport_t *transport) {
+dns_transport_get_keyfile(const dns_transport_t *transport) {
 	REQUIRE(VALID_TRANSPORT(transport));
 
-	return (transport->tls.keyfile);
+	return transport->tls.keyfile;
 }
 
 char *
-dns_transport_get_cafile(dns_transport_t *transport) {
+dns_transport_get_cafile(const dns_transport_t *transport) {
 	REQUIRE(VALID_TRANSPORT(transport));
 
-	return (transport->tls.cafile);
+	return transport->tls.cafile;
 }
 
 char *
-dns_transport_get_remote_hostname(dns_transport_t *transport) {
+dns_transport_get_remote_hostname(const dns_transport_t *transport) {
 	REQUIRE(VALID_TRANSPORT(transport));
 
-	return (transport->tls.remote_hostname);
+	return transport->tls.remote_hostname;
 }
 
 char *
-dns_transport_get_endpoint(dns_transport_t *transport) {
+dns_transport_get_endpoint(const dns_transport_t *transport) {
 	REQUIRE(VALID_TRANSPORT(transport));
 
-	return (transport->doh.endpoint);
+	return transport->doh.endpoint;
 }
 
 dns_http_mode_t
-dns_transport_get_mode(dns_transport_t *transport) {
+dns_transport_get_mode(const dns_transport_t *transport) {
 	REQUIRE(VALID_TRANSPORT(transport));
 
-	return (transport->doh.mode);
+	return transport->doh.mode;
 }
 
 dns_transport_t *
@@ -153,7 +155,7 @@ dns_transport_new(const dns_name_t *name, dns_transport_type_t type,
 
 	list_add(list, name, type, transport);
 
-	return (transport);
+	return transport;
 }
 
 void
@@ -257,7 +259,7 @@ uint32_t
 dns_transport_get_tls_versions(const dns_transport_t *transport) {
 	REQUIRE(VALID_TRANSPORT(transport));
 
-	return (transport->tls.protocol_versions);
+	return transport->tls.protocol_versions;
 }
 
 void
@@ -293,17 +295,41 @@ dns_transport_set_tlsname(dns_transport_t *transport, const char *tlsname) {
 }
 
 char *
-dns_transport_get_ciphers(dns_transport_t *transport) {
+dns_transport_get_ciphers(const dns_transport_t *transport) {
 	REQUIRE(VALID_TRANSPORT(transport));
 
-	return (transport->tls.ciphers);
+	return transport->tls.ciphers;
+}
+
+void
+dns_transport_set_cipher_suites(dns_transport_t *transport,
+				const char *cipher_suites) {
+	REQUIRE(VALID_TRANSPORT(transport));
+	REQUIRE(transport->type == DNS_TRANSPORT_TLS ||
+		transport->type == DNS_TRANSPORT_HTTP);
+
+	if (transport->tls.cipher_suites != NULL) {
+		isc_mem_free(transport->mctx, transport->tls.cipher_suites);
+	}
+
+	if (cipher_suites != NULL) {
+		transport->tls.cipher_suites = isc_mem_strdup(transport->mctx,
+							      cipher_suites);
+	}
 }
 
 char *
-dns_transport_get_tlsname(dns_transport_t *transport) {
+dns_transport_get_cipher_suites(const dns_transport_t *transport) {
 	REQUIRE(VALID_TRANSPORT(transport));
 
-	return (transport->tls.tlsname);
+	return transport->tls.cipher_suites;
+}
+
+char *
+dns_transport_get_tlsname(const dns_transport_t *transport) {
+	REQUIRE(VALID_TRANSPORT(transport));
+
+	return transport->tls.tlsname;
 }
 
 void
@@ -322,13 +348,13 @@ dns_transport_get_prefer_server_ciphers(const dns_transport_t *transport,
 	REQUIRE(VALID_TRANSPORT(transport));
 	REQUIRE(preferp != NULL);
 	if (transport->tls.prefer_server_ciphers == ter_none) {
-		return (false);
+		return false;
 	} else if (transport->tls.prefer_server_ciphers == ter_true) {
 		*preferp = true;
-		return (true);
+		return true;
 	} else if (transport->tls.prefer_server_ciphers == ter_false) {
 		*preferp = false;
-		return (true);
+		return true;
 	}
 
 	UNREACHABLE();
@@ -366,6 +392,7 @@ dns_transport_get_tlsctx(dns_transport_t *transport, const isc_sockaddr_t *peer,
 	isc_tlsctx_client_session_cache_t *found_sess_cache = NULL;
 	uint32_t tls_versions;
 	const char *ciphers = NULL;
+	const char *cipher_suites = NULL;
 	bool prefer_server_ciphers;
 	uint16_t family;
 	const char *tlsname = NULL;
@@ -420,6 +447,10 @@ dns_transport_get_tlsctx(dns_transport_t *transport, const isc_sockaddr_t *peer,
 		ciphers = dns_transport_get_ciphers(transport);
 		if (ciphers != NULL) {
 			isc_tlsctx_set_cipherlist(tlsctx, ciphers);
+		}
+		cipher_suites = dns_transport_get_cipher_suites(transport);
+		if (cipher_suites != NULL) {
+			isc_tlsctx_set_cipher_suites(tlsctx, cipher_suites);
 		}
 
 		if (dns_transport_get_prefer_server_ciphers(
@@ -523,7 +554,24 @@ dns_transport_get_tlsctx(dns_transport_t *transport, const isc_sockaddr_t *peer,
 			 */
 			INSIST(found != NULL);
 			isc_tlsctx_free(&tlsctx);
-			isc_tls_cert_store_free(&store);
+			/*
+			 * The 'store' variable can be 'NULL' when remote server
+			 * verification is not enabled (that is, when Strict or
+			 * Mutual TLS are not used).
+			 *
+			 * The 'found_store' might be equal to 'store' as there
+			 * is one-to-many relation between a store and
+			 * per-transport TLS contexts. In that case, the call to
+			 * 'isc_tlsctx_cache_find()' above could have returned a
+			 * store via the 'found_store' variable, whose value we
+			 * can assign to 'store' later. In that case,
+			 * 'isc_tlsctx_cache_add()' will return the same value.
+			 * When that happens, we should not free the store
+			 * object, as it is managed by the TLS context cache.
+			 */
+			if (store != NULL && store != found_store) {
+				isc_tls_cert_store_free(&store);
+			}
 			isc_tlsctx_client_session_cache_detach(&sess_cache);
 			/* Let's return the data from the cache. */
 			*psess_cache = found_sess_cache;
@@ -547,7 +595,7 @@ dns_transport_get_tlsctx(dns_transport_t *transport, const isc_sockaddr_t *peer,
 		*pctx = found;
 	}
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 
 failure:
 	if (tlsctx != NULL) {
@@ -565,7 +613,7 @@ failure:
 		isc_tls_cert_store_free(&store);
 	}
 
-	return (result);
+	return result;
 }
 
 static void
@@ -590,6 +638,9 @@ transport_destroy(dns_transport_t *transport) {
 	}
 	if (transport->tls.ciphers != NULL) {
 		isc_mem_free(transport->mctx, transport->tls.ciphers);
+	}
+	if (transport->tls.cipher_suites != NULL) {
+		isc_mem_free(transport->mctx, transport->tls.cipher_suites);
 	}
 
 	if (transport->tls.tlsname != NULL) {
@@ -629,21 +680,22 @@ dns_transport_find(const dns_transport_type_t type, const dns_name_t *name,
 		   dns_transport_list_t *list) {
 	isc_result_t result;
 	dns_transport_t *transport = NULL;
-	dns_rbt_t *rbt = NULL;
+	isc_hashmap_t *hm = NULL;
 
 	REQUIRE(VALID_TRANSPORT_LIST(list));
 	REQUIRE(list->transports[type] != NULL);
 
-	rbt = list->transports[type];
+	hm = list->transports[type];
 
 	RWLOCK(&list->lock, isc_rwlocktype_read);
-	result = dns_rbt_findname(rbt, name, 0, NULL, (void *)&transport);
+	result = isc_hashmap_find(hm, dns_name_hash(name), transport_match,
+				  name, (void **)&transport);
 	if (result == ISC_R_SUCCESS) {
 		isc_refcount_increment(&transport->references);
 	}
 	RWUNLOCK(&list->lock, isc_rwlocktype_read);
 
-	return (transport);
+	return transport;
 }
 
 dns_transport_list_t *
@@ -660,13 +712,10 @@ dns_transport_list_new(isc_mem_t *mctx) {
 	list->magic = TRANSPORT_LIST_MAGIC;
 
 	for (size_t type = 0; type < DNS_TRANSPORT_COUNT; type++) {
-		isc_result_t result;
-		result = dns_rbt_create(list->mctx, free_dns_transport, NULL,
-					&list->transports[type]);
-		RUNTIME_CHECK(result == ISC_R_SUCCESS);
+		isc_hashmap_create(list->mctx, 10, &list->transports[type]);
 	}
 
-	return (list);
+	return list;
 }
 
 void
@@ -686,9 +735,24 @@ transport_list_destroy(dns_transport_list_t *list) {
 	list->magic = 0;
 
 	for (size_t type = 0; type < DNS_TRANSPORT_COUNT; type++) {
-		if (list->transports[type] != NULL) {
-			dns_rbt_destroy(&list->transports[type]);
+		isc_result_t result;
+		isc_hashmap_iter_t *it = NULL;
+
+		if (list->transports[type] == NULL) {
+			continue;
 		}
+
+		isc_hashmap_iter_create(list->transports[type], &it);
+		for (result = isc_hashmap_iter_first(it);
+		     result == ISC_R_SUCCESS;
+		     result = isc_hashmap_iter_delcurrent_next(it))
+		{
+			dns_transport_t *transport = NULL;
+			isc_hashmap_iter_current(it, (void **)&transport);
+			dns_transport_detach(&transport);
+		}
+		isc_hashmap_iter_destroy(&it);
+		isc_hashmap_destroy(&list->transports[type]);
 	}
 	isc_rwlock_destroy(&list->lock);
 	isc_mem_putanddetach(&list->mctx, list, sizeof(*list));
@@ -706,5 +770,21 @@ dns_transport_list_detach(dns_transport_list_t **listp) {
 
 	if (isc_refcount_decrement(&list->references) == 1) {
 		transport_list_destroy(list);
+	}
+}
+
+const char *
+dns_transport_totext(dns_transport_type_t type) {
+	switch (type) {
+	case DNS_TRANSPORT_UDP:
+		return "udp";
+	case DNS_TRANSPORT_TCP:
+		return "tcp";
+	case DNS_TRANSPORT_TLS:
+		return "tls";
+	case DNS_TRANSPORT_HTTP:
+		return "https";
+	default:
+		UNREACHABLE();
 	}
 }

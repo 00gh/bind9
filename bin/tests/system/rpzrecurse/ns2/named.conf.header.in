@@ -23,12 +23,10 @@ options {
 	listen-on { 10.53.0.2; };
 	listen-on-v6 { none; };
 	recursion yes;
-	dnssec-validation yes;
+	dnssec-validation no;
 	querylog yes;
-
-	# let ns3 start dnsrpzd
-	include "../dnsrps.conf";
 };
+
 
 key rndc_key {
 	secret "1234abcd8765";
@@ -38,4 +36,3 @@ key rndc_key {
 controls {
 	inet 10.53.0.2 port @CONTROLPORT@ allow { any; } keys { rndc_key; };
 };
-

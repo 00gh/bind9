@@ -24,10 +24,10 @@
 
 #include <inttypes.h>
 
-#include <isc/lang.h>
 #include <isc/mem.h>
 #include <isc/refcount.h>
 #include <isc/types.h>
+#include <isc/urcu.h>
 
 typedef void (*isc_job_cb)(void *);
 typedef struct isc_job isc_job_t;
@@ -35,15 +35,16 @@ typedef struct isc_job isc_job_t;
 struct isc_job {
 	isc_job_cb cb;
 	void	  *cbarg;
-	ISC_LINK(isc_job_t) link;
+	union {
+		struct cds_wfcq_node wfcq_node;
+		ISC_LINK(isc_job_t) link;
+	};
 };
 
-#define ISC_JOB_INITIALIZER                  \
-	{                                    \
-		.link = ISC_LINK_INITIALIZER \
+#define ISC_JOB_INITIALIZER                   \
+	{                                     \
+		.link = ISC_LINK_INITIALIZER, \
 	}
-
-ISC_LANG_BEGINDECLS
 
 void
 isc_job_run(isc_loop_t *loop, isc_job_t *job, isc_job_cb cb, void *cbarg);
@@ -58,5 +59,3 @@ isc_job_run(isc_loop_t *loop, isc_job_t *job, isc_job_cb cb, void *cbarg);
  *\li	'cb' is a callback function, must be non-NULL
  *\li	'cbarg' is passed to the 'cb' as the only argument, may be NULL
  */
-
-ISC_LANG_ENDDECLS

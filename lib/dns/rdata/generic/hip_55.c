@@ -20,7 +20,6 @@
 static isc_result_t
 fromtext_hip(ARGS_FROMTEXT) {
 	isc_token_t token;
-	dns_name_t name;
 	isc_buffer_t buffer;
 	isc_buffer_t hit_len;
 	isc_buffer_t key_len;
@@ -96,7 +95,6 @@ fromtext_hip(ARGS_FROMTEXT) {
 	/*
 	 * Rendezvous Servers.
 	 */
-	dns_name_init(&name, NULL);
 	do {
 		RETERR(isc_lex_getmastertoken(lexer, &token,
 					      isc_tokentype_string, true));
@@ -104,8 +102,7 @@ fromtext_hip(ARGS_FROMTEXT) {
 			break;
 		}
 		buffer_fromregion(&buffer, &token.value.as_region);
-		RETTOK(dns_name_fromtext(&name, &buffer, origin, options,
-					 target));
+		RETTOK(dns_name_wirefromtext(&buffer, origin, options, target));
 	} while (1);
 
 	/*
@@ -113,7 +110,7 @@ fromtext_hip(ARGS_FROMTEXT) {
 	 */
 	isc_lex_ungettoken(lexer, &token);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -173,11 +170,11 @@ totext_hip(ARGS_TOTEXT) {
 	/*
 	 * Rendezvous Servers.
 	 */
-	dns_name_init(&name, NULL);
+	dns_name_init(&name);
 	while (region.length > 0) {
 		dns_name_fromregion(&name, &region);
 
-		RETERR(dns_name_totext(&name, false, target));
+		RETERR(dns_name_totext(&name, 0, target));
 		isc_region_consume(&region, name.length);
 		if (region.length > 0) {
 			RETERR(str_totext(tctx->linebreak, target));
@@ -186,7 +183,7 @@ totext_hip(ARGS_TOTEXT) {
 	if ((tctx->flags & DNS_STYLEFLAG_MULTILINE) != 0) {
 		RETERR(str_totext(" )", target));
 	}
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -228,10 +225,10 @@ fromwire_hip(ARGS_FROMWIRE) {
 
 	dctx = dns_decompress_setpermitted(dctx, false);
 	while (isc_buffer_activelength(source) > 0) {
-		dns_name_init(&name, NULL);
+		dns_name_init(&name);
 		RETERR(dns_name_fromwire(&name, source, dctx, target));
 	}
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -244,7 +241,7 @@ towire_hip(ARGS_TOWIRE) {
 	UNUSED(cctx);
 
 	dns_rdata_toregion(rdata, &region);
-	return (mem_tobuffer(target, region.base, region.length));
+	return mem_tobuffer(target, region.base, region.length);
 }
 
 static int
@@ -260,7 +257,7 @@ compare_hip(ARGS_COMPARE) {
 
 	dns_rdata_toregion(rdata1, &region1);
 	dns_rdata_toregion(rdata2, &region2);
-	return (isc_region_compare(&region1, &region2));
+	return isc_region_compare(&region1, &region2);
 }
 
 static isc_result_t
@@ -294,7 +291,7 @@ fromstruct_hip(ARGS_FROMSTRUCT) {
 		/* initialize the names */
 	}
 
-	return (mem_tobuffer(target, hip->servers, hip->servers_len));
+	return mem_tobuffer(target, hip->servers, hip->servers_len);
 }
 
 static isc_result_t
@@ -308,7 +305,6 @@ tostruct_hip(ARGS_TOSTRUCT) {
 
 	hip->common.rdclass = rdata->rdclass;
 	hip->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&hip->common, link);
 
 	dns_rdata_toregion(rdata, &region);
 
@@ -338,7 +334,7 @@ tostruct_hip(ARGS_TOSTRUCT) {
 
 	hip->offset = hip->servers_len;
 	hip->mctx = mctx;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static void
@@ -368,7 +364,7 @@ additionaldata_hip(ARGS_ADDLDATA) {
 	UNUSED(add);
 	UNUSED(arg);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -378,7 +374,7 @@ digest_hip(ARGS_DIGEST) {
 	REQUIRE(rdata->type == dns_rdatatype_hip);
 
 	dns_rdata_toregion(rdata, &r);
-	return ((digest)(arg, &r));
+	return (digest)(arg, &r);
 }
 
 static bool
@@ -390,7 +386,7 @@ checkowner_hip(ARGS_CHECKOWNER) {
 	UNUSED(rdclass);
 	UNUSED(wildcard);
 
-	return (true);
+	return true;
 }
 
 static bool
@@ -401,16 +397,16 @@ checknames_hip(ARGS_CHECKNAMES) {
 	UNUSED(owner);
 	UNUSED(bad);
 
-	return (true);
+	return true;
 }
 
 isc_result_t
 dns_rdata_hip_first(dns_rdata_hip_t *hip) {
 	if (hip->servers_len == 0) {
-		return (ISC_R_NOMORE);
+		return ISC_R_NOMORE;
 	}
 	hip->offset = 0;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 isc_result_t
@@ -419,16 +415,16 @@ dns_rdata_hip_next(dns_rdata_hip_t *hip) {
 	dns_name_t name;
 
 	if (hip->offset >= hip->servers_len) {
-		return (ISC_R_NOMORE);
+		return ISC_R_NOMORE;
 	}
 
 	region.base = hip->servers + hip->offset;
 	region.length = hip->servers_len - hip->offset;
-	dns_name_init(&name, NULL);
+	dns_name_init(&name);
 	dns_name_fromregion(&name, &region);
 	hip->offset += name.length;
 	INSIST(hip->offset <= hip->servers_len);
-	return (hip->offset < hip->servers_len ? ISC_R_SUCCESS : ISC_R_NOMORE);
+	return hip->offset < hip->servers_len ? ISC_R_SUCCESS : ISC_R_NOMORE;
 }
 
 void
@@ -467,7 +463,7 @@ casecompare_hip(ARGS_COMPARE) {
 	INSIST(r2.length > 4);
 	order = memcmp(r1.base, r2.base, 4);
 	if (order != 0) {
-		return (order);
+		return order;
 	}
 
 	hit_len = uint8_fromregion(&r1);
@@ -480,23 +476,23 @@ casecompare_hip(ARGS_COMPARE) {
 	INSIST(r2.length >= (unsigned int)(hit_len + key_len));
 	order = memcmp(r1.base, r2.base, hit_len + key_len);
 	if (order != 0) {
-		return (order);
+		return order;
 	}
 	isc_region_consume(&r1, hit_len + key_len);
 	isc_region_consume(&r2, hit_len + key_len);
 
-	dns_name_init(&name1, NULL);
-	dns_name_init(&name2, NULL);
+	dns_name_init(&name1);
+	dns_name_init(&name2);
 	while (r1.length != 0 && r2.length != 0) {
 		dns_name_fromregion(&name1, &r1);
 		dns_name_fromregion(&name2, &r2);
 		order = dns_name_rdatacompare(&name1, &name2);
 		if (order != 0) {
-			return (order);
+			return order;
 		}
 
 		isc_region_consume(&r1, name_length(&name1));
 		isc_region_consume(&r2, name_length(&name2));
 	}
-	return (isc_region_compare(&r1, &r2));
+	return isc_region_compare(&r1, &r2);
 }

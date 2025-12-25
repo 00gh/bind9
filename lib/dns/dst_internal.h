@@ -39,7 +39,6 @@
 
 #include <isc/buffer.h>
 #include <isc/hmac.h>
-#include <isc/lang.h>
 #include <isc/magic.h>
 #include <isc/md.h>
 #include <isc/refcount.h>
@@ -50,8 +49,6 @@
 #include <dns/time.h>
 
 #include <dst/dst.h>
-
-ISC_LANG_BEGINDECLS
 
 #define KEY_MAGIC ISC_MAGIC('D', 'S', 'T', 'K')
 #define CTX_MAGIC ISC_MAGIC('D', 'S', 'T', 'C')
@@ -91,8 +88,8 @@ struct dst_key {
 	dns_rdataclass_t key_class; /*%< class of the key record */
 	dns_ttl_t key_ttl;	    /*%< default/initial dnskey ttl */
 	isc_mem_t *mctx;	    /*%< memory context */
-	char *engine;		    /*%< engine name (HSM) */
-	char *label;		    /*%< engine label (HSM) */
+	char *directory;	    /*%< key directory */
+	char *label;		    /*%< HSM label */
 	union {
 		void *generic;
 		dns_gss_ctx_id_t gssctx;
@@ -139,7 +136,7 @@ struct dst_context {
 	dst_use_t use;
 	dst_key_t *key;
 	isc_mem_t *mctx;
-	isc_logcategory_t *category;
+	isc_logcategory_t category;
 	union {
 		void *generic;
 		dst_gssapi_signverifyctx_t *gssctx;
@@ -153,8 +150,6 @@ struct dst_func {
 	 * Context functions
 	 */
 	isc_result_t (*createctx)(dst_key_t *key, dst_context_t *dctx);
-	isc_result_t (*createctx2)(dst_key_t *key, int maxbits,
-				   dst_context_t *dctx);
 	void (*destroyctx)(dst_context_t *dctx);
 	isc_result_t (*adddata)(dst_context_t *dctx, const isc_region_t *data);
 
@@ -163,13 +158,7 @@ struct dst_func {
 	 */
 	isc_result_t (*sign)(dst_context_t *dctx, isc_buffer_t *sig);
 	isc_result_t (*verify)(dst_context_t *dctx, const isc_region_t *sig);
-	isc_result_t (*verify2)(dst_context_t *dctx, int maxbits,
-				const isc_region_t *sig);
-	isc_result_t (*computesecret)(const dst_key_t *pub,
-				      const dst_key_t *priv,
-				      isc_buffer_t *secret);
 	bool (*compare)(const dst_key_t *key1, const dst_key_t *key2);
-	bool (*paramcompare)(const dst_key_t *key1, const dst_key_t *key2);
 	isc_result_t (*generate)(dst_key_t *key, int parms,
 				 void (*callback)(int));
 	bool (*isprivate)(const dst_key_t *key);
@@ -181,11 +170,8 @@ struct dst_func {
 	isc_result_t (*tofile)(const dst_key_t *key, const char *directory);
 	isc_result_t (*parse)(dst_key_t *key, isc_lex_t *lexer, dst_key_t *pub);
 
-	/* cleanup */
-	void (*cleanup)(void);
-
-	isc_result_t (*fromlabel)(dst_key_t *key, const char *engine,
-				  const char *label, const char *pin);
+	isc_result_t (*fromlabel)(dst_key_t *key, const char *label,
+				  const char *pin);
 	isc_result_t (*dump)(dst_key_t *key, isc_mem_t *mctx, char **buffer,
 			     int *length);
 	isc_result_t (*restore)(dst_key_t *key, const char *keystr);
@@ -194,49 +180,28 @@ struct dst_func {
 /*%
  * Initializers
  */
-isc_result_t
-dst__openssl_init(const char *engine);
-
-isc_result_t
+void
 dst__hmacmd5_init(struct dst_func **funcp);
-isc_result_t
+void
 dst__hmacsha1_init(struct dst_func **funcp);
-isc_result_t
+void
 dst__hmacsha224_init(struct dst_func **funcp);
-isc_result_t
+void
 dst__hmacsha256_init(struct dst_func **funcp);
-isc_result_t
+void
 dst__hmacsha384_init(struct dst_func **funcp);
-isc_result_t
+void
 dst__hmacsha512_init(struct dst_func **funcp);
-isc_result_t
-dst__opensslrsa_init(struct dst_func **funcp, unsigned char algorithm);
-isc_result_t
+void
+dst__opensslrsa_init(struct dst_func **funcp, unsigned short algorithm);
+void
 dst__opensslecdsa_init(struct dst_func **funcp);
-#if HAVE_OPENSSL_ED25519 || HAVE_OPENSSL_ED448
-isc_result_t
+void
 dst__openssleddsa_init(struct dst_func **funcp, unsigned char algorithm);
-#endif /* HAVE_OPENSSL_ED25519 || HAVE_OPENSSL_ED448 */
 #if HAVE_GSSAPI
-isc_result_t
+void
 dst__gssapi_init(struct dst_func **funcp);
 #endif /* HAVE_GSSAPI*/
-
-/*%
- * Destructors
- */
-void
-dst__openssl_destroy(void);
-
-/*%
- * Memory allocators using the DST memory pool.
- */
-void *
-dst__mem_alloc(size_t size);
-void
-dst__mem_free(void *ptr);
-void *
-dst__mem_realloc(void *ptr, size_t size);
 
 /*%
  * Secure private file handling
@@ -248,6 +213,12 @@ dst_key_close(char *tmpname, FILE *fp, char *filename);
 isc_result_t
 dst_key_cleanup(char *tmpname, FILE *fp);
 
-ISC_LANG_ENDDECLS
+/*%
+ * Library constructor and destructor.
+ */
+void
+dst__lib_initialize(void);
+void
+dst__lib_shutdown(void);
 
 /*! \file */

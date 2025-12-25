@@ -43,8 +43,8 @@ The code review process is a dialog between the original author and the
 reviewer.  Code inspection, including documentation and tests, is part of
 this.  Compiling and running the resulting code should be done in most
 cases, even for trivial changes, to ensure that it works as intended. In
-particular, a full regression test (`make` `check`) must be run for every
-modification so that unexpected side-effects are identified.
+particular, all checks in the CI pipeline must pass run for every modification
+so that unexpected side-effects are identified.
 
 When a problem or concern is found by the reviewer, these comments are
 placed on the merge request in GitLab so the author can respond.
@@ -78,18 +78,25 @@ Documentation is also reviewed. This includes all user-facing text,
 including log messages, manual pages, user manuals and sometimes even
 comments; they must be clearly written and consistent with existing style.
 
+#### GitLab development workflow
+
+Every change is ultimately submitted as a GitLab merge request (MR) and reviewed
+there. The specifics of the workflow are documented in [BIND development
+workflow](https://gitlab.isc.org/isc-projects/bind9/-/wikis/BIND-development-workflow).
+Take note of the section about MR title and description, which are used to
+generate changelog entries and release notes. These are also subject to the
+review process.
+
 #### Steps in code review:
 
 * Read the diff
 * Read accompanying notes in the ticket
-* Apply the diff to the appropriate branch
-* Run `configure` (using at least `--enable-developer`)
-* Build
 * Read the documentation, if any
 * Read the tests
-* Run the tests
+* Ensure the CI passes
   <br>(In some cases it may be appropriate to run tests against code
   from before the change to ensure that they fail as expected.)
+* Review the MR description and title (refer to GitLab development workflow)
 
 #### Things we look for
 
@@ -128,77 +135,16 @@ tests and documentation will reduce delay.
 
 ### <a name="testing"></a> Testing
 
-#### <a name="systest"></a> Running system tests
+When you submit a merge request, it triggers a CI pipeline which executes unit
+and system tests on various platforms. You should pay attention to any failures,
+as some can only occur in specific environments. Getting the CI to pass is a
+good start when preparing the merge request for the review.
 
-To enable system tests to work, we first need to create the test loopback
-interfaces (as root):
+#### <a name="systest"></a> System tests
 
-        $ cd bin/tests/system
-        $ sudo sh ifconfig.sh up
-        $ cd ../../..
-
-To run the tests, build BIND (be sure to use --with-cmocka to run unit
-tests), then run `make` `check`.  An easy way to check the results:
-
-        $ make check 2>&1 | tee /tmp/check.out
-        $ grep -A 10 'Testsuite summary' /tmp/check.out
-
-This will show all of the test results. One or two "R:SKIPPED" is okay; if
-there are a lot of them, then you probably forgot to create the loopback
-interfaces in the previous step. (NOTE: the summary of tests that appears at
-the end of `make` `check` only summarizes the system test results, not the
-unit tests, so you can't rely on it to catch everything.)
-
-To run only the system tests, omitting unit tests:
-
-	$ make test
-
-To run an individual system test:
-
-        $ make -C bin/tests/system/ check TESTS=<testname> V=1
-
-Or:
-
-        $ TESTS= make -e all check
-        $ cd bin/tests/system
-        $ sh run.sh <testname>
-
-System tests are in separate directories under `bin/tests/system`.
-For example, the "dnssec" test is in `bin/tests/system/dnssec`.
-
-#### Writing system tests
-
-The following standard files are found in system test directories:
-
-- `prereq.sh`: run at the beginning to determine whether the test can be run at all; if not, we see R:SKIPPED
-
-- `setup.sh`: sets up the preconditions for the tests
-
-- `tests.sh`: runs all the test cases. A non-zero return value results in R:FAIL
-
-- `clean.sh`: run at the end to clean up temporary files, but only if the
-  test was completed successfully; otherwise the temporary files are left
-  in place for inspection.
-
-- `ns[X]`: these subdirectories contain test name servers that can be
-  queried or can interact with each other. (For example, `ns1` might be
-  running as a root server, `ns2` as a TLD server, and `ns3` as a recursive
-  resolver.)  The value of X indicates the address the server listens on:
-  for example, `ns2` listens on 10.53.0.2, and ns4 on 10.53.0.4. All test
-  servers use port 5300 so they don't need to run as root. All servers
-  log at the highest debug level, and the logs are captured in the file
-  `nsX/named.run`.
-
-- `ans[X]`: like `ns[X]`, but these are simple mock name servers
-  implemented in perl; they are generally programmed to misbehave in ways
-  `named` wouldn't, so as to exercise `named`'s ability to interoperate with
-  badly behaved name servers.  Logs, if any, are captured in `ansX/ans.run`.
-
-All test scripts source the file `bin/tests/system/conf.sh` (which is
-generated by `configure` from `conf.sh.in`).  This script provides
-functions and variables pointing to the binaries under test; for example,
-`DIG` contains the path to `dig` in the build tree being tested, `RNDC`
-points to `rndc`, `SIGNZONE` to `dnssec-signzone`, etc.
+If you want to run the system tests locally, please refer to [BIND9 System Test
+Framework](bin/tests/system/README.md) for information about running and writing
+system tests.
 
 #### <a name="unittest"></a> Building unit tests
 
@@ -260,7 +206,7 @@ libraries.
     * `bind9/bin/confgen`: `rndc-confgen`, `ddns-confgen`, and
       `tsig-keygen` (BIND 9.9+)
     * `bind9/bin/tools`: assorted useful tools: `named-journalprint`,
-      `nsec3hash`, etc
+      `named-makejournal`, `nsec3hash`, etc
 * `bind9/lib`: libraries
     * `bind9/lib/isc`: implements basic functionality such as threads,
       tasks, timers, sockets, memory manager, buffers, and basic data types.
@@ -427,7 +373,7 @@ into 'consumed' and 'remaining'.
 
 When parsing a message, the message to be parsed in in the 'used'
 part of the buffer.  As the message is parsed, the 'consumed'
-subregion grows and the 'remaining' subregion shrinks. 
+subregion grows and the 'remaining' subregion shrinks.
 
 When creating a message, data is written into the 'available'
 subregion, which then becomes part of 'used'.
@@ -503,7 +449,7 @@ memory has not been freed when BIND shuts down.
 To create a basic memory context, use:
 
         isc_mem_t *mctx = NULL;
-        isc_mem_create(&mctx);
+        isc_mem_create("name", &mctx);
 
 When holding a persistent reference to a memory context it is advisable to
 increment its reference counter using `isc_mem_attach()`.  Do not just
@@ -528,7 +474,7 @@ memory context is freed before all references have been cleaned up.
                 /* Populate other isc_foo members here */
 
                 foo->magic = ISC_FOO_MAGIC;
-                
+
                 *foop = foo;
                 return (ISC_R_SUCCESS);
         }
@@ -642,6 +588,12 @@ Several macros are provided for this purpose, including `ISC_LIST_PREPEND`,
 
 More macros are provided for iterating the list:
 
+        ISC_LIST_FOREACH (foolist, foo, link) {
+                /* do things */
+        }
+
+... which is equivalent to:
+
         isc_foo_t *foo;
         for (foo = ISC_LIST_HEAD(foolist);
              foo != NULL;
@@ -657,64 +609,12 @@ Items can be removed from the list using `ISC_LIST_UNLINK`:
 
         ISC_LIST_UNLINK(foolist, foo, link);
 
-##### Atomic stacks
-
-In `<isc/stack.h>`, there are also similar macros for singly-linked
-stacks (`ISC_STACK`) and atomic stacks (`ISC_ASTACK`).
-
-Lock-free linked data structures have pitfalls that the `ISC_ASTACK`
-macros avoid by having a restricted API. Firstly, it is difficult to
-implement atomic doubly-linked lists without at least a double-width
-compare-exchange, which is not a widely supported primitive, so this
-stack is singly-linked. Secondly, when individual elements can be
-removed from a list (whether doubly-linked or singly-linked), we run
-into the ABA problem, where removes and (re-)inserts race and as a
-result the links get in a tangle. Safe support for removing individual
-elements requires some kind of garbage collection, or extending link
-pointers with generation counters. Instead the ASTACK macros only
-provide a function for emptying the entire stack in one go,
-`ISC_ASTACK_TO_STACK()`. This only requires setting the `top` pointer to
-`NULL`, which cannot cause `ISC_ASTACK_PUSH()` to go wrong.
-
-The `ISC_ASTACK` macros are used the same way as the non-atomic
-doubly-linked lists described above, except that not all of the
-`ISC_LIST` macros have `ISC_ASTACK` equivalents, and stacks have a
-`TOP` instead of a `HEAD`.
-
-As well as read-only iteration similar to `ISC_LIST` described above,
-there is an idiom for emptying an atomic stack into a regular stack,
-and processing its contents:
-
-        ISC_STACK(isc_foo_t) drain = ISC_ASTACK_TO_STACK(foo_work);
-        while (!ISC_STACK_EMPTY(drain)) {
-                isc_foo_t *foo = ISC_STACK_POP(drain, link);
-                /* do things */
-                /* maybe again? ISC_ASTACK_PUSH(foo_work, foo, link) */
-        }
-
-There is also an `ISC_ASTACK_ADD()` macro, which is a convenience
-wrapper for pushing an element onto a stack if it has not already been
-added.
-
 #### <a name="names"></a>Names
 
 The `dns_name` API has facilities for processing DNS names and labels,
 both dynamically and statically allocated, relative and absolute,
 compressed and not, with straightforward conversions from text to
 wire format and vice versa.
-
-##### Initializing
-
-When a name object is initialized, a pointer to an "offset table"
-(`dns_offsets_t`) may optionally be supplied; this will improve
-performance of most name operations if the name is used more than
-once.
-
-        dns_name_t name1, name2;
-        dns_offsets_t offsets1;
-
-        dns_name_init(&name1, &offsets1);
-        dns_name_init(&name2, NULL);
 
 ##### Copying
 
@@ -734,7 +634,7 @@ There are three methods for copying name objects:
         isc_buffer_t buffer;
 
         isc_buffer_init(&buffer, namedata, sizeof(namedata));
-        dns_name_init(&target, NULL);
+        dns_name_init(&target);
         dns_name_setbuffer(target, &buffer);
         dns_name_copy(source, &target);
 
@@ -743,10 +643,8 @@ There are three methods for copying name objects:
   a buffer.
 
 - `dns_name_dup()` copies a name into a new name object, dynamically
-  allocating buffer space as needed. `dns_name_dupwithoffsets()` does
-  the same, but also dynamically allocates space for the copied offset
-  table.  Targets created by these functions must be freed by calling
-  `dns_name_free()`.
+  allocating buffer space as needed.  Target created by this function
+  must be freed by calling `dns_name_free()`.
 
 ##### Wire format
 
@@ -782,7 +680,7 @@ name.
         isc_buffer_t buf;
         dns_name_t name;
 
-        dns_name_init(&name, NULL);
+        dns_name_init(&name);
         isc_buffer_init(&buf, namedata, sizeof(namedata));
         isc_buffer_add(&buf, strlen(text));
         result = dns_name_fromtext(&name, &buf, dns_rootname, 0, NULL);
@@ -852,7 +750,7 @@ The return value may be:
 * `dns_name_commonancestor`: name1 and name2 share some labels
 * `dns_name_equal`: name1 and name2 are the same
 
-Some simpler comparison functions are provided for convenience when 
+Some simpler comparison functions are provided for convenience when
 not all of this information is required:
 
 * `dns_name_compare()`: returns the sort order of two names but
@@ -923,7 +821,7 @@ sets have been defined:
 
 Each of these has a `first()`, `next()` and `current()` function; for
 example, `dns_rdataset_first()`, `dns_rdataset_next()`, and
-`dns_rdataset_current()`. 
+`dns_rdataset_current()`.
 
 The `first()` and `next()` functions move the iterator's cursor and so that
 the data at a new location can be retrieved.  (Most of these can only step
@@ -1072,7 +970,7 @@ messages up to the current debugging level are written to the channel.
 
 These objects -- the category, module, and channel -- direct hessages
 to desired destinations.  Each category/module pair can be associated
-with a specific channel, and the correct destination will be used 
+with a specific channel, and the correct destination will be used
 when a message is logged by `isc_log_write()`.
 
 In `isc_log_write()`, the logging system first looks up a list that
@@ -1086,20 +984,15 @@ for the category at all.
 
 ##### Externally visible structure
 
-The types used by programs for configuring log message destinations are
-`isc_log_t` and `isc_logconfig_t`.  The `isc_log_t` type is normally
-created only once by a program, to hold static information about what
-categories and modules exist in the program and some other housekeeping
-information.  `isc_logconfig_t` is used to store the configurable
-specification of message destinations, which can be changed during the
-course of the program.
+The type used by programs for configuring log message destinations is
+`isc_logconfig_t`.  It is used to store the configurable specification of
+message destinations, which can be changed during the course of the program.
 
-A starting configuration (`isc_logconfig_t`) is created implicitly when
-the context (`isc_log_t`) is created.  The pointer to this configuration
-is returned via a parameter to `isc_log_create()` so that it can then be
-configured.  A new log configuration can be established by creating
-it with `isc_logconfig_create()`, configuring it, then installing it as
-the active configuration with `isc_logconfig_use()`.
+A starting configuration (`isc_logconfig_t`) is created implicitly.  The pointer
+to this configuration is returned via `isc_logconfig_get()` so that it can then
+be configured.  A new log configuration can be established by creating it with
+`isc_logconfig_create()`, configuring it, then installing it as the active
+configuration with `isc_logconfig_set()`.
 
 ##### Logging in multithreaded programs
 
@@ -1120,25 +1013,23 @@ the following steps need to be taken to initialize it.
    the DNS library, include the following:
 
         #include <isc/log.h>
-        #include <dns/log.h>
+        log.h>/log.h>
 
 1. Initialize a logging context.  A logging context needs a valid
    memory context in order to work, so the following code snippet shows a
    rudimentary initialization of both.
 
         isc_mem_t *mctx;
-        isc_log_t *lctx;
         isc_logconfig_t *lcfg;
 
-        isc_mem_create(&mctx);
-        isc_log_create(mctx, &lctx, &lcfg) != ISC_R_SUCCESS);
+        lcfg = isc_logconfig_get();
 
 1. Initialize any additional libraries.  The convention for the name of
    the initialization function is `{library}_log_init()`, with a pointer to
    the logging context as an argument.  The function can only be called
    once in a program or it will generate an assertion.
 
-        `dns_log_init(lctx);`
+        `dns_log_init();`
 
    If you do not want a library to write any log messages, simply do not
    call its the initialization function.
@@ -1178,17 +1069,17 @@ the following steps need to be taken to initialize it.
    null, and all other messages to syslog.
 
         result = isc_log_usechannel(lcfg, "default_stderr",
-                                    DNS_LOGCATEGORY_SECURITY, NULL);
+                                    DNS_LOGCATEGORY_SECURITY, ISC_LOGMODULE_DEFAULT);
         if (result != ISC_R_SUCCESS)
                 oops_it_didnt_work();
 
         result = isc_log_usechannel(lcfg, "null",
-                                    DNS_LOGCATEGORY_DATABASE, NULL);
+                                    DNS_LOGCATEGORY_DATABASE, ISC_LOGMODULE_DEFAULT);
         if (result != ISC_R_SUCCESS)
                 oops_it_didnt_work();
 
         result = isc_log_usechannel(lcfg, "default_syslog",
-                                    ISC_LOGCATEGORY_DEFAULT, NULL);
+                                    ISC_LOGCATEGORY_DEFAULT, ISC_LOGMODULE_DEFAULT);
         if (result != ISC_R_SUCCESS)
                 oops_it_didnt_work();
 
@@ -1203,14 +1094,14 @@ There are three additional functions you might find useful in your program
 to control logging behavior, two to work with the debugging level and one
 to control the closing of log files.
 
-        void isc_log_setdebuglevel(isc_log_t *lctx, unsigned int level);
-        unsigned int isc_log_getdebuglevel(isc_log_t *lctx);
-        
+        void isc_log_setdebuglevel(unsigned int level);
+        unsigned int isc_log_getdebuglevel();
+
 These set and retrieve the current debugging level of the program.
 `isc_log_getdebuglevel()` can be used so that you need not keep track of
 the level yourself in another variable.
 
-        void isc_log_closefilelogs(isc_log_t *lcxt);
+        void isc_log_closefilelogs();
 
 This function closes any open log files.  This is useful for programs that
 do not want to do file rotation as with the internal rolling mechanism.
@@ -1270,7 +1161,7 @@ implement a method.
 
 Type values range from 0 to 65536.   These have been further divided into
 reserved values,  values that have global definition and values that have
-local definition as defined in [RFC 6895](http://tools.ietf.org/html/rfc6895).
+local definition as defined in [RFC 6895](https://tools.ietf.org/html/rfc6895).
 Please use an appropriate value.  You can use a private value
 (65280 - 65534) while waiting for a type assignment to be made, then
 rename the file and update the type values when the assignment has been

@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -23,10 +24,12 @@
 #define UNIT_TESTING
 #include <cmocka.h>
 
+#include <isc/lib.h>
 #include <isc/string.h>
 #include <isc/util.h>
 
 #include <dns/acl.h>
+#include <dns/lib.h>
 
 #include <tests/dns.h>
 
@@ -49,17 +52,15 @@ ISC_RUN_TEST_IMPL(dns_acl_isinsecure) {
 
 	UNUSED(state);
 
-	result = dns_acl_any(mctx, &any);
+	result = dns_acl_any(isc_g_mctx, &any);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
-	result = dns_acl_none(mctx, &none);
+	result = dns_acl_none(isc_g_mctx, &none);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
-	result = dns_acl_create(mctx, 1, &notnone);
-	assert_int_equal(result, ISC_R_SUCCESS);
+	dns_acl_create(isc_g_mctx, 1, &notnone);
 
-	result = dns_acl_create(mctx, 1, &notany);
-	assert_int_equal(result, ISC_R_SUCCESS);
+	dns_acl_create(isc_g_mctx, 1, &notany);
 
 	result = dns_acl_merge(notnone, none, false);
 	assert_int_equal(result, ISC_R_SUCCESS);
@@ -68,8 +69,7 @@ ISC_RUN_TEST_IMPL(dns_acl_isinsecure) {
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 #if defined(HAVE_GEOIP2)
-	result = dns_acl_create(mctx, 1, &geoip);
-	assert_int_equal(result, ISC_R_SUCCESS);
+	dns_acl_create(isc_g_mctx, 1, &geoip);
 
 	de = geoip->elements;
 	assert_non_null(de);
@@ -83,8 +83,7 @@ ISC_RUN_TEST_IMPL(dns_acl_isinsecure) {
 	de->node_num = dns_acl_node_count(geoip);
 	geoip->length++;
 
-	result = dns_acl_create(mctx, 1, &notgeoip);
-	assert_int_equal(result, ISC_R_SUCCESS);
+	dns_acl_create(isc_g_mctx, 1, &notgeoip);
 
 	result = dns_acl_merge(notgeoip, geoip, false);
 	assert_int_equal(result, ISC_R_SUCCESS);

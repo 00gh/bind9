@@ -24,7 +24,6 @@
 #include <isc/util.h>
 
 #include <isccfg/cfg.h>
-#include <isccfg/log.h>
 
 #include <named/log.h>
 #include <named/logconf.h>
@@ -44,46 +43,40 @@ static isc_result_t
 category_fromconf(const cfg_obj_t *ccat, isc_logconfig_t *logconfig) {
 	isc_result_t result;
 	const char *catname;
-	isc_logcategory_t *category;
-	isc_logmodule_t *module;
+	isc_logcategory_t category;
 	const cfg_obj_t *destinations = NULL;
-	const cfg_listelt_t *element = NULL;
 
 	catname = cfg_obj_asstring(cfg_tuple_get(ccat, "name"));
-	category = isc_log_categorybyname(named_g_lctx, catname);
-	if (category == NULL) {
-		cfg_obj_log(ccat, named_g_lctx, ISC_LOG_ERROR,
+	category = isc_log_categorybyname(catname);
+	if (category == ISC_LOGCATEGORY_INVALID) {
+		cfg_obj_log(ccat, ISC_LOG_ERROR,
 			    "unknown logging category '%s' ignored", catname);
 		/*
 		 * Allow further processing by returning success.
 		 */
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	if (logconfig == NULL) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
-	module = NULL;
-
 	destinations = cfg_tuple_get(ccat, "destinations");
-	for (element = cfg_list_first(destinations); element != NULL;
-	     element = cfg_list_next(element))
-	{
+	CFG_LIST_FOREACH (destinations, element) {
 		const cfg_obj_t *channel = cfg_listelt_value(element);
 		const char *channelname = cfg_obj_asstring(channel);
 
 		result = isc_log_usechannel(logconfig, channelname, category,
-					    module);
+					    ISC_LOGMODULE_DEFAULT);
 		if (result != ISC_R_SUCCESS) {
-			isc_log_write(named_g_lctx, CFG_LOGCATEGORY_CONFIG,
+			isc_log_write(CFG_LOGCATEGORY_CONFIG,
 				      NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR,
 				      "logging channel '%s': %s", channelname,
 				      isc_result_totext(result));
-			return (result);
+			return result;
 		}
 	}
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 /*%
@@ -127,11 +120,11 @@ channel_fromconf(const cfg_obj_t *channel, isc_logconfig_t *logconfig) {
 	}
 
 	if (i != 1) {
-		cfg_obj_log(channel, named_g_lctx, ISC_LOG_ERROR,
+		cfg_obj_log(channel, ISC_LOG_ERROR,
 			    "channel '%s': exactly one of file, syslog, "
 			    "null, and stderr must be present",
 			    channelname);
-		return (ISC_R_FAILURE);
+		return ISC_R_FAILURE;
 	}
 
 	type = ISC_LOG_TONULL;
@@ -243,6 +236,8 @@ channel_fromconf(const cfg_obj_t *channel, isc_logconfig_t *logconfig) {
 				flags |= ISC_LOG_ISO8601;
 			} else if (strcasecmp(s, "iso8601-utc") == 0) {
 				flags |= ISC_LOG_ISO8601 | ISC_LOG_UTC;
+			} else if (strcasecmp(s, "iso8601-tzinfo") == 0) {
+				flags |= ISC_LOG_ISO8601 | ISC_LOG_TZINFO;
 			}
 		}
 	}
@@ -310,7 +305,7 @@ channel_fromconf(const cfg_obj_t *channel, isc_logconfig_t *logconfig) {
 	}
 
 done:
-	return (result);
+	return result;
 }
 
 isc_result_t
@@ -318,10 +313,9 @@ named_logconfig(isc_logconfig_t *logconfig, const cfg_obj_t *logstmt) {
 	isc_result_t result;
 	const cfg_obj_t *channels = NULL;
 	const cfg_obj_t *categories = NULL;
-	const cfg_listelt_t *element;
 	bool default_set = false;
 	bool unmatched_set = false;
-	const cfg_obj_t *catname;
+	const cfg_obj_t *catname = NULL;
 
 	if (logconfig != NULL) {
 		named_log_setdefaultchannels(logconfig);
@@ -329,17 +323,13 @@ named_logconfig(isc_logconfig_t *logconfig, const cfg_obj_t *logstmt) {
 	}
 
 	(void)cfg_map_get(logstmt, "channel", &channels);
-	for (element = cfg_list_first(channels); element != NULL;
-	     element = cfg_list_next(element))
-	{
+	CFG_LIST_FOREACH (channels, element) {
 		const cfg_obj_t *channel = cfg_listelt_value(element);
 		CHECK(channel_fromconf(channel, logconfig));
 	}
 
 	(void)cfg_map_get(logstmt, "category", &categories);
-	for (element = cfg_list_first(categories); element != NULL;
-	     element = cfg_list_next(element))
-	{
+	CFG_LIST_FOREACH (categories, element) {
 		const cfg_obj_t *category = cfg_listelt_value(element);
 		CHECK(category_fromconf(category, logconfig));
 		if (!default_set) {
@@ -365,8 +355,8 @@ named_logconfig(isc_logconfig_t *logconfig, const cfg_obj_t *logstmt) {
 		CHECK(named_log_setunmatchedcategory(logconfig));
 	}
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 
 cleanup:
-	return (result);
+	return result;
 }

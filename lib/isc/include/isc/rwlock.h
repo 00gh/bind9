@@ -14,15 +14,11 @@
 #pragma once
 
 #include <inttypes.h>
-#include <stdlib.h>
 
 /*! \file isc/rwlock.h */
 
-#include <isc/lang.h>
 #include <isc/types.h>
 #include <isc/util.h>
-
-ISC_LANG_BEGINDECLS
 
 typedef enum {
 	isc_rwlocktype_none = 0,
@@ -30,7 +26,42 @@ typedef enum {
 	isc_rwlocktype_write
 } isc_rwlocktype_t;
 
+#define RWLOCK(lp, t)                                                         \
+	{                                                                     \
+		ISC_UTIL_TRACE(fprintf(stderr, "RWLOCK %p, %d %s %d\n", (lp), \
+				       (t), __FILE__, __LINE__));             \
+		isc_rwlock_lock((lp), (t));                                   \
+		ISC_UTIL_TRACE(fprintf(stderr, "RWLOCKED %p, %d %s %d\n",     \
+				       (lp), (t), __FILE__, __LINE__));       \
+	}
+#define RWUNLOCK(lp, t)                                                   \
+	{                                                                 \
+		ISC_UTIL_TRACE(fprintf(stderr, "RWUNLOCK %p, %d %s %d\n", \
+				       (lp), (t), __FILE__, __LINE__));   \
+		isc_rwlock_unlock((lp), (t));                             \
+	}
+
+#define RDLOCK(lp)   RWLOCK(lp, isc_rwlocktype_read)
+#define RDUNLOCK(lp) RWUNLOCK(lp, isc_rwlocktype_read)
+#define WRLOCK(lp)   RWLOCK(lp, isc_rwlocktype_write)
+#define WRUNLOCK(lp) RWUNLOCK(lp, isc_rwlocktype_write)
+
+#define UPGRADELOCK(lock, locktype)                                         \
+	{                                                                   \
+		if (locktype == isc_rwlocktype_read) {                      \
+			if (isc_rwlock_tryupgrade(lock) == ISC_R_SUCCESS) { \
+				locktype = isc_rwlocktype_write;            \
+			} else {                                            \
+				RWUNLOCK(lock, locktype);                   \
+				locktype = isc_rwlocktype_write;            \
+				RWLOCK(lock, locktype);                     \
+			}                                                   \
+		}                                                           \
+		INSIST(locktype == isc_rwlocktype_write);                   \
+	}
+
 #if USE_PTHREAD_RWLOCK
+#include <errno.h>
 #include <pthread.h>
 
 /*
@@ -40,6 +71,8 @@ typedef enum {
  */
 
 #if ISC_TRACK_PTHREADS_OBJECTS
+
+#include <stdlib.h>
 
 typedef pthread_rwlock_t *isc_rwlock_t;
 typedef pthread_rwlock_t  isc__rwlock_t;
@@ -141,6 +174,7 @@ typedef pthread_rwlock_t isc__rwlock_t;
 #define isc__rwlock_unlock(rwl, type)                                \
 	{                                                            \
 		int _ret = pthread_rwlock_unlock(rwl);               \
+		UNUSED(type);                                        \
 		PTHREADS_RUNTIME_CHECK(pthread_rwlock_rwlock, _ret); \
 	}
 
@@ -160,15 +194,23 @@ typedef pthread_rwlock_t isc__rwlock_t;
 
 #else /* USE_PTHREAD_RWLOCK */
 
-#include <isc/align.h>
 #include <isc/atomic.h>
 #include <isc/os.h>
 
+STATIC_ASSERT(ISC_OS_CACHELINE_SIZE >= sizeof(atomic_uint_fast32_t),
+	      "ISC_OS_CACHELINE_SIZE smaller than "
+	      "sizeof(atomic_uint_fast32_t)");
+STATIC_ASSERT(ISC_OS_CACHELINE_SIZE >= sizeof(atomic_int_fast32_t),
+	      "ISC_OS_CACHELINE_SIZE smaller than sizeof(atomic_int_fast32_t)");
+
 struct isc_rwlock {
-	alignas(ISC_OS_CACHELINE_SIZE) atomic_uint_fast32_t readers_ingress;
-	alignas(ISC_OS_CACHELINE_SIZE) atomic_uint_fast32_t readers_egress;
-	alignas(ISC_OS_CACHELINE_SIZE) atomic_int_fast32_t writers_barrier;
-	alignas(ISC_OS_CACHELINE_SIZE) atomic_bool writers_lock;
+	atomic_uint_fast32_t readers_ingress;
+	uint8_t __padding1[ISC_OS_CACHELINE_SIZE - sizeof(atomic_uint_fast32_t)];
+	atomic_uint_fast32_t readers_egress;
+	uint8_t __padding2[ISC_OS_CACHELINE_SIZE - sizeof(atomic_uint_fast32_t)];
+	atomic_int_fast32_t writers_barrier;
+	uint8_t __padding3[ISC_OS_CACHELINE_SIZE - sizeof(atomic_int_fast32_t)];
+	atomic_bool writers_lock;
 };
 
 typedef struct isc_rwlock isc_rwlock_t;
@@ -251,5 +293,3 @@ isc_rwlock_setworkers(uint16_t workers);
 	}
 
 #endif /* USE_PTHREAD_RWLOCK */
-
-ISC_LANG_ENDDECLS

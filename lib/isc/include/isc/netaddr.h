@@ -20,15 +20,12 @@
 #include <sys/types.h>
 #include <sys/un.h>
 
-#include <isc/lang.h>
 #include <isc/net.h>
 #include <isc/types.h>
 
-ISC_LANG_BEGINDECLS
-
 /*
  * Any updates to this structure should also be applied in
- * contrib/modules/dlz/dlz_minmal.h.
+ * https://gitlab.isc.org/isc-projects/dlz-modules/-/raw/main/modules/include/dlz_minimal.h
  */
 struct isc_netaddr {
 	unsigned int family;
@@ -110,9 +107,6 @@ isc_netaddr_fromin(isc_netaddr_t *netaddr, const struct in_addr *ina);
 void
 isc_netaddr_fromin6(isc_netaddr_t *netaddr, const struct in6_addr *ina6);
 
-isc_result_t
-isc_netaddr_frompath(isc_netaddr_t *netaddr, const char *path);
-
 void
 isc_netaddr_setzone(isc_netaddr_t *netaddr, uint32_t zone);
 
@@ -193,4 +187,3 @@ isc_netaddr_isloopback(const isc_netaddr_t *na);
  * Test whether the netaddr 'na' is a loopback IPv4 or IPv6 address (in
  * 127.0.0.0/8 or ::1).
  */
-ISC_LANG_ENDDECLS

@@ -26,12 +26,9 @@
 #include <inttypes.h>
 
 #include <isc/job.h>
-#include <isc/lang.h>
 #include <isc/loop.h>
 #include <isc/mem.h>
 #include <isc/types.h>
-
-ISC_LANG_BEGINDECLS
 
 void
 isc_async_run(isc_loop_t *loop, isc_job_cb cb, void *cbarg);
@@ -45,10 +42,7 @@ isc_async_run(isc_loop_t *loop, isc_job_cb cb, void *cbarg);
  *\li	'cbarg' is passed to the 'cb' as the only argument, may be NULL
  */
 
-#define isc_async_current(loopmgr, cb, cbarg) \
-	isc_async_run(isc_loop_current(loopmgr), cb, cbarg)
+#define isc_async_current(cb, cbarg) isc_async_run(isc_loop(), cb, cbarg)
 /*%<
  * Helper macro to run the job on the current loop
  */
-
-ISC_LANG_ENDDECLS

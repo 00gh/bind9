@@ -144,9 +144,12 @@ struct ns_clientmgr {
 	unsigned int magic;
 
 	isc_mem_t     *mctx;
+	isc_mempool_t *namepool;
+	isc_mempool_t *rdspool;
+
 	ns_server_t   *sctx;
 	isc_refcount_t references;
-	uint32_t       tid;
+	isc_tid_t      tid;
 	isc_loop_t    *loop;
 
 	dns_aclenv_t *aclenv;
@@ -154,98 +157,120 @@ struct ns_clientmgr {
 	/* Lock covers the recursing list */
 	isc_mutex_t   reclock;
 	client_list_t recursing; /*%< Recursing clients */
+
+	uint8_t tcp_buffer[NS_CLIENT_TCP_BUFFER_SIZE];
 };
 
 /*% nameserver client structure */
 struct ns_client {
-	unsigned int	 magic;
-	ns_clientmgr_t	*manager;
-	ns_clientstate_t state;
-	bool		 nodetach;
-	unsigned int	 attributes;
-	dns_view_t	*view;
-	dns_dispatch_t	*dispatch;
-	isc_nmhandle_t	*handle;      /* Permanent pointer to handle */
-	isc_nmhandle_t	*sendhandle;  /* Waiting for send callback */
-	isc_nmhandle_t	*reqhandle;   /* Waiting for request callback
-					 (query, update, notify) */
-	isc_nmhandle_t *updatehandle; /* Waiting for update callback */
-	unsigned char  *tcpbuf;
+	unsigned int magic;
+	struct ns_client_inner {
+		ns_clientstate_t state;
+		bool		 async;
+		unsigned int	 attributes;
+		dns_view_t	*view;
+		dns_dispatch_t	*dispatch;
+		isc_nmhandle_t	*handle;       /* Permanent pointer to handle */
+		isc_nmhandle_t	*sendhandle;   /* Waiting for send callback */
+		isc_nmhandle_t	*reqhandle;    /* Waiting for request callback
+						  (query, update, notify) */
+		isc_nmhandle_t *updatehandle;  /* Waiting for update callback */
+		isc_nmhandle_t *restarthandle; /* Waiting for restart callback
+						*/
+		unsigned char  *tcpbuf;
+		size_t		tcpbuf_size;
+		dns_rdataset_t *opt;
+		uint16_t	udpsize;
+		uint16_t	extflags;
+		int16_t		ednsversion; /* -1 noedns */
+		uint16_t	additionaldepth;
+		void (*cleanup)(ns_client_t *);
+		isc_time_t    requesttime;
+		isc_stdtime_t now;
+		isc_time_t    tnow;
+		dns_name_t    signername; /*%< [T]SIG key name */
+		dns_name_t   *signer;	  /*%< NULL if not valid sig */
+		isc_result_t  sigresult;
+		isc_result_t  viewmatchresult;
+		isc_buffer_t *buffer;
+		isc_buffer_t  tbuffer;
+
+		dns_name_t rad; /* Zone rad domain */
+
+		isc_sockaddr_t peeraddr;
+		bool	       peeraddr_valid;
+		isc_netaddr_t  destaddr;
+		isc_sockaddr_t destsockaddr;
+
+		dns_ecs_t ecs; /*%< EDNS client subnet sent by client */
+
+		/*%
+		 * Information about recent FORMERR response(s), for
+		 * FORMERR loop avoidance.  This is separate for each
+		 * client object rather than global only to avoid
+		 * the need for locking.
+		 */
+		struct {
+			isc_sockaddr_t	addr;
+			isc_stdtime_t	time;
+			dns_messageid_t id;
+		} formerrcache;
+
+		/*% Callback function to send a response when unit testing */
+		void (*sendcb)(isc_buffer_t *buf);
+
+		ISC_LINK(ns_client_t) rlink;
+		unsigned char  cookie[8];
+		uint32_t       expire;
+		unsigned char *zoneversion;
+		uint32_t       zoneversionlength;
+		unsigned char *keytag;
+		uint16_t       keytag_len;
+
+		/*%
+		 * Used to override the DNS response code in ns_client_error().
+		 * If set to -1, the rcode is determined from the result code,
+		 * but if set to any other value, the least significant 12
+		 * bits will be used as the rcode in the response message.
+		 */
+		int32_t rcode_override;
+	} inner;
+
+	/*
+	 * Fields which will be preserved
+	 */
+	ns_clientmgr_t *manager;
 	dns_message_t  *message;
-	unsigned char  *sendbuf;
-	dns_rdataset_t *opt;
-	dns_ednsopt_t  *ede;
-	uint16_t	udpsize;
-	uint16_t	extflags;
-	int16_t		ednsversion; /* -1 noedns */
-	uint16_t	additionaldepth;
-	void (*cleanup)(ns_client_t *);
-	ns_query_t    query;
-	isc_time_t    requesttime;
-	isc_stdtime_t now;
-	isc_time_t    tnow;
-	dns_name_t    signername; /*%< [T]SIG key name */
-	dns_name_t   *signer;	  /*%< NULL if not valid sig */
-
-	isc_sockaddr_t peeraddr;
-	bool	       peeraddr_valid;
-	isc_netaddr_t  destaddr;
-	isc_sockaddr_t destsockaddr;
-
-	dns_ecs_t ecs; /*%< EDNS client subnet sent by client */
-
-	/*%
-	 * Information about recent FORMERR response(s), for
-	 * FORMERR loop avoidance.  This is separate for each
-	 * client object rather than global only to avoid
-	 * the need for locking.
-	 */
-	struct {
-		isc_sockaddr_t	addr;
-		isc_stdtime_t	time;
-		dns_messageid_t id;
-	} formerrcache;
-
-	/*% Callback function to send a response when unit testing */
-	void (*sendcb)(isc_buffer_t *buf);
-
-	ISC_LINK(ns_client_t) rlink;
-	unsigned char  cookie[8];
-	uint32_t       expire;
-	unsigned char *keytag;
-	uint16_t       keytag_len;
-
-	/*%
-	 * Used to override the DNS response code in ns_client_error().
-	 * If set to -1, the rcode is determined from the result code,
-	 * but if set to any other value, the least significant 12
-	 * bits will be used as the rcode in the response message.
-	 */
-	int32_t rcode_override;
+	dns_edectx_t	edectx;
+	ns_query_t	query;
+	uint8_t		sendbuf[NS_CLIENT_SEND_BUFFER_SIZE];
 };
 
 #define NS_CLIENT_MAGIC	   ISC_MAGIC('N', 'S', 'C', 'c')
 #define NS_CLIENT_VALID(c) ISC_MAGIC_VALID(c, NS_CLIENT_MAGIC)
 
-#define NS_CLIENTATTR_TCP	 0x00001
-#define NS_CLIENTATTR_RA	 0x00002 /*%< Client gets recursive service */
-#define NS_CLIENTATTR_PKTINFO	 0x00004 /*%< pktinfo is valid */
-#define NS_CLIENTATTR_MULTICAST	 0x00008 /*%< recv'd from multicast */
-#define NS_CLIENTATTR_WANTDNSSEC 0x00010 /*%< include dnssec records */
-#define NS_CLIENTATTR_WANTNSID	 0x00020 /*%< include nameserver ID */
-/* Obsolete: NS_CLIENTATTR_FILTER_AAAA	0x00040 */
-/* Obsolete: NS_CLIENTATTR_FILTER_AAAA_RC 0x00080 */
-#define NS_CLIENTATTR_WANTAD	   0x00100 /*%< want AD in response if possible */
-#define NS_CLIENTATTR_WANTCOOKIE   0x00200 /*%< return a COOKIE */
-#define NS_CLIENTATTR_HAVECOOKIE   0x00400 /*%< has a valid COOKIE */
-#define NS_CLIENTATTR_WANTEXPIRE   0x00800 /*%< return seconds to expire */
-#define NS_CLIENTATTR_HAVEEXPIRE   0x01000 /*%< return seconds to expire */
-#define NS_CLIENTATTR_WANTOPT	   0x02000 /*%< add opt to reply */
-#define NS_CLIENTATTR_HAVEECS	   0x04000 /*%< received an ECS option */
-#define NS_CLIENTATTR_WANTPAD	   0x08000 /*%< pad reply */
-#define NS_CLIENTATTR_USEKEEPALIVE 0x10000 /*%< use TCP keepalive */
-
-#define NS_CLIENTATTR_NOSETFC 0x20000 /*%< don't set servfail cache */
+#define NS_CLIENTATTR_TCP	 0x000001
+#define NS_CLIENTATTR_RA	 0x000002 /*%< Client gets recursive service */
+#define NS_CLIENTATTR_PKTINFO	 0x000004 /*%< pktinfo is valid */
+#define NS_CLIENTATTR_MULTICAST	 0x000008 /*%< recv'd from multicast */
+#define NS_CLIENTATTR_WANTDNSSEC 0x000010 /*%< include dnssec records */
+#define NS_CLIENTATTR_WANTNSID	 0x000020 /*%< include nameserver ID */
+#define NS_CLIENTATTR_BADCOOKIE \
+	0x000040 /*%< Presented cookie is bad/out-of-date */
+#define NS_CLIENTATTR_WANTRC	      0x000080 /*%< include Report-Channel */
+#define NS_CLIENTATTR_WANTAD	      0x000100 /*%< want AD in response if possible */
+#define NS_CLIENTATTR_WANTCOOKIE      0x000200 /*%< return a COOKIE */
+#define NS_CLIENTATTR_HAVECOOKIE      0x000400 /*%< has a valid COOKIE */
+#define NS_CLIENTATTR_WANTEXPIRE      0x000800 /*%< return seconds to expire */
+#define NS_CLIENTATTR_HAVEEXPIRE      0x001000 /*%< return seconds to expire */
+#define NS_CLIENTATTR_WANTOPT	      0x002000 /*%< add opt to reply */
+#define NS_CLIENTATTR_HAVEECS	      0x004000 /*%< received an ECS option */
+#define NS_CLIENTATTR_WANTPAD	      0x008000 /*%< pad reply */
+#define NS_CLIENTATTR_USEKEEPALIVE    0x010000 /*%< use TCP keepalive */
+#define NS_CLIENTATTR_NOSETFC	      0x020000 /*%< don't set servfail cache */
+#define NS_CLIENTATTR_NEEDTCP	      0x040000 /*%< send TC=1 */
+#define NS_CLIENTATTR_WANTZONEVERSION 0x100000 /*%< return zoneversion */
+#define NS_CLIENTATTR_HAVEZONEVERSION 0x200000 /*%< return zoneversion */
 
 /*
  * Flag to use with the SERVFAIL cache to indicate
@@ -290,12 +315,6 @@ ns_client_error(ns_client_t *client, isc_result_t result);
  */
 
 void
-ns_client_extendederror(ns_client_t *client, uint16_t code, const char *text);
-/*%<
- * Set extended error with INFO-CODE <code> and EXTRA-TEXT <text>.
- */
-
-void
 ns_client_drop(ns_client_t *client, isc_result_t result);
 /*%<
  * Log the reason the current client request has failed; no response
@@ -317,8 +336,8 @@ ns_client_settimeout(ns_client_t *client, unsigned int seconds);
  */
 
 isc_result_t
-ns_clientmgr_create(ns_server_t *sctx, isc_loopmgr_t *loopmgr,
-		    dns_aclenv_t *aclenv, int tid, ns_clientmgr_t **managerp);
+ns_clientmgr_create(ns_server_t *sctx, dns_aclenv_t *aclenv, isc_tid_t tid,
+		    ns_clientmgr_t **managerp);
 /*%<
  * Create a client manager.
  */
@@ -391,13 +410,13 @@ ns_client_checkacl(ns_client_t *client, isc_sockaddr_t *sockaddr,
  */
 
 void
-ns_client_log(ns_client_t *client, isc_logcategory_t *category,
-	      isc_logmodule_t *module, int level, const char *fmt, ...)
+ns_client_log(ns_client_t *client, isc_logcategory_t category,
+	      isc_logmodule_t module, int level, const char *fmt, ...)
 	ISC_FORMAT_PRINTF(5, 6);
 
 void
-ns_client_logv(ns_client_t *client, isc_logcategory_t *category,
-	       isc_logmodule_t *module, int level, const char *fmt, va_list ap)
+ns_client_logv(ns_client_t *client, isc_logcategory_t category,
+	       isc_logmodule_t module, int level, const char *fmt, va_list ap)
 	ISC_FORMAT_PRINTF(5, 0);
 
 void
@@ -529,7 +548,7 @@ ns_client_findversion(ns_client_t *client, dns_db_t *db);
 
 ISC_REFCOUNT_DECL(ns_clientmgr);
 
-isc_result_t
+void
 ns__client_setup(ns_client_t *client, ns_clientmgr_t *manager, bool new);
 /*%<
  * Perform initial setup of an allocated client.

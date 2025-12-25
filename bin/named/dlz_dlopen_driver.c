@@ -17,13 +17,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <isc/log.h>
 #include <isc/mem.h>
 #include <isc/result.h>
 #include <isc/util.h>
 #include <isc/uv.h>
 
 #include <dns/dlz_dlopen.h>
-#include <dns/log.h>
 
 #include <dlz/dlz_dlopen_driver.h>
 #include <named/globals.h>
@@ -80,7 +80,7 @@ static void
 dlopen_log(int level, const char *fmt, ...) {
 	va_list ap;
 	va_start(ap, fmt);
-	isc_log_vwrite(dns_lctx, DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ,
+	isc_log_vwrite(DNS_LOGCATEGORY_DATABASE, DNS_LOGMODULE_DLZ,
 		       ISC_LOG_DEBUG(level), fmt, ap);
 	va_end(ap);
 }
@@ -98,13 +98,13 @@ dlopen_dlz_allnodes(const char *zone, void *driverarg, void *dbdata,
 	UNUSED(driverarg);
 
 	if (cd->dlz_allnodes == NULL) {
-		return (ISC_R_NOPERM);
+		return ISC_R_NOPERM;
 	}
 
 	MAYBE_LOCK(cd);
 	result = cd->dlz_allnodes(zone, cd->dbdata, allnodes);
 	MAYBE_UNLOCK(cd);
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -116,13 +116,13 @@ dlopen_dlz_allowzonexfr(void *driverarg, void *dbdata, const char *name,
 	UNUSED(driverarg);
 
 	if (cd->dlz_allowzonexfr == NULL) {
-		return (ISC_R_NOPERM);
+		return ISC_R_NOPERM;
 	}
 
 	MAYBE_LOCK(cd);
 	result = cd->dlz_allowzonexfr(cd->dbdata, name, client);
 	MAYBE_UNLOCK(cd);
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -134,13 +134,13 @@ dlopen_dlz_authority(const char *zone, void *driverarg, void *dbdata,
 	UNUSED(driverarg);
 
 	if (cd->dlz_authority == NULL) {
-		return (ISC_R_NOTIMPLEMENTED);
+		return ISC_R_NOTIMPLEMENTED;
 	}
 
 	MAYBE_LOCK(cd);
 	result = cd->dlz_authority(zone, cd->dbdata, lookup);
 	MAYBE_UNLOCK(cd);
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -155,7 +155,7 @@ dlopen_dlz_findzonedb(void *driverarg, void *dbdata, const char *name,
 	MAYBE_LOCK(cd);
 	result = cd->dlz_findzonedb(cd->dbdata, name, methods, clientinfo);
 	MAYBE_UNLOCK(cd);
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -172,7 +172,7 @@ dlopen_dlz_lookup(const char *zone, const char *name, void *driverarg,
 	result = cd->dlz_lookup(zone, name, cd->dbdata, lookup, methods,
 				clientinfo);
 	MAYBE_UNLOCK(cd);
-	return (result);
+	return result;
 }
 
 /*
@@ -195,7 +195,7 @@ dl_load_symbol(dlopen_data_t *cd, const char *symbol, bool mandatory) {
 		}
 	}
 
-	return (ptr);
+	return ptr;
 }
 
 static void
@@ -219,10 +219,10 @@ dlopen_dlz_create(const char *dlzname, unsigned int argc, char *argv[],
 			   "dlz_dlopen driver for '%s' needs a path to "
 			   "the shared library",
 			   dlzname);
-		return (ISC_R_FAILURE);
+		return ISC_R_FAILURE;
 	}
 
-	isc_mem_create(&mctx);
+	isc_mem_create("dlz", &mctx);
 	cd = isc_mem_get(mctx, sizeof(*cd));
 	*cd = (dlopen_data_t){
 		.mctx = mctx,
@@ -267,13 +267,13 @@ dlopen_dlz_create(const char *dlzname, unsigned int argc, char *argv[],
 	cd->dlz_allowzonexfr = (dlz_dlopen_allowzonexfr_t *)dl_load_symbol(
 		cd, "dlz_allowzonexfr", false);
 	cd->dlz_allnodes = (dlz_dlopen_allnodes_t *)dl_load_symbol(
-		cd, "dlz_allnodes", (cd->dlz_allowzonexfr != NULL));
+		cd, "dlz_allnodes", cd->dlz_allowzonexfr != NULL);
 	cd->dlz_authority = (dlz_dlopen_authority_t *)dl_load_symbol(
 		cd, "dlz_authority", false);
 	cd->dlz_newversion = (dlz_dlopen_newversion_t *)dl_load_symbol(
 		cd, "dlz_newversion", false);
 	cd->dlz_closeversion = (dlz_dlopen_closeversion_t *)dl_load_symbol(
-		cd, "dlz_closeversion", (cd->dlz_newversion != NULL));
+		cd, "dlz_closeversion", cd->dlz_newversion != NULL);
 	cd->dlz_configure = (dlz_dlopen_configure_t *)dl_load_symbol(
 		cd, "dlz_configure", false);
 	cd->dlz_ssumatch = (dlz_dlopen_ssumatch_t *)dl_load_symbol(
@@ -319,14 +319,14 @@ dlopen_dlz_create(const char *dlzname, unsigned int argc, char *argv[],
 
 	*dbdata = cd;
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 
 failed:
 	dlopen_log(ISC_LOG_ERROR, "dlz_dlopen of '%s' failed", dlzname);
 
 	dlopen_dlz_destroy(NULL, cd);
 
-	return (result);
+	return result;
 }
 
 /*
@@ -363,13 +363,13 @@ dlopen_dlz_newversion(const char *zone, void *driverarg, void *dbdata,
 	UNUSED(driverarg);
 
 	if (cd->dlz_newversion == NULL) {
-		return (ISC_R_NOTIMPLEMENTED);
+		return ISC_R_NOTIMPLEMENTED;
 	}
 
 	MAYBE_LOCK(cd);
 	result = cd->dlz_newversion(zone, cd->dbdata, versionp);
 	MAYBE_UNLOCK(cd);
-	return (result);
+	return result;
 }
 
 /*
@@ -404,7 +404,7 @@ dlopen_dlz_configure(dns_view_t *view, dns_dlzdb_t *dlzdb, void *driverarg,
 	UNUSED(driverarg);
 
 	if (cd->dlz_configure == NULL) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	MAYBE_LOCK(cd);
@@ -413,7 +413,7 @@ dlopen_dlz_configure(dns_view_t *view, dns_dlzdb_t *dlzdb, void *driverarg,
 	cd->in_configure = false;
 	MAYBE_UNLOCK(cd);
 
-	return (result);
+	return result;
 }
 
 /*
@@ -429,7 +429,7 @@ dlopen_dlz_ssumatch(const char *signer, const char *name, const char *tcpaddr,
 	UNUSED(driverarg);
 
 	if (cd->dlz_ssumatch == NULL) {
-		return (false);
+		return false;
 	}
 
 	MAYBE_LOCK(cd);
@@ -437,7 +437,7 @@ dlopen_dlz_ssumatch(const char *signer, const char *name, const char *tcpaddr,
 			       keydata, cd->dbdata);
 	MAYBE_UNLOCK(cd);
 
-	return (ret);
+	return ret;
 }
 
 /*
@@ -452,14 +452,14 @@ dlopen_dlz_addrdataset(const char *name, const char *rdatastr, void *driverarg,
 	UNUSED(driverarg);
 
 	if (cd->dlz_addrdataset == NULL) {
-		return (ISC_R_NOTIMPLEMENTED);
+		return ISC_R_NOTIMPLEMENTED;
 	}
 
 	MAYBE_LOCK(cd);
 	result = cd->dlz_addrdataset(name, rdatastr, cd->dbdata, version);
 	MAYBE_UNLOCK(cd);
 
-	return (result);
+	return result;
 }
 
 /*
@@ -474,14 +474,14 @@ dlopen_dlz_subrdataset(const char *name, const char *rdatastr, void *driverarg,
 	UNUSED(driverarg);
 
 	if (cd->dlz_subrdataset == NULL) {
-		return (ISC_R_NOTIMPLEMENTED);
+		return ISC_R_NOTIMPLEMENTED;
 	}
 
 	MAYBE_LOCK(cd);
 	result = cd->dlz_subrdataset(name, rdatastr, cd->dbdata, version);
 	MAYBE_UNLOCK(cd);
 
-	return (result);
+	return result;
 }
 
 /*
@@ -496,14 +496,14 @@ dlopen_dlz_delrdataset(const char *name, const char *type, void *driverarg,
 	UNUSED(driverarg);
 
 	if (cd->dlz_delrdataset == NULL) {
-		return (ISC_R_NOTIMPLEMENTED);
+		return ISC_R_NOTIMPLEMENTED;
 	}
 
 	MAYBE_LOCK(cd);
 	result = cd->dlz_delrdataset(name, type, cd->dbdata, version);
 	MAYBE_UNLOCK(cd);
 
-	return (result);
+	return result;
 }
 
 static dns_sdlzmethods_t dlz_dlopen_methods = {
@@ -535,7 +535,7 @@ dlz_dlopen_init(isc_mem_t *mctx) {
 		result = ISC_R_UNEXPECTED;
 	}
 
-	return (result);
+	return result;
 }
 
 /*

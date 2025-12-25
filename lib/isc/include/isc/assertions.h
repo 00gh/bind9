@@ -17,9 +17,6 @@
 #pragma once
 
 #include <isc/attributes.h>
-#include <isc/lang.h>
-
-ISC_LANG_BEGINDECLS
 
 /*% isc assertion type */
 typedef enum {
@@ -33,7 +30,7 @@ typedef void (*isc_assertioncallback_t)(const char *, int, isc_assertiontype_t,
 					const char *);
 
 /* coverity[+kill] */
-noreturn void
+ISC_NORETURN void
 isc_assertion_failed(const char *, int, isc_assertiontype_t, const char *);
 
 void isc_assertion_setcallback(isc_assertioncallback_t);
@@ -69,5 +66,3 @@ isc_assertion_typetotext(isc_assertiontype_t type);
 	(isc_assertion_failed(__FILE__, __LINE__, isc_assertiontype_insist, \
 			      "unreachable"),                               \
 	 __builtin_unreachable())
-
-ISC_LANG_ENDDECLS

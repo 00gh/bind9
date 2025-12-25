@@ -37,10 +37,10 @@ generic_key_nokey(dns_rdatatype_t type, unsigned int flags) {
 	case dns_rdatatype_cdnskey:
 	case dns_rdatatype_dnskey:
 	case dns_rdatatype_rkey:
-		return (false);
+		return false;
 	case dns_rdatatype_key:
 	default:
-		return ((flags & DNS_KEYFLAG_TYPEMASK) == DNS_KEYTYPE_NOKEY);
+		return (flags & DNS_KEYFLAG_TYPEMASK) == DNS_KEYTYPE_NOKEY;
 	}
 }
 
@@ -80,7 +80,7 @@ generic_fromtext_key(ARGS_FROMTEXT) {
 
 	/* No Key? */
 	if (generic_key_nokey(type, flags)) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	/*
@@ -104,7 +104,7 @@ generic_fromtext_key(ARGS_FROMTEXT) {
 		RETERR(check_private(&b, alg));
 	}
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -151,24 +151,23 @@ generic_totext_key(ARGS_TOTEXT) {
 
 	/* No Key? */
 	if (generic_key_nokey(rdata->type, flags)) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	if ((tctx->flags & DNS_STYLEFLAG_RRCOMMENT) != 0 &&
 	    algorithm == DNS_KEYALG_PRIVATEDNS)
 	{
 		dns_name_t name;
-		dns_name_init(&name, NULL);
+		dns_name_init(&name);
 		dns_name_fromregion(&name, &sr);
 		dns_name_format(&name, algbuf, sizeof(algbuf));
 	} else if ((tctx->flags & DNS_STYLEFLAG_RRCOMMENT) != 0 &&
 		   algorithm == DNS_KEYALG_PRIVATEOID)
 	{
-		const unsigned char *in = sr.base;
-		ASN1_OBJECT *obj = d2i_ASN1_OBJECT(NULL, &in, sr.length);
-		int n;
+		const unsigned char *in = sr.base + 1;
+		ASN1_OBJECT *obj = d2i_ASN1_OBJECT(NULL, &in, *sr.base);
 		INSIST(obj != NULL);
-		n = i2t_ASN1_OBJECT(algbuf, sizeof(buf), obj);
+		int n = i2t_ASN1_OBJECT(algbuf, sizeof(buf), obj);
 		ASN1_OBJECT_free(obj);
 		if (n == -1 || (size_t)n >= sizeof(algbuf)) {
 			dns_secalg_format((dns_secalg_t)algorithm, algbuf,
@@ -223,7 +222,7 @@ generic_totext_key(ARGS_TOTEXT) {
 		snprintf(buf, sizeof(buf), "%u", dst_region_computeid(&tmpr));
 		RETERR(str_totext(buf, target));
 	}
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -237,12 +236,12 @@ generic_fromwire_key(ARGS_FROMWIRE) {
 
 	isc_buffer_activeregion(source, &sr);
 	if (sr.length < 4) {
-		return (ISC_R_UNEXPECTEDEND);
+		return ISC_R_UNEXPECTEDEND;
 	}
 	flags = (sr.base[0] << 8) | sr.base[1];
 
 	if (type == dns_rdatatype_rkey && flags != 0U) {
-		return (DNS_R_FORMERR);
+		return DNS_R_FORMERR;
 	}
 
 	algorithm = sr.base[3];
@@ -251,10 +250,10 @@ generic_fromwire_key(ARGS_FROMWIRE) {
 	isc_buffer_forward(source, 4);
 
 	if (generic_key_nokey(type, flags)) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 	if (sr.length == 0) {
-		return (ISC_R_UNEXPECTEDEND);
+		return ISC_R_UNEXPECTEDEND;
 	}
 
 	if (algorithm == DNS_KEYALG_PRIVATEDNS ||
@@ -266,14 +265,14 @@ generic_fromwire_key(ARGS_FROMWIRE) {
 
 	isc_buffer_activeregion(source, &sr);
 	isc_buffer_forward(source, sr.length);
-	return (mem_tobuffer(target, sr.base, sr.length));
+	return mem_tobuffer(target, sr.base, sr.length);
 }
 
 static isc_result_t
 fromtext_key(ARGS_FROMTEXT) {
 	REQUIRE(type == dns_rdatatype_key);
 
-	return (generic_fromtext_key(CALL_FROMTEXT));
+	return generic_fromtext_key(CALL_FROMTEXT);
 }
 
 static isc_result_t
@@ -281,14 +280,14 @@ totext_key(ARGS_TOTEXT) {
 	REQUIRE(rdata != NULL);
 	REQUIRE(rdata->type == dns_rdatatype_key);
 
-	return (generic_totext_key(CALL_TOTEXT));
+	return generic_totext_key(CALL_TOTEXT);
 }
 
 static isc_result_t
 fromwire_key(ARGS_FROMWIRE) {
 	REQUIRE(type == dns_rdatatype_key);
 
-	return (generic_fromwire_key(CALL_FROMWIRE));
+	return generic_fromwire_key(CALL_FROMWIRE);
 }
 
 static isc_result_t
@@ -302,7 +301,7 @@ towire_key(ARGS_TOWIRE) {
 	UNUSED(cctx);
 
 	dns_rdata_toregion(rdata, &sr);
-	return (mem_tobuffer(target, sr.base, sr.length));
+	return mem_tobuffer(target, sr.base, sr.length);
 }
 
 static int
@@ -320,7 +319,7 @@ compare_key(ARGS_COMPARE) {
 
 	dns_rdata_toregion(rdata1, &r1);
 	dns_rdata_toregion(rdata2, &r2);
-	return (isc_region_compare(&r1, &r2));
+	return isc_region_compare(&r1, &r2);
 }
 
 static isc_result_t
@@ -348,7 +347,7 @@ generic_fromstruct_key(ARGS_FROMSTRUCT) {
 	RETERR(uint8_tobuffer(key->algorithm, target));
 
 	/* Data */
-	return (mem_tobuffer(target, key->data, key->datalen));
+	return mem_tobuffer(target, key->data, key->datalen);
 }
 
 static isc_result_t
@@ -362,7 +361,6 @@ generic_tostruct_key(ARGS_TOSTRUCT) {
 	REQUIRE(key != NULL);
 	REQUIRE(key->common.rdclass == rdata->rdclass);
 	REQUIRE(key->common.rdtype == rdata->type);
-	REQUIRE(!ISC_LINK_LINKED(&key->common, link));
 
 	dns_rdata_toregion(rdata, &sr);
 
@@ -382,7 +380,7 @@ generic_tostruct_key(ARGS_TOSTRUCT) {
 	key->datalen = sr.length;
 	key->data = mem_maybedup(mctx, sr.base, key->datalen);
 	key->mctx = mctx;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static void
@@ -405,7 +403,7 @@ static isc_result_t
 fromstruct_key(ARGS_FROMSTRUCT) {
 	REQUIRE(type == dns_rdatatype_key);
 
-	return (generic_fromstruct_key(CALL_FROMSTRUCT));
+	return generic_fromstruct_key(CALL_FROMSTRUCT);
 }
 
 static isc_result_t
@@ -418,9 +416,8 @@ tostruct_key(ARGS_TOSTRUCT) {
 
 	key->common.rdclass = rdata->rdclass;
 	key->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&key->common, link);
 
-	return (generic_tostruct_key(CALL_TOSTRUCT));
+	return generic_tostruct_key(CALL_TOSTRUCT);
 }
 
 static void
@@ -443,7 +440,7 @@ additionaldata_key(ARGS_ADDLDATA) {
 	UNUSED(add);
 	UNUSED(arg);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -455,7 +452,7 @@ digest_key(ARGS_DIGEST) {
 
 	dns_rdata_toregion(rdata, &r);
 
-	return ((digest)(arg, &r));
+	return (digest)(arg, &r);
 }
 
 static bool
@@ -467,7 +464,7 @@ checkowner_key(ARGS_CHECKOWNER) {
 	UNUSED(rdclass);
 	UNUSED(wildcard);
 
-	return (true);
+	return true;
 }
 
 static bool
@@ -479,12 +476,12 @@ checknames_key(ARGS_CHECKNAMES) {
 	UNUSED(owner);
 	UNUSED(bad);
 
-	return (true);
+	return true;
 }
 
 static int
 casecompare_key(ARGS_COMPARE) {
-	return (compare_key(rdata1, rdata2));
+	return compare_key(rdata1, rdata2);
 }
 
 #endif /* RDATA_GENERIC_KEY_25_C */

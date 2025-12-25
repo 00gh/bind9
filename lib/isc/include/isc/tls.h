@@ -13,6 +13,7 @@
 
 #pragma once
 
+#include <isc/log.h>
 #include <isc/mem.h>
 #include <isc/region.h>
 #include <isc/result.h>
@@ -133,11 +134,32 @@ isc_tls_cipherlist_valid(const char *cipherlist);
 void
 isc_tlsctx_set_cipherlist(isc_tlsctx_t *ctx, const char *cipherlist);
 /*%<
- * Set cipher list string for on the given TLS context 'ctx'.
+ * Set cipher list string for on the given TLS context 'ctx'. This affects only
+ * TLSv1.2 (and older).
  *
  * Requires:
  * \li	'ctx' != NULL;
  * \li	'cipherlist' a valid pointer to a non empty string.
+ */
+
+bool
+isc_tls_cipher_suites_valid(const char *cipher_suites);
+/*%<
+ * Check if cipher suites string is valid.
+ *
+ * Requires:
+ * \li	'cipher_suites' a valid pointer to a non empty string.
+ */
+
+void
+isc_tlsctx_set_cipher_suites(isc_tlsctx_t *ctx, const char *cipher_suites);
+/*%<
+ * Set cipher suites string for on the given TLS context 'ctx'. This affects
+ * only TLSv1.3.
+ *
+ * Requires:
+ * \li	'ctx' != NULL;
+ * \li	'cipher_suites' a valid pointer to a non empty string.
  */
 
 void
@@ -586,14 +608,18 @@ isc_tlsctx_set_random_session_id_context(isc_tlsctx_t *ctx);
  *\li   'ctx' - a valid non-NULL pointer;
  */
 
-void
-isc__tls_initialize(void);
+bool
+isc_tls_valid_sni_hostname(const char *hostname);
+/*%<
+ * Checks if a 'hostname' is not a valid IPv4 or IPv6 address
+ * string. Returns 'true' if the hostname is likely a domain name, and
+ * 'false' if it represents an IP address.
+ */
 
-void
-isc__tls_shutdown(void);
-
-void
-isc__tls_setdestroycheck(bool check);
-
-void
-isc__tls_setfatalmode(void);
+#define isc_tlserr2result(category, module, funcname, fallback)            \
+	isc__tlserr2result(category, module, funcname, fallback, __FILE__, \
+			   __LINE__)
+isc_result_t
+isc__tlserr2result(isc_logcategory_t category, isc_logmodule_t module,
+		   const char *funcname, isc_result_t fallback,
+		   const char *file, int line);

@@ -19,10 +19,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 
-#include <isc/lang.h>
 #include <isc/types.h>
-
-ISC_LANG_BEGINDECLS
 
 isc_result_t
 isc_file_settime(const char *file, isc_time_t *time);
@@ -242,7 +239,7 @@ isc_file_basename(const char *filename);
  * Return the final component of the path in the file name.
  */
 
-isc_result_t
+void
 isc_file_progname(const char *filename, char *buf, size_t buflen);
 /*!<
  * \brief Given an operating system specific file name "filename"
@@ -253,10 +250,6 @@ isc_file_progname(const char *filename, char *buf, size_t buflen);
  * names are case insensitive, the name is canonicalized to all
  * lower case.  The name is written to 'buf', an array of 'buflen'
  * chars, and null terminated.
- *
- * Returns:
- *\li	#ISC_R_SUCCESS
- *\li	#ISC_R_NOSPACE 	The name did not fit in 'buf'.
  */
 
 isc_result_t
@@ -312,7 +305,6 @@ isc_file_splitpath(isc_mem_t *mctx, const char *path, char **dirname,
  * Returns:
  * - ISC_R_SUCCESS on success
  * - ISC_R_INVALIDFILE if 'path' is empty or ends with '/'
- * - ISC_R_NOMEMORY if unable to allocate memory
  */
 
 isc_result_t
@@ -369,5 +361,3 @@ isc_file_isdirwritable(const char *path);
 /*%<
  *	Return true if the path is a directory and is writable
  */
-
-ISC_LANG_ENDDECLS

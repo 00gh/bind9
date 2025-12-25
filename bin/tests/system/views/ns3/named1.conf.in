@@ -21,6 +21,7 @@ options {
 	listen-on { 10.53.0.3; };
 	listen-on-v6 { none; };
 	recursion yes;
+	dnssec-validation no;
 	notify yes;
 };
 
@@ -35,7 +36,7 @@ controls {
 
 zone "." {
 	type hint;
-	file "../../common/root.hint";
+	file "../../_common/root.hint";
 };
 
 zone "example" {

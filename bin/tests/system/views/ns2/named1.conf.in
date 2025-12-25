@@ -19,7 +19,9 @@ options {
 	pid-file "named.pid";
 	listen-on { 10.53.0.2; };
 	listen-on-v6 { none; };
+	allow-transfer { any; };
 	recursion yes;
+	dnssec-validation no;
 	notify yes;
 };
 
@@ -32,10 +34,16 @@ controls {
 	inet 10.53.0.2 port @CONTROLPORT@ allow { any; } keys { rndc_key; };
 };
 
+dnssec-policy "views" {
+	keys {
+		ksk key-directory lifetime unlimited algorithm @DEFAULT_ALGORITHM@;
+		csk key-directory lifetime unlimited algorithm @DEFAULT_ALGORITHM@;
+	};
+};
 
 zone "." {
 	type hint;
-	file "../../common/root.hint";
+	file "../../_common/root.hint";
 };
 
 zone "example" {
@@ -48,7 +56,6 @@ zone "inline" {
 	type primary;
 	file "external/inline.db";
 	key-directory "external";
-	auto-dnssec maintain;
+	dnssec-policy views;
 	inline-signing yes;
-	dnssec-dnskey-kskonly no;
 };

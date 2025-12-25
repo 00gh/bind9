@@ -22,13 +22,13 @@ zonefile=root.db
 
 echo_i "ns1/sign.sh"
 
-ksk=$("$KEYGEN" -q -fk -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
-zsk=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
+ksk=$("$KEYGEN" -q -fk -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+zsk=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
 
-cat "$infile" "$ksk.key" "$zsk.key" > "$zonefile"
+cat "$infile" "$ksk.key" "$zsk.key" >"$zonefile"
 
-"$SIGNER" -P -g -o "$zone" "$zonefile" > /dev/null 2>&1
+"$SIGNER" -P -g -o "$zone" "$zonefile" >/dev/null 2>&1
 
 # Configure the resolving server with a static key.
-keyfile_to_static_ds "$ksk" > trusted.conf
+keyfile_to_static_ds "$ksk" >trusted.conf
 cp trusted.conf ../ns3/trusted.conf

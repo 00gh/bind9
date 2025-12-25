@@ -41,12 +41,9 @@
 
 #include <stdbool.h>
 
-#include <isc/lang.h>
 #include <isc/stdtime.h>
 
 #include <dns/types.h>
-
-ISC_LANG_BEGINDECLS
 
 /*%
  * _OMITDNSSEC:
@@ -57,26 +54,24 @@ ISC_LANG_BEGINDECLS
 isc_result_t
 dns_ncache_add(dns_message_t *message, dns_db_t *cache, dns_dbnode_t *node,
 	       dns_rdatatype_t covers, isc_stdtime_t now, dns_ttl_t minttl,
-	       dns_ttl_t maxttl, dns_rdataset_t *addedrdataset);
-isc_result_t
-dns_ncache_addoptout(dns_message_t *message, dns_db_t *cache,
-		     dns_dbnode_t *node, dns_rdatatype_t covers,
-		     isc_stdtime_t now, dns_ttl_t minttl, dns_ttl_t maxttl,
-		     bool optout, dns_rdataset_t *addedrdataset);
+	       dns_ttl_t maxttl, bool optout, bool secure,
+	       dns_rdataset_t *addedrdataset);
 /*%<
  * Convert the authority data from 'message' into a negative cache
  * rdataset, and store it in 'cache' at 'node' with a TTL limited to
  * 'maxttl'.
  *
- * \li dns_ncache_add produces a negative cache entry with a trust of no
- *     more than answer
- * \li dns_ncache_addoptout produces a negative cache entry which will have
- *     a trust of secure if all the records that make up the entry are secure.
+ * \li If 'secure' is true and all the records that make up the entry
+ *     are secure, then dns_ncache_add produces a negative cache entry
+ *     with trust level secure.
+ * \li If 'secure' is false, the negative cache entry's trust level
+ *     will be capped at answer.
  *
  * The 'covers' argument is the RR type whose nonexistence we are caching,
  * or dns_rdatatype_any when caching a NXDOMAIN response.
  *
- * 'optout' indicates a DNS_RDATASETATTR_OPTOUT should be set.
+ * 'optout' parameter indicates if 'optout' attribute should be set.  This only
+ * applies in secure zones; if 'secure' is false, 'optout' is ignored.
  *
  * Note:
  *\li	If 'addedrdataset' is not NULL, then it will be attached to the added
@@ -180,5 +175,3 @@ dns_ncache_current(dns_rdataset_t *ncacherdataset, dns_name_t *found,
  * \li	'found' to be valid.
  * \li	'rdataset' to be unassociated.
  */
-
-ISC_LANG_ENDDECLS

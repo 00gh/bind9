@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <signal.h>
@@ -55,7 +56,33 @@ shutdownconnect_connectcb(isc_nmhandle_t *handle, isc_result_t eresult,
 int
 stream_shutdownconnect_setup(void **state ISC_ATTR_UNUSED) {
 	int r = setup_netmgr_test(state);
-	return (r);
+	return r;
+}
+
+int
+proxystream_shutdownconnect_setup(void **state) {
+	stream_use_PROXY = true;
+	return stream_shutdownconnect_setup(state);
+}
+
+int
+proxystream_shutdownconnect_teardown(void **state) {
+	int r = stream_shutdownconnect_teardown(state);
+	stream_use_PROXY = false;
+	return r;
+}
+
+int
+proxystreamtls_shutdownconnect_setup(void **state) {
+	stream_PROXY_over_TLS = true;
+	return proxystream_shutdownconnect_setup(state);
+}
+
+int
+proxystreamtls_shutdownconnect_teardown(void **state) {
+	int r = proxystream_shutdownconnect_teardown(state);
+	stream_PROXY_over_TLS = false;
+	return r;
 }
 
 void
@@ -63,10 +90,10 @@ stream_shutdownconnect(void **state ISC_ATTR_UNUSED) {
 	isc_result_t result = stream_listen(stream_accept_cb, NULL, 128, NULL,
 					    &listen_sock);
 	assert_int_equal(result, ISC_R_SUCCESS);
-	isc_loop_teardown(mainloop, stop_listening, listen_sock);
+	isc_loop_teardown(isc_loop_main(), stop_listening, listen_sock);
 
 	/* Schedule the shutdown before the connect */
-	isc_loopmgr_shutdown(loopmgr);
+	isc_loopmgr_shutdown();
 
 	stream_connect(shutdownconnect_connectcb, NULL, T_CONNECT);
 }
@@ -81,7 +108,7 @@ stream_shutdownconnect_teardown(void **state ISC_ATTR_UNUSED) {
 	atomic_assert_int_eq(csends, 0);
 	atomic_assert_int_eq(creads, 0);
 
-	return (teardown_netmgr_test(state));
+	return teardown_netmgr_test(state);
 }
 
 /* Issue the shutdown before reading */
@@ -129,7 +156,7 @@ shutdownread_connectcb(isc_nmhandle_t *handle, isc_result_t eresult,
 	atomic_fetch_add(&cconnects, 1);
 
 	/* Schedule the shutdown before read and send */
-	isc_loopmgr_shutdown(loopmgr);
+	isc_loopmgr_shutdown();
 
 	isc_refcount_increment0(&active_creads);
 	isc_nmhandle_ref(handle);
@@ -144,7 +171,33 @@ shutdownread_connectcb(isc_nmhandle_t *handle, isc_result_t eresult,
 int
 stream_shutdownread_setup(void **state ISC_ATTR_UNUSED) {
 	int r = setup_netmgr_test(state);
-	return (r);
+	return r;
+}
+
+int
+proxystream_shutdownread_setup(void **state) {
+	stream_use_PROXY = true;
+	return stream_shutdownread_setup(state);
+}
+
+int
+proxystream_shutdownread_teardown(void **state) {
+	int r = stream_shutdownread_teardown(state);
+	stream_use_PROXY = false;
+	return r;
+}
+
+int
+proxystreamtls_shutdownread_setup(void **state) {
+	stream_PROXY_over_TLS = true;
+	return proxystream_shutdownread_setup(state);
+}
+
+int
+proxystreamtls_shutdownread_teardown(void **state) {
+	int r = proxystream_shutdownread_teardown(state);
+	stream_PROXY_over_TLS = false;
+	return r;
 }
 
 void
@@ -152,7 +205,7 @@ stream_shutdownread(void **state ISC_ATTR_UNUSED) {
 	isc_result_t result = stream_listen(stream_accept_cb, NULL, 128, NULL,
 					    &listen_sock);
 	assert_int_equal(result, ISC_R_SUCCESS);
-	isc_loop_teardown(mainloop, stop_listening, listen_sock);
+	isc_loop_teardown(isc_loop_main(), stop_listening, listen_sock);
 
 	stream_connect(shutdownread_connectcb, NULL, T_CONNECT);
 }
@@ -167,5 +220,5 @@ stream_shutdownread_teardown(void **state ISC_ATTR_UNUSED) {
 	atomic_assert_int_eq(csends, 1);
 	atomic_assert_int_eq(creads, 1);
 
-	return (teardown_netmgr_test(state));
+	return teardown_netmgr_test(state);
 }

@@ -31,7 +31,7 @@
 #include <isc/base64.h>
 #include <isc/buffer.h>
 #include <isc/commandline.h>
-#include <isc/file.h>
+#include <isc/lib.h>
 #include <isc/mem.h>
 #include <isc/net.h>
 #include <isc/result.h>
@@ -40,6 +40,7 @@
 #include <isc/util.h>
 
 #include <dns/keyvalues.h>
+#include <dns/lib.h>
 #include <dns/name.h>
 
 #include <dst/dst.h>
@@ -53,14 +54,11 @@
 #define DEFAULT_SERVER	"127.0.0.1"
 #define DEFAULT_PORT	953
 
-static char program[256];
-const char *progname;
-
 bool verbose = false;
 
 const char *keyfile, *keydef;
 
-noreturn static void
+ISC_NORETURN static void
 usage(int status);
 
 static void
@@ -79,7 +77,7 @@ Usage:\n\
   -s addr:	 the address to which rndc should connect\n\
   -t chrootdir:	 write a keyfile in chrootdir as well (requires -a)\n\
   -u user:	 set the keyfile owner to \"user\" (requires -a)\n",
-		progname, keydef);
+		isc_commandline_progname, keydef);
 
 	exit(status);
 }
@@ -89,8 +87,6 @@ main(int argc, char **argv) {
 	bool show_final_mem = false;
 	isc_buffer_t key_txtbuffer;
 	char key_txtsecret[256];
-	isc_mem_t *mctx = NULL;
-	isc_result_t result = ISC_R_SUCCESS;
 	const char *keyname = NULL;
 	const char *serveraddr = NULL;
 	dns_secalg_t alg;
@@ -109,11 +105,7 @@ main(int argc, char **argv) {
 
 	keydef = keyfile = RNDC_KEYFILE;
 
-	result = isc_file_progname(*argv, program, sizeof(program));
-	if (result != ISC_R_SUCCESS) {
-		memmove(program, "rndc-confgen", 13);
-	}
-	progname = program;
+	isc_commandline_init(argc, argv);
 
 	keyname = DEFAULT_KEYNAME;
 	alg = DST_ALG_HMACSHA256;
@@ -146,13 +138,14 @@ main(int argc, char **argv) {
 			keyfile = isc_commandline_argument;
 			break;
 		case 'h':
-			usage(0);
+			usage(EXIT_SUCCESS);
+			break;
 		case 'k':
 		case 'y': /* Compatible with rndc -y. */
 			keyname = isc_commandline_argument;
 			break;
 		case 'M':
-			isc_mem_debugging = ISC_MEM_DEBUGTRACE;
+			isc_mem_debugon(ISC_MEM_DEBUGTRACE);
 			break;
 
 		case 'm':
@@ -191,16 +184,18 @@ main(int argc, char **argv) {
 		case '?':
 			if (isc_commandline_option != '?') {
 				fprintf(stderr, "%s: invalid argument -%c\n",
-					program, isc_commandline_option);
-				usage(1);
+					isc_commandline_progname,
+					isc_commandline_option);
+				usage(EXIT_FAILURE);
 			} else {
-				usage(0);
+				usage(EXIT_SUCCESS);
 			}
 			break;
 		default:
-			fprintf(stderr, "%s: unhandled option -%c\n", program,
+			fprintf(stderr, "%s: unhandled option -%c\n",
+				isc_commandline_progname,
 				isc_commandline_option);
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 	}
 
@@ -209,7 +204,7 @@ main(int argc, char **argv) {
 	POST(argv);
 
 	if (argc > 0) {
-		usage(1);
+		usage(EXIT_FAILURE);
 	}
 
 	if (alg == DST_ALG_HMACMD5) {
@@ -223,10 +218,9 @@ main(int argc, char **argv) {
 	}
 	algname = dst_hmac_algorithm_totext(alg);
 
-	isc_mem_create(&mctx);
 	isc_buffer_init(&key_txtbuffer, &key_txtsecret, sizeof(key_txtsecret));
 
-	generate_key(mctx, alg, keysize, &key_txtbuffer);
+	generate_key(isc_g_mctx, alg, keysize, &key_txtbuffer);
 
 	if (keyonly) {
 		write_key_file(keyfile, chrootdir == NULL ? user : NULL,
@@ -238,7 +232,7 @@ main(int argc, char **argv) {
 		if (chrootdir != NULL) {
 			char *buf;
 			len = strlen(chrootdir) + strlen(keyfile) + 2;
-			buf = isc_mem_get(mctx, len);
+			buf = isc_mem_get(isc_g_mctx, len);
 			snprintf(buf, len, "%s%s%s", chrootdir,
 				 (*keyfile != '/') ? "/" : "", keyfile);
 
@@ -246,7 +240,7 @@ main(int argc, char **argv) {
 			if (!quiet) {
 				printf("wrote key file \"%s\"\n", buf);
 			}
-			isc_mem_put(mctx, buf, len);
+			isc_mem_put(isc_g_mctx, buf, len);
 		}
 	} else {
 		printf("\
@@ -284,10 +278,8 @@ options {\n\
 	}
 
 	if (show_final_mem) {
-		isc_mem_stats(mctx, stderr);
+		isc_mem_stats(isc_g_mctx, stderr);
 	}
 
-	isc_mem_destroy(&mctx);
-
-	return (0);
+	return 0;
 }

@@ -20,15 +20,12 @@
 #include "loop_p.h"
 
 isc_signal_t *
-isc_signal_new(isc_loopmgr_t *loopmgr, isc_signal_cb cb, void *cbarg,
-	       int signum) {
-	isc_loop_t *loop = NULL;
-	isc_signal_t *signal = NULL;
+isc_signal_new(isc_signal_cb cb, void *cbarg, int signum) {
 	int r;
+	isc_loop_t *loop = isc_loop_main();
+	isc_signal_t *signal = isc_mem_get(isc_loop_getmctx(loop),
+					   sizeof(*signal));
 
-	loop = DEFAULT_LOOP(loopmgr);
-
-	signal = isc_mem_get(isc_loop_getmctx(loop), sizeof(*signal));
 	*signal = (isc_signal_t){
 		.magic = SIGNAL_MAGIC,
 		.cb = cb,
@@ -43,7 +40,7 @@ isc_signal_new(isc_loopmgr_t *loopmgr, isc_signal_cb cb, void *cbarg,
 
 	uv_handle_set_data((uv_handle_t *)&signal->signal, signal);
 
-	return (signal);
+	return signal;
 }
 
 static void

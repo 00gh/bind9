@@ -20,16 +20,18 @@
 #include <isc/attributes.h>
 #include <isc/buffer.h>
 #include <isc/commandline.h>
-#include <isc/condition.h>
+#include <isc/lib.h>
 #include <isc/loop.h>
 #include <isc/netaddr.h>
 #include <isc/parseint.h>
+#include <isc/readline.h>
 #include <isc/string.h>
 #include <isc/util.h>
 #include <isc/work.h>
 
 #include <dns/byaddr.h>
 #include <dns/fixedname.h>
+#include <dns/lib.h>
 #include <dns/message.h>
 #include <dns/name.h>
 #include <dns/rdata.h>
@@ -39,7 +41,6 @@
 #include <dns/rdatatype.h>
 
 #include "dighost.h"
-#include "readline.h"
 
 static char cmdlinebuf[COMMSIZE];
 static char *cmdline = NULL;
@@ -128,7 +129,7 @@ rcode_totext(dns_rcode_t rcode) {
 	} else {
 		totext.consttext = rcodetext[rcode];
 	}
-	return (totext.deconsttext);
+	return totext.deconsttext;
 }
 
 static void
@@ -179,7 +180,7 @@ printrdata(dns_rdata_t *rdata) {
 	}
 
 	while (!done) {
-		isc_buffer_allocate(mctx, &b, size);
+		isc_buffer_allocate(isc_g_mctx, &b, size);
 		result = dns_rdata_totext(rdata, NULL, b);
 		if (result == ISC_R_SUCCESS) {
 			printf("%.*s\n", (int)isc_buffer_usedlength(b),
@@ -189,6 +190,7 @@ printrdata(dns_rdata_t *rdata) {
 			check_result(result, "dns_rdata_totext");
 		}
 		isc_buffer_free(&b);
+		INSIST(size <= (UINT_MAX / 2));
 		size *= 2;
 	}
 }
@@ -196,10 +198,6 @@ printrdata(dns_rdata_t *rdata) {
 static isc_result_t
 printsection(dig_query_t *query, dns_message_t *msg, bool headers,
 	     dns_section_t section) {
-	isc_result_t result, loopresult;
-	dns_name_t *name;
-	dns_rdataset_t *rdataset = NULL;
-	dns_rdata_t rdata = DNS_RDATA_INIT;
 	char namebuf[DNS_NAME_FORMATSIZE];
 
 	UNUSED(query);
@@ -207,20 +205,10 @@ printsection(dig_query_t *query, dns_message_t *msg, bool headers,
 
 	debug("printsection()");
 
-	result = dns_message_firstname(msg, section);
-	if (result == ISC_R_NOMORE) {
-		return (ISC_R_SUCCESS);
-	} else if (result != ISC_R_SUCCESS) {
-		return (result);
-	}
-	for (;;) {
-		name = NULL;
-		dns_message_currentname(msg, section, &name);
-		for (rdataset = ISC_LIST_HEAD(name->list); rdataset != NULL;
-		     rdataset = ISC_LIST_NEXT(rdataset, link))
-		{
-			loopresult = dns_rdataset_first(rdataset);
-			while (loopresult == ISC_R_SUCCESS) {
+	MSG_SECTION_FOREACH (msg, section, name) {
+		ISC_LIST_FOREACH (name->list, rdataset, link) {
+			DNS_RDATASET_FOREACH (rdataset) {
+				dns_rdata_t rdata = DNS_RDATA_INIT;
 				dns_rdataset_current(rdataset, &rdata);
 				switch (rdata.type) {
 				case dns_rdatatype_a:
@@ -247,27 +235,15 @@ printsection(dig_query_t *query, dns_message_t *msg, bool headers,
 					printrdata(&rdata);
 					break;
 				}
-				dns_rdata_reset(&rdata);
-				loopresult = dns_rdataset_next(rdataset);
 			}
 		}
-		result = dns_message_nextname(msg, section);
-		if (result == ISC_R_NOMORE) {
-			break;
-		} else if (result != ISC_R_SUCCESS) {
-			return (result);
-		}
 	}
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
 detailsection(dig_query_t *query, dns_message_t *msg, bool headers,
 	      dns_section_t section) {
-	isc_result_t result, loopresult;
-	dns_name_t *name;
-	dns_rdataset_t *rdataset = NULL;
-	dns_rdata_t rdata = DNS_RDATA_INIT;
 	char namebuf[DNS_NAME_FORMATSIZE];
 
 	UNUSED(query);
@@ -291,18 +267,8 @@ detailsection(dig_query_t *query, dns_message_t *msg, bool headers,
 		}
 	}
 
-	result = dns_message_firstname(msg, section);
-	if (result == ISC_R_NOMORE) {
-		return (ISC_R_SUCCESS);
-	} else if (result != ISC_R_SUCCESS) {
-		return (result);
-	}
-	for (;;) {
-		name = NULL;
-		dns_message_currentname(msg, section, &name);
-		for (rdataset = ISC_LIST_HEAD(name->list); rdataset != NULL;
-		     rdataset = ISC_LIST_NEXT(rdataset, link))
-		{
+	MSG_SECTION_FOREACH (msg, section, name) {
+		ISC_LIST_FOREACH (name->list, rdataset, link) {
 			if (section == DNS_SECTION_QUESTION) {
 				dns_name_format(name, namebuf, sizeof(namebuf));
 				printf("\t%s, ", namebuf);
@@ -313,8 +279,8 @@ detailsection(dig_query_t *query, dns_message_t *msg, bool headers,
 						      namebuf, sizeof(namebuf));
 				printf("class = %s\n", namebuf);
 			}
-			loopresult = dns_rdataset_first(rdataset);
-			while (loopresult == ISC_R_SUCCESS) {
+			DNS_RDATASET_FOREACH (rdataset) {
+				dns_rdata_t rdata = DNS_RDATA_INIT;
 				dns_rdataset_current(rdataset, &rdata);
 
 				dns_name_format(name, namebuf, sizeof(namebuf));
@@ -328,19 +294,11 @@ detailsection(dig_query_t *query, dns_message_t *msg, bool headers,
 					printf("\t");
 					printrdata(&rdata);
 				}
-				dns_rdata_reset(&rdata);
 				printf("\tttl = %u\n", rdataset->ttl);
-				loopresult = dns_rdataset_next(rdataset);
 			}
 		}
-		result = dns_message_nextname(msg, section);
-		if (result == ISC_R_NOMORE) {
-			break;
-		} else if (result != ISC_R_SUCCESS) {
-			return (result);
-		}
 	}
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static void
@@ -423,7 +381,7 @@ printmessage(dig_query_t *query, const isc_buffer_t *msgbuf, dns_message_t *msg,
 
 		/* the lookup failed */
 		print_error |= 1;
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	if (default_lookups && query->lookup->rdtype == dns_rdatatype_a) {
@@ -477,19 +435,15 @@ printmessage(dig_query_t *query, const isc_buffer_t *msgbuf, dns_message_t *msg,
 		printsection(query, msg, headers, DNS_SECTION_AUTHORITY);
 		printsection(query, msg, headers, DNS_SECTION_ADDITIONAL);
 	}
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static void
 show_settings(bool full, bool serv_only) {
-	dig_server_t *srv;
 	isc_sockaddr_t sockaddr;
-	dig_searchlist_t *listent;
 	isc_result_t result;
 
-	srv = ISC_LIST_HEAD(server_list);
-
-	while (srv != NULL) {
+	ISC_LIST_FOREACH (server_list, srv, link) {
 		char sockstr[ISC_SOCKADDR_FORMATSIZE];
 
 		result = get_address(srv->servername, port, &sockaddr);
@@ -501,7 +455,6 @@ show_settings(bool full, bool serv_only) {
 		if (!full) {
 			return;
 		}
-		srv = ISC_LIST_NEXT(srv, link);
 	}
 	if (serv_only) {
 		return;
@@ -515,9 +468,7 @@ show_settings(bool full, bool serv_only) {
 	       tries, port, ndots);
 	printf("  querytype = %-8s\tclass = %s\n", deftype, defclass);
 	printf("  srchlist = ");
-	for (listent = ISC_LIST_HEAD(search_list); listent != NULL;
-	     listent = ISC_LIST_NEXT(listent, link))
-	{
+	ISC_LIST_FOREACH (search_list, listent, link) {
 		printf("%s", listent->origin);
 		if (ISC_LIST_NEXT(listent, link) != NULL) {
 			printf("/");
@@ -536,10 +487,10 @@ testtype(char *typetext) {
 	tr.length = strlen(typetext);
 	result = dns_rdatatype_fromtext(&rdtype, &tr);
 	if (result == ISC_R_SUCCESS) {
-		return (true);
+		return true;
 	} else {
 		printf("unknown query type: %s\n", typetext);
-		return (false);
+		return false;
 	}
 }
 
@@ -553,10 +504,10 @@ testclass(char *typetext) {
 	tr.length = strlen(typetext);
 	result = dns_rdataclass_fromtext(&rdclass, &tr);
 	if (result == ISC_R_SUCCESS) {
-		return (true);
+		return true;
 	} else {
 		printf("unknown query class: %s\n", typetext);
-		return (false);
+		return false;
 	}
 }
 
@@ -813,9 +764,9 @@ readline_next_command(void *arg) {
 
 	UNUSED(arg);
 
-	isc_loopmgr_blocking(loopmgr);
+	isc_loopmgr_blocking();
 	ptr = readline("> ");
-	isc_loopmgr_nonblocking(loopmgr);
+	isc_loopmgr_nonblocking();
 	if (ptr == NULL) {
 		return;
 	}
@@ -835,7 +786,7 @@ fgets_next_command(void *arg) {
 	cmdline = fgets(cmdlinebuf, COMMSIZE, stdin);
 }
 
-noreturn static void
+ISC_NORETURN static void
 usage(void);
 
 static void
@@ -849,7 +800,7 @@ usage(void) {
 			"'host' using default server\n");
 	fprintf(stderr, "   nslookup [-opt ...] host server # just look up "
 			"'host' using 'server'\n");
-	exit(1);
+	exit(EXIT_FAILURE);
 }
 
 static void
@@ -862,7 +813,7 @@ parse_args(int argc, char **argv) {
 		if (argv[0][0] == '-') {
 			if (strncasecmp(argv[0], "-ver", 4) == 0) {
 				printf("nslookup %s\n", PACKAGE_VERSION);
-				exit(0);
+				exit(EXIT_SUCCESS);
 			} else if (argv[0][1] != 0) {
 				setoption(&argv[0][1]);
 			} else {
@@ -889,7 +840,7 @@ start_next_command(void);
 
 static void
 process_next_command(void *arg ISC_ATTR_UNUSED) {
-	isc_loop_t *loop = isc_loop_main(loopmgr);
+	isc_loop_t *loop = isc_loop_main();
 	if (cmdline == NULL) {
 		in_use = false;
 	} else {
@@ -905,15 +856,15 @@ process_next_command(void *arg ISC_ATTR_UNUSED) {
 
 static void
 start_next_command(void) {
-	isc_loop_t *loop = isc_loop_main(loopmgr);
+	isc_loop_t *loop = isc_loop_main();
 	if (!in_use) {
-		isc_loopmgr_shutdown(loopmgr);
+		isc_loopmgr_shutdown();
 		return;
 	}
 
 	cmdline = NULL;
 
-	isc_loopmgr_pause(loopmgr);
+	isc_loopmgr_pause();
 	if (interactive) {
 		isc_work_enqueue(loop, readline_next_command,
 				 process_next_command, loop);
@@ -921,7 +872,7 @@ start_next_command(void) {
 		isc_work_enqueue(loop, fgets_next_command, process_next_command,
 				 loop);
 	}
-	isc_loopmgr_resume(loopmgr);
+	isc_loopmgr_resume();
 }
 
 static void
@@ -947,8 +898,7 @@ main(int argc, char **argv) {
 	dighost_trying = trying;
 	dighost_shutdown = start_next_command;
 
-	setup_libs();
-	progname = argv[0];
+	setup_libs(argc, argv);
 
 	setup_system(false, false);
 	parse_args(argc, argv);
@@ -961,18 +911,18 @@ main(int argc, char **argv) {
 		set_search_domain(domainopt);
 	}
 	if (in_use) {
-		isc_loopmgr_setup(loopmgr, run_loop, NULL);
+		isc_loopmgr_setup(run_loop, NULL);
 	} else {
-		isc_loopmgr_setup(loopmgr, read_loop, NULL);
+		isc_loopmgr_setup(read_loop, NULL);
 	}
 	in_use = !in_use;
 
-	isc_loopmgr_run(loopmgr);
+	isc_loopmgr_run();
 
 	puts("");
 	debug("done, and starting to shut down");
 	cancel_all();
 	destroy_libs();
 
-	return (query_error | print_error);
+	return query_error | print_error;
 }

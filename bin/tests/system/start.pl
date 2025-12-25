@@ -85,7 +85,7 @@ if (!$test) {
 # Global variables
 my $builddir = $ENV{'builddir'};
 my $srcdir = $ENV{'srcdir'};
-my $testdir = "$builddir/$test";
+my $testdir = "$srcdir/$test";
 
 if (! -d $testdir) {
 	die "No test directory: \"$testdir\"\n";
@@ -230,22 +230,13 @@ sub construct_ns_command {
 
 	my $command;
 
-	if ($ENV{'USE_VALGRIND'}) {
-		$command = "valgrind -q --gen-suppressions=all --num-callers=48 --fullpath-after= --log-file=named-$server-valgrind-%p.log ";
-
-		if ($ENV{'USE_VALGRIND'} eq 'helgrind') {
-			$command .= "--tool=helgrind ";
-		} else {
-			$command .= "--tool=memcheck --track-origins=yes --leak-check=full ";
-		}
-
-		$command .= "$NAMED -m none ";
+	if ($taskset) {
+		$command = "taskset $taskset $NAMED ";
+	} elsif ($ENV{'USE_RR'}) {
+		$ENV{'_RR_TRACE_DIR'} = ".";
+		$command = "rr record --chaos $NAMED ";
 	} else {
-		if ($taskset) {
-			$command = "taskset $taskset $NAMED ";
-		} else {
-			$command = "$NAMED ";
-		}
+		$command = "$NAMED ";
 	}
 
 	my $args_file = $testdir . "/" . $server . "/" . "named.args";
@@ -269,19 +260,19 @@ sub construct_ns_command {
 		}
 	} else {
 		$command .= "-D $test-$server ";
-		$command .= "-X named.lock ";
 		$command .= "-m record ";
 
 		foreach my $t_option(
 			"dropedns", "ednsformerr", "ednsnotimp", "ednsrefused",
-			"noaa", "noedns", "nosoa", "maxudp512", "maxudp1460",
+			"cookiealwaysvalid", "noaa", "noedns", "nonearest",
+			"nosoa", "maxudp512", "maxudp1460", "tat=1", "tat=3"
 		    ) {
 			if (-e "$testdir/$server/named.$t_option") {
 				$command .= "-T $t_option "
 			}
 		}
 
-		$command .= "-c named.conf -d 99 -g -U 4 -T maxcachesize=2097152";
+		$command .= "-c named.conf -d 99 -g -T maxcachesize=2097152";
 	}
 
 	if (-e "$testdir/$server/named.notcp") {
@@ -333,6 +324,7 @@ sub construct_ans_command {
 	}
 
 	if (-e "$testdir/$server/ans.py") {
+		$ENV{'PYTHONPATH'} = $testdir . ":" . $srcdir;
 		$command = "$PYTHON -u ans.py 10.53.0.$n $queryport";
 	} elsif (-e "$testdir/$server/ans.pl") {
 		$command = "$PERL ans.pl";
@@ -382,9 +374,9 @@ sub count_running_lines {
 	# the shell *ought* to have created the file immediately, but this
 	# logic allows the creation to be delayed without issues
 	if (open(my $fh, "<", $runfile)) {
-		# the two non-whitespace blobs should be the date and time
+		# the whitespace blob should be an ISO timestamp
 		# but we don't care about them really, only that they are there
-		return scalar(grep /^\S+ \S+ running\R/, <$fh>);
+		return scalar(grep /^\S+[ T]\S+ running\R/, <$fh>);
 	} else {
 		return 0;
 	}

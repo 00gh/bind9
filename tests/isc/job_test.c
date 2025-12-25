@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -25,12 +26,11 @@
 
 #include <isc/atomic.h>
 #include <isc/job.h>
+#include <isc/lib.h>
 #include <isc/loop.h>
 #include <isc/os.h>
 #include <isc/result.h>
 #include <isc/util.h>
-
-#include "job.c"
 
 #include <tests/isc.h>
 
@@ -51,9 +51,9 @@ static void
 shutdown_cb(void *arg) {
 	struct test_arg *ta = arg;
 
-	isc_mem_put(mctx, ta, sizeof(*ta));
+	isc_mem_put(isc_g_mctx, ta, sizeof(*ta));
 
-	isc_loopmgr_shutdown(loopmgr);
+	isc_loopmgr_shutdown();
 }
 
 static void
@@ -63,10 +63,9 @@ job_cb(void *arg) {
 
 	if (n <= MAX_EXECUTED) {
 		atomic_fetch_add(&scheduled, 1);
-		isc_job_run(isc_loop_current(loopmgr), &ta->job, job_cb, ta);
+		isc_job_run(isc_loop(), &ta->job, job_cb, ta);
 	} else {
-		isc_job_run(isc_loop_current(loopmgr), &ta->job, shutdown_cb,
-			    ta);
+		isc_job_run(isc_loop(), &ta->job, shutdown_cb, ta);
 	}
 }
 
@@ -76,20 +75,20 @@ job_run_cb(void *arg) {
 	atomic_fetch_add(&scheduled, 1);
 
 	if (arg == NULL) {
-		ta = isc_mem_get(mctx, sizeof(*ta));
+		ta = isc_mem_get(isc_g_mctx, sizeof(*ta));
 		*ta = (struct test_arg){ .job = ISC_JOB_INITIALIZER };
 	}
 
-	isc_job_run(isc_loop_current(loopmgr), &ta->job, job_cb, ta);
+	isc_job_run(isc_loop(), &ta->job, job_cb, ta);
 }
 
 ISC_RUN_TEST_IMPL(isc_job_run) {
 	atomic_init(&scheduled, 0);
 	atomic_init(&executed, 0);
 
-	isc_loopmgr_setup(loopmgr, job_run_cb, NULL);
+	isc_loopmgr_setup(job_run_cb, NULL);
 
-	isc_loopmgr_run(loopmgr);
+	isc_loopmgr_run();
 
 	assert_int_equal(atomic_load(&scheduled), atomic_load(&executed));
 }
@@ -111,22 +110,20 @@ append(void *arg) {
 }
 
 static void
-job_multiple(void *arg) {
-	UNUSED(arg);
-
+job_multiple(void *arg ISC_ATTR_UNUSED) {
 	/* These will be processed in normal order */
-	isc_job_run(mainloop, &n1.job, append, &n1);
-	isc_job_run(mainloop, &n2.job, append, &n2);
-	isc_job_run(mainloop, &n3.job, append, &n3);
-	isc_job_run(mainloop, &n4.job, append, &n4);
-	isc_job_run(mainloop, &n5.job, append, &n5);
-	isc_loopmgr_shutdown(loopmgr);
+	isc_job_run(isc_loop_main(), &n1.job, append, &n1);
+	isc_job_run(isc_loop_main(), &n2.job, append, &n2);
+	isc_job_run(isc_loop_main(), &n3.job, append, &n3);
+	isc_job_run(isc_loop_main(), &n4.job, append, &n4);
+	isc_job_run(isc_loop_main(), &n5.job, append, &n5);
+	isc_loopmgr_shutdown();
 }
 
 ISC_RUN_TEST_IMPL(isc_job_multiple) {
 	string[0] = '\0';
-	isc_loop_setup(isc_loop_main(loopmgr), job_multiple, loopmgr);
-	isc_loopmgr_run(loopmgr);
+	isc_loop_setup(isc_loop_main(), job_multiple, NULL);
+	isc_loopmgr_run();
 	assert_string_equal(string, "12345");
 }
 

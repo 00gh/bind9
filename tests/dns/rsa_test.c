@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -30,35 +31,14 @@
 #define UNIT_TESTING
 #include <cmocka.h>
 
+#include <isc/lib.h>
 #include <isc/util.h>
+
+#include <dns/lib.h>
 
 #include "dst_internal.h"
 
 #include <tests/dns.h>
-
-static int
-setup_test(void **state) {
-	isc_result_t result;
-
-	UNUSED(state);
-
-	result = dst_lib_init(mctx, NULL);
-
-	if (result != ISC_R_SUCCESS) {
-		return (1);
-	}
-
-	return (0);
-}
-
-static int
-teardown_test(void **state) {
-	UNUSED(state);
-
-	dst_lib_destroy();
-
-	return (0);
-}
 
 static unsigned char d[10] = { 0xa,  0x10, 0xbb, 0,    0xfe,
 			       0x15, 0x1,  0x88, 0xcc, 0x7d };
@@ -153,19 +133,19 @@ ISC_RUN_TEST_IMPL(isc_rsa_verify) {
 	name = dns_fixedname_initname(&fname);
 	isc_buffer_constinit(&buf, "rsa.", 4);
 	isc_buffer_add(&buf, 4);
-	ret = dns_name_fromtext(name, &buf, NULL, 0, NULL);
+	ret = dns_name_fromtext(name, &buf, NULL, 0);
 	assert_int_equal(ret, ISC_R_SUCCESS);
 
 	ret = dst_key_fromfile(name, 29238, DST_ALG_RSASHA256, DST_TYPE_PUBLIC,
-			       TESTS_DIR, mctx, &key);
+			       TESTS_DIR, isc_g_mctx, &key);
 	assert_int_equal(ret, ISC_R_SUCCESS);
 
 	/* RSASHA1 - May not be supported by the OS */
 	if (dst_algorithm_supported(DST_ALG_RSASHA1)) {
 		key->key_alg = DST_ALG_RSASHA1;
 
-		ret = dst_context_create(key, mctx, DNS_LOGCATEGORY_DNSSEC,
-					 false, 0, &ctx);
+		ret = dst_context_create(key, isc_g_mctx,
+					 DNS_LOGCATEGORY_DNSSEC, false, &ctx);
 		assert_int_equal(ret, ISC_R_SUCCESS);
 
 		r.base = d;
@@ -185,7 +165,7 @@ ISC_RUN_TEST_IMPL(isc_rsa_verify) {
 
 	key->key_alg = DST_ALG_RSASHA256;
 
-	ret = dst_context_create(key, mctx, DNS_LOGCATEGORY_DNSSEC, false, 0,
+	ret = dst_context_create(key, isc_g_mctx, DNS_LOGCATEGORY_DNSSEC, false,
 				 &ctx);
 	assert_int_equal(ret, ISC_R_SUCCESS);
 
@@ -205,7 +185,7 @@ ISC_RUN_TEST_IMPL(isc_rsa_verify) {
 
 	key->key_alg = DST_ALG_RSASHA512;
 
-	ret = dst_context_create(key, mctx, DNS_LOGCATEGORY_DNSSEC, false, 0,
+	ret = dst_context_create(key, isc_g_mctx, DNS_LOGCATEGORY_DNSSEC, false,
 				 &ctx);
 	assert_int_equal(ret, ISC_R_SUCCESS);
 
@@ -225,7 +205,7 @@ ISC_RUN_TEST_IMPL(isc_rsa_verify) {
 }
 
 ISC_TEST_LIST_START
-ISC_TEST_ENTRY_CUSTOM(isc_rsa_verify, setup_test, teardown_test)
+ISC_TEST_ENTRY(isc_rsa_verify)
 ISC_TEST_LIST_END
 
 ISC_TEST_MAIN

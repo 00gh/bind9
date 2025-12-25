@@ -21,7 +21,6 @@
 static isc_result_t
 fromtext_in_px(ARGS_FROMTEXT) {
 	isc_token_t token;
-	dns_name_t name;
 	isc_buffer_t buffer;
 
 	REQUIRE(type == dns_rdatatype_px);
@@ -50,19 +49,17 @@ fromtext_in_px(ARGS_FROMTEXT) {
 	 */
 	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
 				      false));
-	dns_name_init(&name, NULL);
 	buffer_fromregion(&buffer, &token.value.as_region);
-	RETTOK(dns_name_fromtext(&name, &buffer, origin, options, target));
+	RETTOK(dns_name_wirefromtext(&buffer, origin, options, target));
 
 	/*
 	 * MAPX400.
 	 */
 	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
 				      false));
-	dns_name_init(&name, NULL);
 	buffer_fromregion(&buffer, &token.value.as_region);
-	RETTOK(dns_name_fromtext(&name, &buffer, origin, options, target));
-	return (ISC_R_SUCCESS);
+	RETTOK(dns_name_wirefromtext(&buffer, origin, options, target));
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -70,7 +67,7 @@ totext_in_px(ARGS_TOTEXT) {
 	isc_region_t region;
 	dns_name_t name;
 	dns_name_t prefix;
-	bool sub;
+	unsigned int opts;
 	char buf[sizeof("64000")];
 	unsigned short num;
 
@@ -78,8 +75,8 @@ totext_in_px(ARGS_TOTEXT) {
 	REQUIRE(rdata->rdclass == dns_rdataclass_in);
 	REQUIRE(rdata->length != 0);
 
-	dns_name_init(&name, NULL);
-	dns_name_init(&prefix, NULL);
+	dns_name_init(&name);
+	dns_name_init(&prefix);
 
 	/*
 	 * Preference.
@@ -95,17 +92,19 @@ totext_in_px(ARGS_TOTEXT) {
 	 * MAP822.
 	 */
 	dns_name_fromregion(&name, &region);
-	sub = name_prefix(&name, tctx->origin, &prefix);
+	opts = name_prefix(&name, tctx->origin, &prefix) ? DNS_NAME_OMITFINALDOT
+							 : 0;
 	isc_region_consume(&region, name_length(&name));
-	RETERR(dns_name_totext(&prefix, sub, target));
+	RETERR(dns_name_totext(&prefix, opts, target));
 	RETERR(str_totext(" ", target));
 
 	/*
 	 * MAPX400.
 	 */
 	dns_name_fromregion(&name, &region);
-	sub = name_prefix(&name, tctx->origin, &prefix);
-	return (dns_name_totext(&prefix, sub, target));
+	opts = name_prefix(&name, tctx->origin, &prefix) ? DNS_NAME_OMITFINALDOT
+							 : 0;
+	return dns_name_totext(&prefix, opts, target);
 }
 
 static isc_result_t
@@ -121,14 +120,14 @@ fromwire_in_px(ARGS_FROMWIRE) {
 
 	dctx = dns_decompress_setpermitted(dctx, false);
 
-	dns_name_init(&name, NULL);
+	dns_name_init(&name);
 
 	/*
 	 * Preference.
 	 */
 	isc_buffer_activeregion(source, &sregion);
 	if (sregion.length < 2) {
-		return (ISC_R_UNEXPECTEDEND);
+		return ISC_R_UNEXPECTEDEND;
 	}
 	RETERR(mem_tobuffer(target, sregion.base, 2));
 	isc_buffer_forward(source, 2);
@@ -141,13 +140,12 @@ fromwire_in_px(ARGS_FROMWIRE) {
 	/*
 	 * MAPX400.
 	 */
-	return (dns_name_fromwire(&name, source, dctx, target));
+	return dns_name_fromwire(&name, source, dctx, target);
 }
 
 static isc_result_t
 towire_in_px(ARGS_TOWIRE) {
 	dns_name_t name;
-	dns_offsets_t offsets;
 	isc_region_t region;
 
 	REQUIRE(rdata->type == dns_rdatatype_px);
@@ -165,7 +163,7 @@ towire_in_px(ARGS_TOWIRE) {
 	/*
 	 * MAP822.
 	 */
-	dns_name_init(&name, offsets);
+	dns_name_init(&name);
 	dns_name_fromregion(&name, &region);
 	RETERR(dns_name_towire(&name, cctx, target));
 	isc_region_consume(&region, name_length(&name));
@@ -173,9 +171,9 @@ towire_in_px(ARGS_TOWIRE) {
 	/*
 	 * MAPX400.
 	 */
-	dns_name_init(&name, offsets);
+	dns_name_init(&name);
 	dns_name_fromregion(&name, &region);
-	return (dns_name_towire(&name, cctx, target));
+	return dns_name_towire(&name, cctx, target);
 }
 
 static int
@@ -195,11 +193,11 @@ compare_in_px(ARGS_COMPARE) {
 
 	order = memcmp(rdata1->data, rdata2->data, 2);
 	if (order != 0) {
-		return (order < 0 ? -1 : 1);
+		return order < 0 ? -1 : 1;
 	}
 
-	dns_name_init(&name1, NULL);
-	dns_name_init(&name2, NULL);
+	dns_name_init(&name1);
+	dns_name_init(&name2);
 
 	dns_rdata_toregion(rdata1, &region1);
 	dns_rdata_toregion(rdata2, &region2);
@@ -212,7 +210,7 @@ compare_in_px(ARGS_COMPARE) {
 
 	order = dns_name_rdatacompare(&name1, &name2);
 	if (order != 0) {
-		return (order);
+		return order;
 	}
 
 	isc_region_consume(&region1, name_length(&name1));
@@ -221,7 +219,7 @@ compare_in_px(ARGS_COMPARE) {
 	dns_name_fromregion(&name1, &region1);
 	dns_name_fromregion(&name2, &region2);
 
-	return (dns_name_rdatacompare(&name1, &name2));
+	return dns_name_rdatacompare(&name1, &name2);
 }
 
 static isc_result_t
@@ -242,7 +240,7 @@ fromstruct_in_px(ARGS_FROMSTRUCT) {
 	dns_name_toregion(&px->map822, &region);
 	RETERR(isc_buffer_copyregion(target, &region));
 	dns_name_toregion(&px->mapx400, &region);
-	return (isc_buffer_copyregion(target, &region));
+	return isc_buffer_copyregion(target, &region);
 }
 
 static isc_result_t
@@ -258,9 +256,8 @@ tostruct_in_px(ARGS_TOSTRUCT) {
 
 	px->common.rdclass = rdata->rdclass;
 	px->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&px->common, link);
 
-	dns_name_init(&name, NULL);
+	dns_name_init(&name);
 	dns_rdata_toregion(rdata, &region);
 
 	px->preference = uint16_fromregion(&region);
@@ -268,15 +265,15 @@ tostruct_in_px(ARGS_TOSTRUCT) {
 
 	dns_name_fromregion(&name, &region);
 
-	dns_name_init(&px->map822, NULL);
+	dns_name_init(&px->map822);
 	name_duporclone(&name, mctx, &px->map822);
 	isc_region_consume(&region, name_length(&px->map822));
 
-	dns_name_init(&px->mapx400, NULL);
+	dns_name_init(&px->mapx400);
 	name_duporclone(&name, mctx, &px->mapx400);
 
 	px->mctx = mctx;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static void
@@ -306,7 +303,7 @@ additionaldata_in_px(ARGS_ADDLDATA) {
 	UNUSED(add);
 	UNUSED(arg);
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -324,19 +321,19 @@ digest_in_px(ARGS_DIGEST) {
 	r1.length = 2;
 	result = (digest)(arg, &r1);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
-	dns_name_init(&name, NULL);
+	dns_name_init(&name);
 	dns_name_fromregion(&name, &r2);
 	result = dns_name_digest(&name, digest, arg);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 	isc_region_consume(&r2, name_length(&name));
-	dns_name_init(&name, NULL);
+	dns_name_init(&name);
 	dns_name_fromregion(&name, &r2);
 
-	return (dns_name_digest(&name, digest, arg));
+	return dns_name_digest(&name, digest, arg);
 }
 
 static bool
@@ -349,7 +346,7 @@ checkowner_in_px(ARGS_CHECKOWNER) {
 	UNUSED(rdclass);
 	UNUSED(wildcard);
 
-	return (true);
+	return true;
 }
 
 static bool
@@ -361,12 +358,12 @@ checknames_in_px(ARGS_CHECKNAMES) {
 	UNUSED(owner);
 	UNUSED(bad);
 
-	return (true);
+	return true;
 }
 
 static int
 casecompare_in_px(ARGS_COMPARE) {
-	return (compare_in_px(rdata1, rdata2));
+	return compare_in_px(rdata1, rdata2);
 }
 
 #endif /* RDATA_IN_1_PX_26_C */

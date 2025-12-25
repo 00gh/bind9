@@ -11,7 +11,7 @@
  * information regarding copyright ownership.
  */
 
-include "../../common/rndc.key";
+include "../../_common/rndc.key";
 
 controls {
 	inet 10.53.0.3 port @CONTROLPORT@ allow { any; } keys { rndc_key; };
@@ -26,14 +26,13 @@ options {
 	listen-on { 10.53.0.3; };
 	listen-on-v6 { none; };
 	recursion yes;
-	dnssec-validation yes;
+	dnssec-validation no;
 	response-policy { zone "policy"; } nsip-wait-recurse no
 		qname-wait-recurse yes
 		nsip-enable yes
 		nsdname-enable yes;
-
-	include "../dnsrps.conf";
 };
+
 
 zone "policy" { type primary; file "policy.db"; };
 

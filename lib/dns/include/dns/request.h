@@ -36,16 +36,17 @@
 
 #include <stdbool.h>
 
-#include <isc/lang.h>
+#include <isc/job.h>
+#include <isc/tls.h>
 
 #include <dns/types.h>
+
+/* Add -DDNS_REQUEST_TRACE=1 to CFLAGS for detailed reference tracing */
 
 #define DNS_REQUESTOPT_TCP     0x00000001U
 #define DNS_REQUESTOPT_CASE    0x00000002U
 #define DNS_REQUESTOPT_FIXEDID 0x00000004U
 #define DNS_REQUESTOPT_LARGE   0x00000008U
-
-ISC_LANG_BEGINDECLS
 
 isc_result_t
 dns_requestmgr_create(isc_mem_t *mctx, dns_dispatchmgr_t *dispatchmgr,
@@ -90,54 +91,42 @@ dns_requestmgr_shutdown(dns_requestmgr_t *requestmgr);
  *\li	'requestmgr' is a valid requestmgr.
  */
 
-void
-dns_requestmgr_attach(dns_requestmgr_t *source, dns_requestmgr_t **targetp);
-/*%<
- *	Attach to the request manager.  dns_requestmgr_shutdown() must not
- *	have been called on 'source' prior to calling dns_requestmgr_attach().
- *
- * Requires:
- *
- *\li	'source' is a valid requestmgr.
- *
- *\li	'targetp' to be non NULL and '*targetp' to be NULL.
- */
-
-void
-dns_requestmgr_detach(dns_requestmgr_t **requestmgrp);
-/*%<
- *	Detach from the given requestmgr.  If this is the final detach
- *	requestmgr will be destroyed.  dns_requestmgr_shutdown() must
- *	be called before the final detach.
- *
- * Requires:
- *
- *\li	'*requestmgrp' is a valid requestmgr.
- *
- * Ensures:
- *\li	'*requestmgrp' is NULL.
- */
+#if DNS_REQUEST_TRACE
+#define dns_requestmgr_ref(ptr) \
+	dns_requestmgr__ref(ptr, __func__, __FILE__, __LINE__)
+#define dns_requestmgr_unref(ptr) \
+	dns_requestmgr__unref(ptr, __func__, __FILE__, __LINE__)
+#define dns_requestmgr_attach(ptr, ptrp) \
+	dns_requestmgr__attach(ptr, ptrp, __func__, __FILE__, __LINE__)
+#define dns_requestmgr_detach(ptrp) \
+	dns_requestmgr__detach(ptrp, __func__, __FILE__, __LINE__)
+ISC_REFCOUNT_TRACE_DECL(dns_requestmgr);
+#else
+ISC_REFCOUNT_DECL(dns_requestmgr);
+#endif
 
 isc_result_t
 dns_request_create(dns_requestmgr_t *requestmgr, dns_message_t *message,
 		   const isc_sockaddr_t *srcaddr,
 		   const isc_sockaddr_t *destaddr, dns_transport_t *transport,
 		   isc_tlsctx_cache_t *tlsctx_cache, unsigned int options,
-		   dns_tsigkey_t *key, unsigned int timeout,
-		   unsigned int udptimeout, unsigned int udpretries,
-		   isc_loop_t *loop, isc_job_cb cb, void *arg,
-		   dns_request_t **requestp);
+		   dns_tsigkey_t *key, unsigned int connect_timeout,
+		   unsigned int timeout, unsigned int udptimeout,
+		   unsigned int udpretries, isc_loop_t *loop, isc_job_cb cb,
+		   void *arg, dns_request_t **requestp);
 /*%<
  * Create and send a request.
  *
  * Notes:
  *
  *\li	'message' will be rendered and sent to 'address'.  If the
- *	#DNS_REQUESTOPT_TCP option is set, TCP will be used,
- *	#DNS_REQUESTOPT_SHARE option is set too, connecting TCP
- *	(vs. connected) will be shared too.  The request
- *	will timeout after 'timeout' seconds.  UDP requests will be resent
- *	at 'udptimeout' intervals if non-zero or 'udpretries' is non-zero.
+ *	#DNS_REQUESTOPT_TCP option is set or the request message's size is
+ *	larger than 512 bytes then TCP will be used, and #DNS_REQUESTOPT_SHARE
+ *	option is set too, connecting TCP (vs. connected) will be shared too.
+ *	With TCP a connection attempt will timeout after 'connect_timeout'
+ *	seconds.  The request will timeout after 'timeout' seconds for both TCP
+ *	and UDP.  UDP requests will be resent at 'udptimeout' intervals if
+ *	non-zero or 'udpretries' is non-zero.
  *
  *\li	If the #DNS_REQUESTOPT_CASE option is set, use case sensitive
  *	compression.
@@ -158,7 +147,7 @@ dns_request_create(dns_requestmgr_t *requestmgr, dns_message_t *message,
  *
  *\li	'srcaddr' and 'dstaddr' are the same protocol family.
  *
- *\li	'timeout' > 0
+ *\li	'connect_timeout' > 0 and 'timeout' > 0.
  *
  *\li	'loop' is a valid loop.
  *
@@ -171,20 +160,23 @@ dns_request_createraw(dns_requestmgr_t *requestmgr, isc_buffer_t *msgbuf,
 		      const isc_sockaddr_t *destaddr,
 		      dns_transport_t	   *transport,
 		      isc_tlsctx_cache_t *tlsctx_cache, unsigned int options,
-		      unsigned int timeout, unsigned int udptimeout,
-		      unsigned int udpretries, isc_loop_t *loop, isc_job_cb cb,
-		      void *arg, dns_request_t **requestp);
+		      unsigned int connect_timeout, unsigned int timeout,
+		      unsigned int udptimeout, unsigned int udpretries,
+		      isc_loop_t *loop, isc_job_cb cb, void *arg,
+		      dns_request_t **requestp);
 /*!<
  * \brief Create and send a request.
  *
  * Notes:
  *
  *\li	'msgbuf' will be sent to 'destaddr' after setting the id.  If the
- *	#DNS_REQUESTOPT_TCP option is set, TCP will be used,
- *	#DNS_REQUESTOPT_SHARE option is set too, connecting TCP
- *	(vs. connected) will be shared too.  The request
- *	will timeout after 'timeout' seconds.   UDP requests will be resent
- *	at 'udptimeout' intervals if non-zero or if 'udpretries' is not zero.
+ *	#DNS_REQUESTOPT_TCP option is set or the request message's size is
+ *	larger than 512 bytes then TCP will be used, and #DNS_REQUESTOPT_SHARE
+ *	option is set too, connecting TCP (vs. connected) will be shared too.
+ *	With TCP a connection attempt will timeout after 'connect_timeout'
+ *	seconds.  The request wll timeout after timeout' seconds for both TCP
+ *	and UDP.  UDP requests will be resent at 'udptimeout' intervals if
+ *	non-zero or if 'udpretries' is not zero.
  *
  *\li	When the request completes, successfully, due to a timeout, or
  *	because it was canceled, a completion callback will run in 'loop'.
@@ -199,7 +191,7 @@ dns_request_createraw(dns_requestmgr_t *requestmgr, isc_buffer_t *msgbuf,
  *
  *\li	'srcaddr' and 'dstaddr' are the same protocol family.
  *
- *\li	'timeout' > 0
+ *\li	'connect_timeout' > 0 and 'timeout' > 0.
  *
  *\li	'loop' is a valid loop.
  *
@@ -302,5 +294,15 @@ dns_request_getresult(dns_request_t *request);
  * completion handler.)
  */
 
+#if DNS_REQUEST_TRACE
+#define dns_request_ref(ptr) dns_request__ref(ptr, __func__, __FILE__, __LINE__)
+#define dns_request_unref(ptr) \
+	dns_request__unref(ptr, __func__, __FILE__, __LINE__)
+#define dns_request_attach(ptr, ptrp) \
+	dns_request__attach(ptr, ptrp, __func__, __FILE__, __LINE__)
+#define dns_request_detach(ptrp) \
+	dns_request__detach(ptrp, __func__, __FILE__, __LINE__)
+ISC_REFCOUNT_TRACE_DECL(dns_request);
+#else
 ISC_REFCOUNT_DECL(dns_request);
-ISC_LANG_ENDDECLS
+#endif

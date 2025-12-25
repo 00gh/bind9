@@ -18,7 +18,6 @@
 #include <inttypes.h>
 #include <stdbool.h>
 
-#include <isc/lang.h>
 #include <isc/stdio.h>
 #include <isc/types.h>
 
@@ -26,10 +25,8 @@
 #include <dns/types.h>
 #include <dns/zone.h>
 
-ISC_LANG_BEGINDECLS
-
 isc_result_t
-setup_logging(isc_mem_t *mctx, FILE *errout, isc_log_t **logp);
+setup_logging(FILE *errout);
 
 isc_result_t
 load_zone(isc_mem_t *mctx, const char *zonename, const char *filename,
@@ -48,5 +45,3 @@ extern bool docheckmx;
 extern bool docheckns;
 extern bool dochecksrv;
 extern dns_zoneopt_t zone_options;
-
-ISC_LANG_ENDDECLS

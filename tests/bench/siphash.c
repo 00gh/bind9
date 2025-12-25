@@ -17,13 +17,14 @@
 #include <string.h>
 
 #include <isc/ascii.h>
+#include <isc/lib.h>
 #include <isc/random.h>
 #include <isc/siphash.h>
 #include <isc/time.h>
 
 #define SIZE (1024 * 1024)
 
-#define KILOHASHES(count, us) ((us) == 0 ? 0.0 : ((count)*1000.0 / (us)))
+#define KILOHASHES(count, us) ((us) == 0 ? 0.0 : ((count) * 1000.0 / (us)))
 
 int
 main(void) {

@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -23,6 +24,7 @@
 #include <cmocka.h>
 
 #include <isc/buffer.h>
+#include <isc/lib.h>
 #include <isc/list.h>
 #include <isc/region.h>
 #include <isc/result.h>
@@ -34,6 +36,7 @@
 #include <dns/diff.h>
 #include <dns/dnssec.h>
 #include <dns/fixedname.h>
+#include <dns/lib.h>
 #include <dns/name.h>
 #include <dns/rdata.h>
 #include <dns/rdatastruct.h>
@@ -58,10 +61,7 @@ typedef struct {
 	const char *type;
 } zonediff_t;
 
-#define ZONEDIFF_SENTINEL        \
-	{                        \
-		0, NULL, 0, NULL \
-	}
+#define ZONEDIFF_SENTINEL { 0, NULL, 0, NULL }
 
 /*%
  * Structure defining a dns__zone_updatesigs() test.
@@ -72,30 +72,6 @@ typedef struct {
 	const zonediff_t *zonediff;  /* array of "processed" zone changes
 				      * */
 } updatesigs_test_params_t;
-
-static int
-setup_test(void **state) {
-	isc_result_t result;
-
-	UNUSED(state);
-
-	result = dst_lib_init(mctx, NULL);
-
-	if (result != ISC_R_SUCCESS) {
-		return (1);
-	}
-
-	return (0);
-}
-
-static int
-teardown_test(void **state) {
-	UNUSED(state);
-
-	dst_lib_destroy();
-
-	return (0);
-}
 
 /*%
  * Check whether the 'found' tuple matches the 'expected' tuple.  'found' is
@@ -128,7 +104,8 @@ compare_tuples(const zonediff_t *expected, dns_difftuple_t *found,
 	 * Check owner name.
 	 */
 	expected_name = dns_fixedname_initname(&expected_fname);
-	result = dns_name_fromstring(expected_name, expected->owner, 0, mctx);
+	result = dns_name_fromstring(expected_name, expected->owner,
+				     dns_rootname, 0, isc_g_mctx);
 	assert_int_equal(result, ISC_R_SUCCESS);
 	dns_name_format(&found->name, found_name, sizeof(found_name));
 	assert_true(dns_name_equal(expected_name, &found->name));
@@ -198,8 +175,7 @@ updatesigs_test(const updatesigs_test_params_t *test, dns_zone_t *zone,
 	size_t tuples_expected, tuples_found, index;
 	dns_dbversion_t *version = NULL;
 	dns_diff_t raw_diff, zone_diff;
-	const zonediff_t *expected;
-	dns_difftuple_t *found;
+	const zonediff_t *expected = NULL;
 	isc_result_t result;
 
 	dns__zonediff_t zonediff = {
@@ -236,14 +212,14 @@ updatesigs_test(const updatesigs_test_params_t *test, dns_zone_t *zone,
 	/*
 	 * Initialize the structure dns__zone_updatesigs() will modify.
 	 */
-	dns_diff_init(mctx, &zone_diff);
+	dns_diff_init(isc_g_mctx, &zone_diff);
 
 	/*
 	 * Check whether dns__zone_updatesigs() behaves as expected.
 	 */
 	result = dns__zone_updatesigs(&raw_diff, db, version, zone_keys, nkeys,
 				      zone, now - 3600, now + 3600, 0, now,
-				      true, false, &zonediff);
+				      &zonediff);
 	assert_int_equal(result, ISC_R_SUCCESS);
 	assert_true(ISC_LIST_EMPTY(raw_diff.tuples));
 	assert_false(ISC_LIST_EMPTY(zone_diff.tuples));
@@ -258,9 +234,7 @@ updatesigs_test(const updatesigs_test_params_t *test, dns_zone_t *zone,
 	}
 
 	tuples_found = 0;
-	for (found = ISC_LIST_HEAD(zone_diff.tuples); found != NULL;
-	     found = ISC_LIST_NEXT(found, link))
-	{
+	ISC_LIST_FOREACH (zone_diff.tuples, found, link) {
 		tuples_found++;
 	}
 
@@ -271,9 +245,7 @@ updatesigs_test(const updatesigs_test_params_t *test, dns_zone_t *zone,
 	 */
 	expected = test->zonediff;
 	index = 1;
-	for (found = ISC_LIST_HEAD(zone_diff.tuples); found != NULL;
-	     found = ISC_LIST_NEXT(found, link))
-	{
+	ISC_LIST_FOREACH (zone_diff.tuples, found, link) {
 		compare_tuples(expected, found, index);
 		expected++;
 		index++;
@@ -307,14 +279,13 @@ ISC_RUN_TEST_IMPL(updatesigs_next) {
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	result = dns_test_loaddb(&db, dns_dbtype_zone, "example",
-				 "testdata/master/master18.data");
+				 BUILDDIR "/testdata/master/master18.data");
 	assert_int_equal(result, DNS_R_SEENINCLUDE);
 
-	result = dns_zone_setkeydirectory(zone, TESTS_DIR "/testkeys");
-	assert_int_equal(result, ISC_R_SUCCESS);
+	dns_zone_setkeydirectory(zone, TESTS_DIR "/testkeys");
 
-	result = dns__zone_findkeys(zone, db, NULL, now, mctx, DNS_MAXZONEKEYS,
-				    zone_keys, &nkeys);
+	result = dns_zone_findkeys(zone, db, NULL, now, isc_g_mctx,
+				   DNS_MAXZONEKEYS, zone_keys, &nkeys);
 	assert_int_equal(result, ISC_R_SUCCESS);
 	assert_int_equal(nkeys, 2);
 
@@ -438,7 +409,7 @@ ISC_RUN_TEST_IMPL(updatesigs_next) {
 }
 
 ISC_TEST_LIST_START
-ISC_TEST_ENTRY_CUSTOM(updatesigs_next, setup_test, teardown_test)
+ISC_TEST_ENTRY(updatesigs_next)
 ISC_TEST_LIST_END
 
 ISC_TEST_MAIN

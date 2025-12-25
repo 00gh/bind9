@@ -20,17 +20,22 @@
 #include <isc/log.h>
 #include <isc/stdtime.h>
 
+#include <dns/kasp.h>
 #include <dns/rdatastruct.h>
 
 #include <dst/dst.h>
+
+#include <isccfg/cfg.h>
+#include <isccfg/kaspconf.h>
+#include <isccfg/namedconf.h>
+
+#define MAX_RSA 4096 /* should be long enough... */
+#define MAX_DH	4096 /* should be long enough... */
 
 /*! verbosity: set by -v and -q option in each program, defined in dnssectool.c
  */
 extern int verbose;
 extern bool quiet;
-
-/*! program name, statically initialized in each program */
-extern const char *program;
 
 /*! journal file */
 extern const char *journal;
@@ -46,7 +51,7 @@ extern uint8_t dtype[8];
 
 typedef void(fatalcallback_t)(void);
 
-noreturn void
+ISC_NORETURN void
 fatal(const char *format, ...) ISC_FORMAT_PRINTF(1, 2);
 
 void
@@ -58,7 +63,7 @@ check_result(isc_result_t result, const char *message);
 void
 vbprintf(int level, const char *fmt, ...) ISC_FORMAT_PRINTF(2, 3);
 
-noreturn void
+ISC_NORETURN void
 version(const char *program);
 
 void
@@ -67,10 +72,7 @@ sig_format(dns_rdata_rrsig_t *sig, char *cp, unsigned int size);
 	(DNS_NAME_FORMATSIZE + DNS_SECALG_FORMATSIZE + sizeof("65535"))
 
 void
-setup_logging(isc_mem_t *mctx, isc_log_t **logp);
-
-void
-cleanup_logging(isc_log_t **logp);
+setup_logging(void);
 
 dns_ttl_t
 strtottl(const char *str);
@@ -101,10 +103,14 @@ set_keyversion(dst_key_t *key);
 
 bool
 key_collision(dst_key_t *key, dns_name_t *name, const char *dir,
-	      isc_mem_t *mctx, bool *exact);
+	      isc_mem_t *mctx, uint16_t min, uint16_t max, bool *exact);
 
 bool
 isoptarg(const char *arg, char **argv, void (*usage)(void));
 
 void
 loadjournal(isc_mem_t *mctx, dns_db_t *db, const char *journal);
+
+void
+kasp_from_conf(cfg_obj_t *config, isc_mem_t *mctx, const char *name,
+	       const char *keydir, dns_kasp_t **kaspp);

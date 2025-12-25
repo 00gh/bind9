@@ -36,12 +36,12 @@
 #include <isc/dir.h>
 #include <isc/file.h>
 #include <isc/lex.h>
+#include <isc/log.h>
 #include <isc/mem.h>
 #include <isc/stdtime.h>
 #include <isc/string.h>
 #include <isc/util.h>
 
-#include <dns/log.h>
 #include <dns/time.h>
 
 #include "dst_internal.h"
@@ -118,10 +118,10 @@ find_value(const char *s, const unsigned int alg) {
 		if (strcasecmp(s, map[i].tag) == 0 &&
 		    (TAG_ALG(map[i].value) == alg))
 		{
-			return (map[i].value);
+			return map[i].value;
 		}
 	}
-	return (-1);
+	return -1;
 }
 
 static const char *
@@ -130,9 +130,9 @@ find_tag(const int value) {
 
 	for (i = 0;; i++) {
 		if (map[i].tag == NULL) {
-			return (NULL);
+			return NULL;
 		} else if (value == map[i].value) {
-			return (map[i].tag);
+			return map[i].tag;
 		}
 	}
 }
@@ -143,21 +143,21 @@ find_metadata(const char *s, const char *tags[], int ntags) {
 
 	for (i = 0; i < ntags; i++) {
 		if (tags[i] != NULL && strcasecmp(s, tags[i]) == 0) {
-			return (i);
+			return i;
 		}
 	}
 
-	return (-1);
+	return -1;
 }
 
 static int
 find_timedata(const char *s) {
-	return (find_metadata(s, timetags, TIMING_NTAGS));
+	return find_metadata(s, timetags, TIMING_NTAGS);
 }
 
 static int
 find_numericdata(const char *s) {
-	return (find_metadata(s, numerictags, NUMERIC_NTAGS));
+	return find_metadata(s, numerictags, NUMERIC_NTAGS);
 }
 
 static int
@@ -168,7 +168,7 @@ check_rsa(const dst_private_t *priv, bool external) {
 	unsigned int mask;
 
 	if (external) {
-		return ((priv->nelements == 0) ? 0 : -1);
+		return (priv->nelements == 0) ? 0 : -1;
 	}
 
 	for (i = 0; i < RSA_NTAGS; i++) {
@@ -182,17 +182,16 @@ check_rsa(const dst_private_t *priv, bool external) {
 			}
 		}
 		if (i == RSA_NTAGS) {
-			return (-1);
+			return -1;
 		}
 		have[i] = true;
 	}
 
 	mask = (1ULL << TAG_SHIFT) - 1;
 
-	if (have[TAG_RSA_ENGINE & mask]) {
+	if (have[TAG_RSA_LABEL & mask]) {
 		ok = have[TAG_RSA_MODULUS & mask] &&
-		     have[TAG_RSA_PUBLICEXPONENT & mask] &&
-		     have[TAG_RSA_LABEL & mask];
+		     have[TAG_RSA_PUBLICEXPONENT & mask];
 	} else {
 		ok = have[TAG_RSA_MODULUS & mask] &&
 		     have[TAG_RSA_PUBLICEXPONENT & mask] &&
@@ -203,7 +202,7 @@ check_rsa(const dst_private_t *priv, bool external) {
 		     have[TAG_RSA_EXPONENT2 & mask] &&
 		     have[TAG_RSA_COEFFICIENT & mask];
 	}
-	return (ok ? 0 : -1);
+	return ok ? 0 : -1;
 }
 
 static int
@@ -214,7 +213,7 @@ check_ecdsa(const dst_private_t *priv, bool external) {
 	unsigned int mask;
 
 	if (external) {
-		return ((priv->nelements == 0) ? 0 : -1);
+		return (priv->nelements == 0) ? 0 : -1;
 	}
 
 	for (i = 0; i < ECDSA_NTAGS; i++) {
@@ -227,19 +226,16 @@ check_ecdsa(const dst_private_t *priv, bool external) {
 			}
 		}
 		if (i == ECDSA_NTAGS) {
-			return (-1);
+			return -1;
 		}
 		have[i] = true;
 	}
 
 	mask = (1ULL << TAG_SHIFT) - 1;
 
-	if (have[TAG_ECDSA_ENGINE & mask]) {
-		ok = have[TAG_ECDSA_LABEL & mask];
-	} else {
-		ok = have[TAG_ECDSA_PRIVATEKEY & mask];
-	}
-	return (ok ? 0 : -1);
+	ok = have[TAG_ECDSA_LABEL & mask] || have[TAG_ECDSA_PRIVATEKEY & mask];
+
+	return ok ? 0 : -1;
 }
 
 static int
@@ -250,7 +246,7 @@ check_eddsa(const dst_private_t *priv, bool external) {
 	unsigned int mask;
 
 	if (external) {
-		return ((priv->nelements == 0) ? 0 : -1);
+		return (priv->nelements == 0) ? 0 : -1;
 	}
 
 	for (i = 0; i < EDDSA_NTAGS; i++) {
@@ -263,19 +259,16 @@ check_eddsa(const dst_private_t *priv, bool external) {
 			}
 		}
 		if (i == EDDSA_NTAGS) {
-			return (-1);
+			return -1;
 		}
 		have[i] = true;
 	}
 
 	mask = (1ULL << TAG_SHIFT) - 1;
 
-	if (have[TAG_EDDSA_ENGINE & mask]) {
-		ok = have[TAG_EDDSA_LABEL & mask];
-	} else {
-		ok = have[TAG_EDDSA_PRIVATEKEY & mask];
-	}
-	return (ok ? 0 : -1);
+	ok = have[TAG_EDDSA_LABEL & mask] || have[TAG_EDDSA_PRIVATEKEY & mask];
+
+	return ok ? 0 : -1;
 }
 
 static int
@@ -290,9 +283,9 @@ check_hmac_md5(const dst_private_t *priv, bool old) {
 		if (old && priv->nelements == OLD_HMACMD5_NTAGS &&
 		    priv->elements[0].tag == TAG_HMACMD5_KEY)
 		{
-			return (0);
+			return 0;
 		}
-		return (-1);
+		return -1;
 	}
 	/*
 	 * We must be new format at this point.
@@ -304,10 +297,10 @@ check_hmac_md5(const dst_private_t *priv, bool old) {
 			}
 		}
 		if (j == priv->nelements) {
-			return (-1);
+			return -1;
 		}
 	}
-	return (0);
+	return 0;
 }
 
 static int
@@ -315,7 +308,7 @@ check_hmac_sha(const dst_private_t *priv, unsigned int ntags,
 	       unsigned int alg) {
 	unsigned int i, j;
 	if (priv->nelements != ntags) {
-		return (-1);
+		return -1;
 	}
 	for (i = 0; i < ntags; i++) {
 		for (j = 0; j < priv->nelements; j++) {
@@ -324,10 +317,10 @@ check_hmac_sha(const dst_private_t *priv, unsigned int ntags,
 			}
 		}
 		if (j == priv->nelements) {
-			return (-1);
+			return -1;
 		}
 	}
-	return (0);
+	return 0;
 }
 
 static int
@@ -339,27 +332,29 @@ check_data(const dst_private_t *priv, const unsigned int alg, bool old,
 	case DST_ALG_NSEC3RSASHA1:
 	case DST_ALG_RSASHA256:
 	case DST_ALG_RSASHA512:
-		return (check_rsa(priv, external));
+	case DST_ALG_RSASHA256PRIVATEOID:
+	case DST_ALG_RSASHA512PRIVATEOID:
+		return check_rsa(priv, external);
 	case DST_ALG_ECDSA256:
 	case DST_ALG_ECDSA384:
-		return (check_ecdsa(priv, external));
+		return check_ecdsa(priv, external);
 	case DST_ALG_ED25519:
 	case DST_ALG_ED448:
-		return (check_eddsa(priv, external));
+		return check_eddsa(priv, external);
 	case DST_ALG_HMACMD5:
-		return (check_hmac_md5(priv, old));
+		return check_hmac_md5(priv, old);
 	case DST_ALG_HMACSHA1:
-		return (check_hmac_sha(priv, HMACSHA1_NTAGS, alg));
+		return check_hmac_sha(priv, HMACSHA1_NTAGS, alg);
 	case DST_ALG_HMACSHA224:
-		return (check_hmac_sha(priv, HMACSHA224_NTAGS, alg));
+		return check_hmac_sha(priv, HMACSHA224_NTAGS, alg);
 	case DST_ALG_HMACSHA256:
-		return (check_hmac_sha(priv, HMACSHA256_NTAGS, alg));
+		return check_hmac_sha(priv, HMACSHA256_NTAGS, alg);
 	case DST_ALG_HMACSHA384:
-		return (check_hmac_sha(priv, HMACSHA384_NTAGS, alg));
+		return check_hmac_sha(priv, HMACSHA384_NTAGS, alg);
 	case DST_ALG_HMACSHA512:
-		return (check_hmac_sha(priv, HMACSHA512_NTAGS, alg));
+		return check_hmac_sha(priv, HMACSHA512_NTAGS, alg);
 	default:
-		return (DST_R_UNSUPPORTEDALG);
+		return DST_R_UNSUPPORTEDALG;
 	}
 }
 
@@ -576,7 +571,7 @@ done:
 
 	key->external = external;
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 
 fail:
 	dst__privstruct_free(priv, mctx);
@@ -584,7 +579,7 @@ fail:
 		isc_mem_put(mctx, data, MAXFIELDSIZE);
 	}
 
-	return (ret);
+	return ret;
 }
 
 isc_result_t
@@ -609,16 +604,16 @@ dst__privstruct_writefile(const dst_key_t *key, const dst_private_t *priv,
 
 	ret = check_data(priv, dst_key_alg(key), false, key->external);
 	if (ret < 0) {
-		return (DST_R_INVALIDPRIVATEKEY);
+		return DST_R_INVALIDPRIVATEKEY;
 	} else if (ret != ISC_R_SUCCESS) {
-		return (ret);
+		return ret;
 	}
 
 	isc_buffer_init(&fileb, filename, sizeof(filename));
 	result = dst_key_buildfilename(key, DST_TYPE_PRIVATE, directory,
 				       &fileb);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	result = isc_file_mode(filename, &mode);
@@ -627,8 +622,8 @@ dst__privstruct_writefile(const dst_key_t *key, const dst_private_t *priv,
 		int level;
 
 		level = ISC_LOG_WARNING;
-		isc_log_write(dns_lctx, DNS_LOGCATEGORY_GENERAL,
-			      DNS_LOGMODULE_DNSSEC, level,
+		isc_log_write(DNS_LOGCATEGORY_GENERAL, DNS_LOGMODULE_DNSSEC,
+			      level,
 			      "Permissions on the file %s "
 			      "have changed from 0%o to 0600 as "
 			      "a result of this operation.",
@@ -639,12 +634,12 @@ dst__privstruct_writefile(const dst_key_t *key, const dst_private_t *priv,
 	result = dst_key_buildfilename(key, DST_TYPE_TEMPLATE, directory,
 				       &tmpb);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 
 	fp = dst_key_open(tmpname, S_IRUSR | S_IWUSR);
 	if (fp == NULL) {
-		return (DST_R_WRITEERROR);
+		return DST_R_WRITEERROR;
 	}
 
 	dst_key_getprivateformat(key, &major, &minor);
@@ -701,6 +696,12 @@ dst__privstruct_writefile(const dst_key_t *key, const dst_private_t *priv,
 	case DST_ALG_HMACSHA512:
 		fprintf(fp, "(HMAC_SHA512)\n");
 		break;
+	case DST_ALG_RSASHA256PRIVATEOID:
+		fprintf(fp, "(OID:RSASHA256)\n");
+		break;
+	case DST_ALG_RSASHA512PRIVATEOID:
+		fprintf(fp, "(OID:RSASHA512)\n");
+		break;
 	default:
 		fprintf(fp, "(?)\n");
 		break;
@@ -716,7 +717,7 @@ dst__privstruct_writefile(const dst_key_t *key, const dst_private_t *priv,
 		isc_buffer_init(&b, buffer, sizeof(buffer));
 		result = isc_base64_totext(&r, sizeof(buffer), "", &b);
 		if (result != ISC_R_SUCCESS) {
-			return (dst_key_cleanup(tmpname, fp));
+			return dst_key_cleanup(tmpname, fp);
 		}
 		isc_buffer_usedregion(&b, &r);
 
@@ -747,7 +748,7 @@ dst__privstruct_writefile(const dst_key_t *key, const dst_private_t *priv,
 			isc_buffer_init(&b, buffer, sizeof(buffer));
 			result = dns_time32_totext(when, &b);
 			if (result != ISC_R_SUCCESS) {
-				return (dst_key_cleanup(tmpname, fp));
+				return dst_key_cleanup(tmpname, fp);
 			}
 
 			isc_buffer_usedregion(&b, &r);
@@ -760,7 +761,7 @@ dst__privstruct_writefile(const dst_key_t *key, const dst_private_t *priv,
 	}
 
 	result = dst_key_close(tmpname, fp, filename);
-	return (result);
+	return result;
 }
 
 /*! \file */

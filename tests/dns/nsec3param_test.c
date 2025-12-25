@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -23,11 +24,13 @@
 #include <cmocka.h>
 
 #include <isc/hex.h>
+#include <isc/lib.h>
 #include <isc/result.h>
 #include <isc/string.h>
 #include <isc/util.h>
 
 #include <dns/db.h>
+#include <dns/lib.h>
 #include <dns/nsec3.h>
 
 #include "zone_p.h"
@@ -94,7 +97,7 @@ rdata_fromparams(uint8_t hash, uint8_t flags, uint16_t iter, uint8_t saltlen,
 	nsec3param.iterations = iter;
 	nsec3param.salt_length = saltlen;
 	nsec3param.salt = salt;
-	return (nsec3param);
+	return nsec3param;
 }
 
 /*%
@@ -116,10 +119,9 @@ nsec3param_change_test(const nsec3param_change_test_params_t *test) {
 	result = dns_test_makezone("nsec3", &zone, NULL, false);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
-	result = dns_zone_setfile(
-		zone, TESTS_DIR "/testdata/nsec3param/nsec3.db.signed",
-		dns_masterformat_text, &dns_master_style_default);
-	assert_int_equal(result, ISC_R_SUCCESS);
+	dns_zone_setfile(zone, TESTS_DIR "/testdata/nsec3param/nsec3.db.signed",
+			 NULL, dns_masterformat_text,
+			 &dns_master_style_default);
 
 	result = dns_zone_load(zone, false);
 	assert_int_equal(result, ISC_R_SUCCESS);

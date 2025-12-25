@@ -23,13 +23,14 @@ library which provides a low-level PKCS#11 interface to drive the HSM
 hardware. The PKCS#11 provider library comes from the HSM vendor, and it
 is specific to the HSM to be controlled.
 
-BIND 9 uses engine_pkcs11 for PKCS#11. engine_pkcs11 is an OpenSSL
-engine which is part of the `OpenSC`_ project. The engine is dynamically
-loaded into OpenSSL and the HSM is operated indirectly; any
-cryptographic operations not supported by the HSM can be carried out by
-OpenSSL instead.
+BIND 9 accesses PKCS#11 libraries via OpenSSL Providers. The provider for
+OpenSSL 3 and newer is `pkcs11-provider`_.
 
-.. _OpenSC: https://github.com/OpenSC/libp11
+.. _`pkcs11-provider`: https://github.com/latchset/pkcs11-provider
+
+In both cases the extension is dynamically loaded into OpenSSL and the HSM is
+operated indirectly; any cryptographic operations not supported by the HSM can
+be carried out by OpenSSL instead.
 
 Prerequisites
 ^^^^^^^^^^^^^
@@ -41,7 +42,7 @@ Building SoftHSMv2
 ^^^^^^^^^^^^^^^^^^
 
 SoftHSMv2, the latest development version of SoftHSM, is available from
-https://github.com/opendnssec/SoftHSMv2. It is a software library
+https://github.com/softhsm/SoftHSMv2. It is a software library
 developed by the OpenDNSSEC project (https://www.opendnssec.org) which
 provides a PKCS#11 interface to a virtual HSM, implemented in the form
 of an SQLite3 database on the local filesystem. It provides less security
@@ -64,83 +65,96 @@ with BIND.
    $  make install
    $  /opt/pkcs11/usr/bin/softhsm-util --init-token 0 --slot 0 --label softhsmv2
 
-OpenSSL-based PKCS#11
-^^^^^^^^^^^^^^^^^^^^^
+OpenSSL 3 With pkcs11-provider
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-OpenSSL-based PKCS#11 uses engine_pkcs11 OpenSSL engine from libp11 project.
+OpenSSL provider-based PKCS#11 uses the pkcs11-provider project.
 
-engine_pkcs11 tries to fit the PKCS#11 API within the engine API of OpenSSL.
-That is, it provides a gateway between PKCS#11 modules and the OpenSSL engine
-API.  One has to register the engine with OpenSSL and one has to provide the
-path to the PKCS#11 module which should be gatewayed to. This can be done by
-editing the OpenSSL configuration file, by engine specific controls, or by using
+pkcs11-provider tries to fit the PKCS#11 API within the Provider API of OpenSSL;
+that is, it provides a gateway between PKCS#11 modules and the OpenSSL Provider
+API. The provider must be registered with OpenSSL and the
+path to the PKCS#11 module gateway must be provided. This can be done by
+editing the OpenSSL configuration file, by provider-specific controls, or by using
 the p11-kit proxy module.
 
-It is recommended, that libp11 >= 0.4.12 is used.
+It is required to use pkcs11-provider version 0.3 or later.  It is recommended
+to use the lastest version available.
 
-For more detailed howto including the examples, we recommend reading:
+Configuring pkcs11-provider
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-https://gitlab.isc.org/isc-projects/bind9/-/wikis/BIND-9-PKCS11
+The canonical documentation for configuring pkcs11-provider is in the
+`provider-pkcs11.7`_ manual page, but a copy of a working configuration is
+provided here for convenience:
 
-Using the HSM
-^^^^^^^^^^^^^
+.. _`provider-pkcs11.7`: https://github.com/latchset/pkcs11-provider/blob/main/docs/provider-pkcs11.7.md
 
-The canonical documentation for configuring engine_pkcs11 is in the
-`libp11/README.md`_, but here's copy of working configuration for
-your convenience:
-
-.. _`libp11/README.md`: https://github.com/OpenSC/libp11/blob/master/README.md#pkcs-11-module-configuration
-
-We are going to use our own custom copy of OpenSSL configuration, again it's
-driven by an environment variable, this time called OPENSSL_CONF.  We are
-going to copy the global OpenSSL configuration (often found in
-``etc/ssl/openssl.conf``) and customize it to use engines_pkcs11.
+In this example, we use a custom copy of OpenSSL configuration,
+driven by an environment variable called OPENSSL_CONF. First, copy the
+global OpenSSL configuration (often found in
+``etc/ssl/openssl.conf``) and customize it to use pkcs11-provider.
 
 ::
 
    cp /etc/ssl/openssl.cnf /opt/bind9/etc/openssl.cnf
 
-and export the environment variable:
+Next, export the environment variable:
 
 ::
 
    export OPENSSL_CONF=/opt/bind9/etc/openssl.cnf
 
-Now add following line at the top of file, before any sections (in square
+Then add the following line at the top of the file, before any sections (in square
 brackets) are defined:
 
 ::
 
    openssl_conf = openssl_init
 
-And make sure there are no other 'openssl_conf = ...' lines in the file.
+Make sure there are no other 'openssl_conf = ...' lines in the file.
 
-Add following lines at the bottom of the file:
+Add the following lines at the bottom of the file:
 
 ::
 
    [openssl_init]
-   engines=engine_section
+   providers = provider_init
 
-   [engine_section]
-   pkcs11 = pkcs11_section
+   [provider_init]
+   default = default_init
+   pkcs11 = pkcs11_init
 
-   [pkcs11_section]
-   engine_id = pkcs11
-   dynamic_path = <PATHTO>/pkcs11.so
-   MODULE_PATH = <FULL_PATH_TO_HSM_MODULE>
-   init = 0
+   [default_init]
+   activate = 1
+
+   [pkcs11_init]
+   module = <PATHTO>/pkcs11.so
+   pkcs11-module-path = <FULL_PATH_TO_HSM_MODULE>
+   # bind uses the digest+sign api. this is broken with the default load behaviour,
+   # but works with early load. see: https://github.com/latchset/pkcs11-provider/issues/266
+   pkcs11-module-load-behavior = early
+   # no-deinit quirk is needed if you use softhsm2
+   #pkcs11-module-quirks = no-deinit
+   # if automatic logging to the token is needed, PIN can be specified as below
+   # the file referenced should contain just the PIN
+   #pkcs11-module-token-pin = file:/etc/pki/pin.txt
+   activate = 1
 
 Key Generation
 ^^^^^^^^^^^^^^
 
-HSM keys can now be created and used.  We are going to assume that you already
-have a BIND 9 installed, either from a package, or from the sources, and the
+HSM keys can now be created and used.  We are assuming that
+BIND 9 is already installed, either from a package or from the sources, and the
 tools are readily available in the ``$PATH``.
 
-For generating the keys, we are going to use ``pkcs11-tool`` available from the
-OpenSC suite.  On both DEB-based and RPM-based distributions, the package is
-called opensc.
+A zone that is configured with ``dnssec-policy`` can generate keys through
+the PKCS#11 Provider API of OpenSSL.
+
+If you want to create keys manually, the ``pkcs11-tool`` available from the
+`OpenSC`_ suite can be used. On both DEB-based and RPM-based distributions,
+the package is called opensc.
+
+.. _OpenSC: https://github.com/OpenSC/libp11
 
 We need to generate at least two RSA keys:
 
@@ -154,25 +168,27 @@ label to reference the private key.
 
 Convert the RSA keys stored in the HSM into a format that BIND 9 understands.
 The :iscman:`dnssec-keyfromlabel` tool from BIND 9 can link the raw keys stored in the
-HSM with the ``K<zone>+<alg>+<id>`` files.  You'll need to provide the OpenSSL
-engine name (``pkcs11``), the algorithm (``RSASHA256``) and the PKCS#11 label
-that specify the token (we asume that it has been initialized as bind9), the
-name of the PKCS#11 object (called label when generating the keys using
-``pkcs11-tool``) and the HSM PIN.
+HSM with the ``K<zone>+<alg>+<id>`` files.
+
+The algorithm (``RSASHA256``) must be provided. The key is referenced with
+the PKCS#11 URI scheme and it can contain the PKCS#11 token label (we asume that
+it has been initialized as bind9), and the PKCS#11 object label (called label
+when generating the keys using ``pkcs11-tool``) and the HSM PIN. Refer to
+:rfc:`7512` for the full PKCS#11 URI specification.
 
 Convert the KSK:
 
 ::
 
-   dnssec-keyfromlabel -E pkcs11 -a RSASHA256 -l "token=bind9;object=example.net-ksk;pin-value=0000" -f KSK example.net
+   dnssec-keyfromlabel -a RSASHA256 -l "pkcs11:token=bind9;object=example.net-ksk;pin-value=0000" -f KSK example.net
 
 and ZSK:
 
 ::
 
-   dnssec-keyfromlabel -E pkcs11 -a RSASHA256 -l "token=bind9;object=example.net-zsk;pin-value=0000" example.net
+   dnssec-keyfromlabel -a RSASHA256 -l "pkcs11:token=bind9;object=example.net-zsk;pin-value=0000" example.net
 
-NOTE: you can use PIN stored on disk, by specifying ``pin-source=<path_to>/<file>``, f.e.:
+NOTE: a PIN stored on disk can be used by specifying ``pin-source=<path_to>/<file>``, e.g:
 
 ::
 
@@ -184,7 +200,7 @@ and then use in the label specification:
 
    pin-source=/opt/bind9/etc/pin.txt
 
-Confirm that you have one KSK and one ZSK present in the current directory:
+Confirm that there is one KSK and one ZSK present in the current directory:
 
 ::
 
@@ -199,10 +215,10 @@ The output should look like this (the second number will be different):
    Kexample.net.+008+42231.key
    Kexample.net.+008+42231.private
 
-A note on generating ECDSA keys: there is a bug in libp11 when looking up a key,
-that function compares keys only on their ID, not the label. So when looking up
-a key it returns the first key, rather than the matching key. The workaround for
-this is when creating ECDSA keys, you should specify a unique ID:
+A note on generating ECDSA keys: there is a bug in libp11 when looking up a key.
+That function compares keys only on their ID, not the label, so when looking up
+a key it returns the first key, rather than the matching key. To work around
+this when creating ECDSA keys, specify a unique ID:
 
 ::
 
@@ -212,32 +228,13 @@ this is when creating ECDSA keys, you should specify a unique ID:
    pkcs11-tool --module <FULL_PATH_TO_HSM_MODULE> -l -k --key-type EC:prime256v1 --id $zsk --label example.net-zsk --pin <PIN>
 
 
-Specifying the Engine on the Command Line
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-When using OpenSSL-based PKCS#11, the "engine" to be used by OpenSSL can be
-specified in :iscman:`named` and all of the BIND ``dnssec-*`` tools by using the ``-E
-<engine>`` command line option. Specifying the engine is generally not necessary
-unless a different OpenSSL engine is used.
-
-The zone signing commences as usual, with only one small difference.  We need to
-provide the name of the OpenSSL engine using the -E command line option.
-
-::
-
-   dnssec-signzone -E pkcs11 -S -o example.net example.net
-
 Running :iscman:`named` With Automatic Zone Re-signing
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The zone can also be signed automatically by named. Again, we need to provide
-the name of the OpenSSL engine using the :option:`-E <named -E>` command line option.
+Once the keys are created, the zone can also be signed automatically by named
+without further requisites.
 
-::
-
-   named -E pkcs11 -c named.conf
-
-and the logs should have lines like:
+The logs should have lines like:
 
 ::
 
@@ -254,21 +251,7 @@ have access to the HSM PIN. In OpenSSL-based PKCS#11, this is
 accomplished by placing the PIN into the ``openssl.cnf`` file (in the above
 examples, ``/opt/pkcs11/usr/ssl/openssl.cnf``).
 
-The location of the openssl.cnf file can be overridden by setting the
-``OPENSSL_CONF`` environment variable before running :iscman:`named`.
-
-Here is a sample ``openssl.cnf``:
-
-::
-
-       openssl_conf = openssl_def
-       [ openssl_def ]
-       engines = engine_section
-       [ engine_section ]
-       pkcs11 = pkcs11_section
-       [ pkcs11_section ]
-       PIN = <PLACE PIN HERE>
-
-This also allows the ``dnssec-\*`` tools to access the HSM without PIN
-entry. (The ``pkcs11-\*`` tools access the HSM directly, not via OpenSSL, so
-a PIN is still required to use them.)
+See OpenSSL extension-specific documentation for instructions on configuring the PIN on
+the global level; doing so allows the ``dnssec-\*`` tools to access the HSM without
+PIN entry. (The ``pkcs11-\*`` tools access the HSM directly, not via OpenSSL,
+so a PIN is still required to use them.)

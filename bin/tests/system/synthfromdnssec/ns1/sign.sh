@@ -18,59 +18,70 @@ zone=example
 infile=example.db.in
 zonefile=example.db
 
-keyname=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} -n zone $zone)
-cat "$infile" "$keyname.key" > "$zonefile"
-echo insecure NS ns1.insecure >> "$zonefile"
-echo ns1.insecure A 10.53.0.1 >> "$zonefile"
+keyname=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} $zone)
+cat "$infile" "$keyname.key" >"$zonefile"
+echo insecure NS ns1.insecure >>"$zonefile"
+echo ns1.insecure A 10.53.0.1 >>"$zonefile"
 
-$SIGNER -P -o $zone $zonefile > /dev/null
+$SIGNER -P -o $zone $zonefile >/dev/null
+
+zone=no-apex-covering
+infile=no-apex-covering.db.in
+zonefile=no-apex-covering.db
+
+keyname=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} $zone)
+cat "$infile" "$keyname.key" >"$zonefile"
+echo insecure NS ns1.insecure >>"$zonefile"
+echo ns1.insecure A 10.53.0.1 >>"$zonefile"
+
+$SIGNER -P -o $zone $zonefile >/dev/null
 
 zone=insecure.example
 infile=example.db.in
 zonefile=insecure.example.db
 
-keyname=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} -n zone $zone)
-cat "$infile" "$keyname.key" > "$zonefile"
+keyname=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} $zone)
+cat "$infile" "$keyname.key" >"$zonefile"
 
-$SIGNER -P -o $zone $zonefile > /dev/null
+$SIGNER -P -o $zone $zonefile >/dev/null
 
 zone=dnamed
 infile=dnamed.db.in
 zonefile=dnamed.db
 
-keyname=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} -n zone $zone)
-cat "$infile" "$keyname.key" > "$zonefile"
+keyname=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} $zone)
+cat "$infile" "$keyname.key" >"$zonefile"
 
-$SIGNER -P -o $zone $zonefile > /dev/null
+$SIGNER -P -o $zone $zonefile >/dev/null
 
 zone=minimal
 infile=minimal.db.in
 zonefile=minimal.db
 
-keyname=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} -n zone $zone)
-cat "$infile" "$keyname.key" > "$zonefile"
+keyname=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} $zone)
+cat "$infile" "$keyname.key" >"$zonefile"
 
 # do not regenerate NSEC chain as there in a minimal NSEC record present
-$SIGNER -P -Z nonsecify -o $zone $zonefile > /dev/null
+$SIGNER -P -Z nonsecify -o $zone $zonefile >/dev/null
 
 zone=soa-without-dnskey
 infile=soa-without-dnskey.db.in
 zonefile=soa-without-dnskey.db
 
-keyname=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} -n zone $zone)
-cat "$infile" "$keyname.key" > "$zonefile"
+keyname=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} $zone)
+cat "$infile" "$keyname.key" >"$zonefile"
 
 # do not regenerate NSEC chain as there in a minimal NSEC record present
-$SIGNER -P -Z nonsecify -o $zone $zonefile > /dev/null
+$SIGNER -P -Z nonsecify -o $zone $zonefile >/dev/null
 
 zone=.
 infile=root.db.in
 zonefile=root.db
 
-keyname=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} -b ${DEFAULT_BITS} -n zone $zone)
-cat "$infile" "$keyname.key" > "$zonefile"
+keyname=$($KEYGEN -q -a ${DEFAULT_ALGORITHM} -b ${DEFAULT_BITS} $zone)
+cat "$infile" "$keyname.key" >"$zonefile"
 
-$SIGNER -P -g -o $zone $zonefile > /dev/null
+$SIGNER -P -g -o $zone $zonefile >/dev/null
 
 # Configure the resolving server with a static key.
-keyfile_to_static_ds "$keyname" > trusted.conf
+keyfile_to_static_ds "$keyname" >trusted.conf

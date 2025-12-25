@@ -13,28 +13,30 @@
 
 #include <stdbool.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include <isc/attributes.h>
 #include <isc/buffer.h>
 #include <isc/commandline.h>
 #include <isc/lex.h>
+#include <isc/lib.h>
 #include <isc/mem.h>
 #include <isc/result.h>
 #include <isc/string.h>
 #include <isc/util.h>
 
 #include <dns/fixedname.h>
+#include <dns/lib.h>
 #include <dns/name.h>
 #include <dns/rdata.h>
 #include <dns/rdataclass.h>
 #include <dns/rdatatype.h>
 
-static isc_mem_t *mctx;
 static isc_lex_t *lex;
 
 static isc_lexspecials_t specials;
 
-noreturn static void
+ISC_NORETURN static void
 usage(void);
 
 static void
@@ -48,7 +50,7 @@ usage(void) {
 	fprintf(stderr, "\t-P: list the supported private type names\n");
 	fprintf(stderr, "\t-T: list the supported standard type names\n");
 	fprintf(stderr, "\t-u: print the record in unknown record format\n");
-	exit(0);
+	exit(EXIT_SUCCESS);
 }
 
 static void
@@ -57,12 +59,9 @@ cleanup(void) {
 		isc_lex_close(lex);
 		isc_lex_destroy(&lex);
 	}
-	if (mctx != NULL) {
-		isc_mem_destroy(&mctx);
-	}
 }
 
-noreturn static void
+ISC_NORETURN static void
 fatal(const char *format, ...);
 
 static void
@@ -75,7 +74,7 @@ fatal(const char *format, ...) {
 	va_end(args);
 	fputc('\n', stderr);
 	cleanup();
-	exit(1);
+	_exit(EXIT_FAILURE);
 }
 
 int
@@ -124,7 +123,7 @@ main(int argc, char *argv[]) {
 					fprintf(stdout, "%s\n", text);
 				}
 			}
-			exit(0);
+			exit(EXIT_SUCCESS);
 
 		case 'P':
 			for (t = 0xff00; t <= 0xfffeu; t++) {
@@ -160,15 +159,14 @@ main(int argc, char *argv[]) {
 		default:
 			fprintf(stderr, "%s: unhandled option -%c\n", argv[0],
 				isc_commandline_option);
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 	}
 	if (doexit) {
-		exit(0);
+		exit(EXIT_SUCCESS);
 	}
 
-	isc_mem_create(&mctx);
-	isc_lex_create(mctx, 256, &lex);
+	isc_lex_create(isc_g_mctx, 256, &lex);
 
 	/*
 	 * Set up to lex DNS master file.
@@ -178,14 +176,15 @@ main(int argc, char *argv[]) {
 	specials[')'] = 1;
 	specials['"'] = 1;
 	isc_lex_setspecials(lex, specials);
-	options = ISC_LEXOPT_EOL;
+	options = ISC_LEXOPT_EOL | ISC_LEXOPT_DNSMULTILINE;
 	isc_lex_setcomments(lex, ISC_LEXCOMMENT_DNSMASTERFILE);
 
-	RUNTIME_CHECK(isc_lex_openstream(lex, stdin) == ISC_R_SUCCESS);
+	isc_lex_openstream(lex, stdin);
 
 	if (origin != NULL) {
 		name = dns_fixedname_initname(&fixed);
-		result = dns_name_fromstring(name, origin, 0, NULL);
+		result = dns_name_fromstring(name, origin, dns_rootname, 0,
+					     NULL);
 		if (result != ISC_R_SUCCESS) {
 			fatal("dns_name_fromstring: %s",
 			      isc_result_totext(result));
@@ -276,7 +275,7 @@ main(int argc, char *argv[]) {
 
 		isc_buffer_init(&dbuf, data, sizeof(data));
 		result = dns_rdata_fromtext(&rdata, rdclass, rdtype, lex, name,
-					    0, mctx, &dbuf, NULL);
+					    0, isc_g_mctx, &dbuf, NULL);
 		if (result != ISC_R_SUCCESS) {
 			fatal("dns_rdata_fromtext: %s",
 			      isc_result_totext(result));
@@ -341,5 +340,5 @@ main(int argc, char *argv[]) {
 	}
 
 	cleanup();
-	return (0);
+	return 0;
 }

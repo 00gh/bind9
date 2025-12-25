@@ -21,6 +21,8 @@
 #include <isc/attributes.h>
 #include <isc/buffer.h>
 #include <isc/commandline.h>
+#include <isc/lib.h>
+#include <isc/log.h>
 #include <isc/mem.h>
 #include <isc/region.h>
 #include <isc/result.h>
@@ -30,7 +32,7 @@
 #include <dns/dnssec.h>
 #include <dns/fixedname.h>
 #include <dns/keyvalues.h>
-#include <dns/log.h>
+#include <dns/lib.h>
 #include <dns/name.h>
 #include <dns/rdataclass.h>
 #include <dns/secalg.h>
@@ -41,42 +43,36 @@
 
 #define MAX_RSA 4096 /* should be long enough... */
 
-const char *program = "dnssec-keyfromlabel";
+static uint16_t tag_min = 0, tag_max = 0xffff;
 
-noreturn static void
+ISC_NORETURN static void
 usage(void);
 
 static void
 usage(void) {
 	fprintf(stderr, "Usage:\n");
-	fprintf(stderr, "    %s -l label [options] name\n\n", program);
+	fprintf(stderr, "    %s -l label [options] name\n\n",
+		isc_commandline_progname);
 	fprintf(stderr, "Version: %s\n", PACKAGE_VERSION);
 	fprintf(stderr, "Required options:\n");
 	fprintf(stderr, "    -l label: label of the key pair\n");
 	fprintf(stderr, "    name: owner of the key\n");
 	fprintf(stderr, "Other options:\n");
 	fprintf(stderr, "    -a algorithm: \n"
-			"        RSASHA1 |\n"
-			"        NSEC3RSASHA1 |\n"
+			"        RSASHA1 (deprecated) |\n"
+			"        NSEC3RSASHA1 (deprecated) |\n"
 			"        RSASHA256 | RSASHA512 |\n"
 			"        ECDSAP256SHA256 | ECDSAP384SHA384 |\n"
 			"        ED25519 | ED448\n");
 	fprintf(stderr, "    -3: use NSEC3-capable algorithm\n");
 	fprintf(stderr, "    -c class (default: IN)\n");
-	fprintf(stderr, "    -E <engine>:\n");
-	fprintf(stderr, "        name of an OpenSSL engine to use\n");
 	fprintf(stderr, "    -f keyflag: KSK | REVOKE\n");
 	fprintf(stderr, "    -K directory: directory in which to place "
 			"key files\n");
 	fprintf(stderr, "    -k: generate a TYPE=KEY key\n");
 	fprintf(stderr, "    -L ttl: default key TTL\n");
-	fprintf(stderr, "    -n nametype: ZONE | HOST | ENTITY | USER | "
-			"OTHER\n");
+	fprintf(stderr, "    -M <min>:<max>: allowed Key ID range\n");
 	fprintf(stderr, "        (DNSKEY generation defaults to ZONE\n");
-	fprintf(stderr, "    -p protocol: default: 3 [dnssec]\n");
-	fprintf(stderr, "    -t type: "
-			"AUTHCONF | NOAUTHCONF | NOAUTH | NOCONF "
-			"(default: AUTHCONF)\n");
 	fprintf(stderr, "    -y: permit keys that might collide\n");
 	fprintf(stderr, "    -v verbose level\n");
 	fprintf(stderr, "    -V: print version information\n");
@@ -102,33 +98,28 @@ usage(void) {
 	fprintf(stderr, "     K<name>+<alg>+<id>.key, "
 			"K<name>+<alg>+<id>.private\n");
 
-	exit(-1);
+	exit(EXIT_FAILURE);
 }
 
 int
 main(int argc, char **argv) {
 	char *algname = NULL, *freeit = NULL;
-	char *nametype = NULL, *type = NULL;
 	const char *directory = NULL;
 	const char *predecessor = NULL;
 	dst_key_t *prevkey = NULL;
-	const char *engine = NULL;
 	char *classname = NULL;
 	char *endp;
 	dst_key_t *key = NULL;
 	dns_fixedname_t fname;
 	dns_name_t *name;
 	uint16_t flags = 0, kskflag = 0, revflag = 0;
-	dns_secalg_t alg;
+	dst_algorithm_t alg;
 	bool oldstyle = false;
-	isc_mem_t *mctx = NULL;
 	int ch;
-	int protocol = -1, signatory = 0;
 	isc_result_t ret;
 	isc_textregion_t r;
 	char filename[255];
 	isc_buffer_t buf;
-	isc_log_t *log = NULL;
 	dns_rdataclass_t rdclass;
 	int options = DST_TYPE_PRIVATE | DST_TYPE_PUBLIC;
 	char *label = NULL;
@@ -156,11 +147,11 @@ main(int argc, char **argv) {
 		usage();
 	}
 
-	isc_mem_create(&mctx);
+	isc_commandline_init(argc, argv);
 
 	isc_commandline_errprint = false;
 
-#define CMDLINE_FLAGS "3A:a:Cc:D:E:Ff:GhI:i:kK:L:l:n:P:p:R:S:t:v:Vy"
+#define CMDLINE_FLAGS "3A:a:Cc:D:E:Ff:GhI:i:kK:L:l:M:n:P:p:R:S:t:v:Vy"
 	while ((ch = isc_commandline_parse(argc, argv, CMDLINE_FLAGS)) != -1) {
 		switch (ch) {
 		case '3':
@@ -176,7 +167,7 @@ main(int argc, char **argv) {
 			classname = isc_commandline_argument;
 			break;
 		case 'E':
-			engine = isc_commandline_argument;
+			fatal("%s", isc_result_totext(DST_R_NOENGINE));
 			break;
 		case 'f':
 			c = (unsigned char)(isc_commandline_argument[0]);
@@ -205,20 +196,31 @@ main(int argc, char **argv) {
 			setttl = true;
 			break;
 		case 'l':
-			label = isc_mem_strdup(mctx, isc_commandline_argument);
+			label = isc_mem_strdup(isc_g_mctx,
+					       isc_commandline_argument);
 			break;
-		case 'n':
-			nametype = isc_commandline_argument;
-			break;
-		case 'p':
-			protocol = strtol(isc_commandline_argument, &endp, 10);
-			if (*endp != '\0' || protocol < 0 || protocol > 255) {
-				fatal("-p must be followed by a number "
-				      "[0..255]");
+		case 'M': {
+			unsigned long ul;
+			tag_min = ul = strtoul(isc_commandline_argument, &endp,
+					       10);
+			if (*endp != ':' || ul > 0xffff) {
+				fatal("-M range invalid");
+			}
+			tag_max = ul = strtoul(endp + 1, &endp, 10);
+			if (*endp != '\0' || ul > 0xffff || tag_max <= tag_min)
+			{
+				fatal("-M range invalid");
 			}
 			break;
+		}
+		case 'n':
+			fatal("The -n option has been deprecated.");
+			break;
+		case 'p':
+			fatal("The -p option has been deprecated.");
+			break;
 		case 't':
-			type = isc_commandline_argument;
+			fatal("The -t option has been deprecated.");
 			break;
 		case 'v':
 			verbose = strtol(isc_commandline_argument, &endp, 0);
@@ -317,7 +319,8 @@ main(int argc, char **argv) {
 		case '?':
 			if (isc_commandline_option != '?') {
 				fprintf(stderr, "%s: invalid argument -%c\n",
-					program, isc_commandline_option);
+					isc_commandline_progname,
+					isc_commandline_option);
 			}
 			FALLTHROUGH;
 		case 'h':
@@ -326,21 +329,17 @@ main(int argc, char **argv) {
 
 		case 'V':
 			/* Does not return. */
-			version(program);
+			version(isc_commandline_progname);
 
 		default:
-			fprintf(stderr, "%s: unhandled option -%c\n", program,
+			fprintf(stderr, "%s: unhandled option -%c\n",
+				isc_commandline_progname,
 				isc_commandline_option);
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 	}
 
-	ret = dst_lib_init(mctx, engine);
-	if (ret != ISC_R_SUCCESS) {
-		fatal("could not initialize dst: %s", isc_result_totext(ret));
-	}
-
-	setup_logging(mctx, &log);
+	setup_logging();
 
 	if (predecessor == NULL) {
 		if (label == NULL) {
@@ -357,7 +356,7 @@ main(int argc, char **argv) {
 		isc_buffer_init(&buf, argv[isc_commandline_index],
 				strlen(argv[isc_commandline_index]));
 		isc_buffer_add(&buf, strlen(argv[isc_commandline_index]));
-		ret = dns_name_fromtext(name, &buf, dns_rootname, 0, NULL);
+		ret = dns_name_fromtext(name, &buf, dns_rootname, 0);
 		if (ret != ISC_R_SUCCESS) {
 			fatal("invalid key name %s: %s",
 			      argv[isc_commandline_index],
@@ -369,9 +368,9 @@ main(int argc, char **argv) {
 			int len;
 
 			len = strlen(label) + 8;
-			l = isc_mem_allocate(mctx, len);
+			l = isc_mem_allocate(isc_g_mctx, len);
 			snprintf(l, len, "pkcs11:%s", label);
-			isc_mem_free(mctx, label);
+			isc_mem_free(isc_g_mctx, label);
 			label = l;
 		}
 
@@ -381,7 +380,7 @@ main(int argc, char **argv) {
 
 		r.base = algname;
 		r.length = strlen(algname);
-		ret = dns_secalg_fromtext(&alg, &r);
+		ret = dst_algorithm_fromtext(&alg, &r);
 		if (ret != ISC_R_SUCCESS) {
 			fatal("unknown algorithm %s", algname);
 		}
@@ -403,21 +402,6 @@ main(int argc, char **argv) {
 				fatal("%s is incompatible with NSEC3; "
 				      "do not use the -3 option",
 				      algname);
-			}
-		}
-
-		if (type != NULL && (options & DST_TYPE_KEY) != 0) {
-			if (strcasecmp(type, "NOAUTH") == 0) {
-				flags |= DNS_KEYTYPE_NOAUTH;
-			} else if (strcasecmp(type, "NOCONF") == 0) {
-				flags |= DNS_KEYTYPE_NOCONF;
-			} else if (strcasecmp(type, "NOAUTHCONF") == 0) {
-				flags |= (DNS_KEYTYPE_NOAUTH |
-					  DNS_KEYTYPE_NOCONF);
-			} else if (strcasecmp(type, "AUTHCONF") == 0) {
-				/* nothing */
-			} else {
-				fatal("invalid type %s", type);
 			}
 		}
 
@@ -457,12 +441,6 @@ main(int argc, char **argv) {
 		if (algname != NULL) {
 			fatal("-S and -a cannot be used together");
 		}
-		if (nametype != NULL) {
-			fatal("-S and -n cannot be used together");
-		}
-		if (type != NULL) {
-			fatal("-S and -t cannot be used together");
-		}
 		if (setpub || unsetpub) {
 			fatal("-S and -P cannot be used together");
 		}
@@ -481,7 +459,7 @@ main(int argc, char **argv) {
 
 		ret = dst_key_fromnamedfile(predecessor, directory,
 					    DST_TYPE_PUBLIC | DST_TYPE_PRIVATE,
-					    mctx, &prevkey);
+					    isc_g_mctx, &prevkey);
 		if (ret != ISC_R_SUCCESS) {
 			fatal("Invalid keyfile %s: %s", predecessor,
 			      isc_result_totext(ret));
@@ -538,31 +516,25 @@ main(int argc, char **argv) {
 				"indefinitely after rollover.\n\t "
 				"You can use dnssec-settime -D to "
 				"change this.\n",
-				program, keystr);
+				isc_commandline_progname, keystr);
 		}
 
 		setpub = setact = true;
 	}
 
-	if (nametype == NULL) {
-		if ((options & DST_TYPE_KEY) != 0) { /* KEY */
-			fatal("no nametype specified");
-		}
-		flags |= DNS_KEYOWNER_ZONE; /* DNSKEY */
-	} else if (strcasecmp(nametype, "zone") == 0) {
-		flags |= DNS_KEYOWNER_ZONE;
-	} else if ((options & DST_TYPE_KEY) != 0) { /* KEY */
-		if (strcasecmp(nametype, "host") == 0 ||
-		    strcasecmp(nametype, "entity") == 0)
-		{
-			flags |= DNS_KEYOWNER_ENTITY;
-		} else if (strcasecmp(nametype, "user") == 0) {
-			flags |= DNS_KEYOWNER_USER;
-		} else {
-			fatal("invalid KEY nametype %s", nametype);
-		}
-	} else if (strcasecmp(nametype, "other") != 0) { /* DNSKEY */
-		fatal("invalid DNSKEY nametype %s", nametype);
+	switch (alg) {
+	case DST_ALG_RSASHA1:
+	case DST_ALG_NSEC3RSASHA1: {
+		char algstr[DNS_SECALG_FORMATSIZE];
+		dns_secalg_format(alg, algstr, sizeof(algstr));
+		fprintf(stderr,
+			"WARNING: DNSKEY algorithm '%s' is deprecated. Please "
+			"migrate to another algorithm\n",
+			algstr);
+		break;
+	}
+	default:
+		break;
 	}
 
 	rdclass = strtoclass(classname);
@@ -571,32 +543,19 @@ main(int argc, char **argv) {
 		directory = ".";
 	}
 
-	if ((options & DST_TYPE_KEY) != 0) { /* KEY */
-		flags |= signatory;
-	} else if ((flags & DNS_KEYOWNER_ZONE) != 0) { /* DNSKEY */
+	if ((options & DST_TYPE_KEY) == 0) {
+		flags |= DNS_KEYOWNER_ZONE; /* DNSKEY: name type ZONE */
 		flags |= kskflag;
 		flags |= revflag;
-	}
-
-	if (protocol == -1) {
-		protocol = DNS_KEYPROTO_DNSSEC;
-	} else if ((options & DST_TYPE_KEY) == 0 &&
-		   protocol != DNS_KEYPROTO_DNSSEC)
-	{
-		fatal("invalid DNSKEY protocol: %d", protocol);
-	}
-
-	if ((flags & DNS_KEYFLAG_TYPEMASK) == DNS_KEYTYPE_NOKEY) {
-		if ((flags & DNS_KEYFLAG_SIGNATORYMASK) != 0) {
-			fatal("specified null key with signing authority");
-		}
+	} else {
+		flags |= DNS_KEYOWNER_ENTITY; /* KEY: name type HOST */
 	}
 
 	isc_buffer_init(&buf, filename, sizeof(filename) - 1);
 
 	/* associate the key */
-	ret = dst_key_fromlabel(name, alg, flags, protocol, rdclass, engine,
-				label, NULL, mctx, &key);
+	ret = dst_key_fromlabel(name, alg, flags, DNS_KEYPROTO_DNSSEC, rdclass,
+				label, NULL, isc_g_mctx, &key);
 
 	if (ret != ISC_R_SUCCESS) {
 		char namestr[DNS_NAME_FORMATSIZE];
@@ -606,7 +565,7 @@ main(int argc, char **argv) {
 		fatal("failed to get key %s/%s: %s", namestr, algstr,
 		      isc_result_totext(ret));
 		UNREACHABLE();
-		exit(-1);
+		exit(EXIT_FAILURE);
 	}
 
 	/*
@@ -643,7 +602,7 @@ main(int argc, char **argv) {
 					"not flagged as a KSK, but -R "
 					"was used. Revoking a ZSK is "
 					"legal, but undefined.\n",
-					program);
+					isc_commandline_progname);
 			}
 			dst_key_settime(key, DST_TIME_REVOKE, revoke);
 		}
@@ -686,7 +645,9 @@ main(int argc, char **argv) {
 	 * is a risk of ID collision due to this key or another key
 	 * being revoked.
 	 */
-	if (key_collision(key, name, directory, mctx, &exact)) {
+	if (key_collision(key, name, directory, isc_g_mctx, tag_min, tag_max,
+			  &exact))
+	{
 		isc_buffer_clear(&buf);
 		ret = dst_key_buildfilename(key, 0, directory, &buf);
 		if (ret != ISC_R_SUCCESS) {
@@ -694,13 +655,14 @@ main(int argc, char **argv) {
 			      isc_result_totext(ret));
 		}
 		if (exact) {
-			fatal("%s: %s already exists\n", program, filename);
+			fatal("%s: %s already exists\n",
+			      isc_commandline_progname, filename);
 		}
 
 		if (avoid_collisions) {
 			fatal("%s: %s could collide with another key upon "
 			      "revokation\n",
-			      program, filename);
+			      isc_commandline_progname, filename);
 		}
 
 		fprintf(stderr,
@@ -708,7 +670,7 @@ main(int argc, char **argv) {
 			"another key upon revokation.  If you plan "
 			"to revoke keys, destroy this key and "
 			"generate a different one.\n",
-			program, filename);
+			isc_commandline_progname, filename);
 	}
 
 	ret = dst_key_tofile(key, options, directory);
@@ -731,17 +693,14 @@ main(int argc, char **argv) {
 		dst_key_free(&prevkey);
 	}
 
-	cleanup_logging(&log);
-	dst_lib_destroy();
 	if (verbose > 10) {
-		isc_mem_stats(mctx, stdout);
+		isc_mem_stats(isc_g_mctx, stdout);
 	}
-	isc_mem_free(mctx, label);
-	isc_mem_destroy(&mctx);
+	isc_mem_free(isc_g_mctx, label);
 
 	if (freeit != NULL) {
 		free(freeit);
 	}
 
-	return (0);
+	return 0;
 }

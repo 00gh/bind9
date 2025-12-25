@@ -11,8 +11,6 @@
  * information regarding copyright ownership.
  */
 
-#define DNS_NAME_USEINLINE 1
-
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -42,9 +40,8 @@ dns_compress_init(dns_compress_t *cctx, isc_mem_t *mctx,
 
 	if ((flags & DNS_COMPRESS_LARGE) != 0) {
 		size_t count = (1 << DNS_COMPRESS_LARGEBITS);
-		size_t size = count * sizeof(*set);
 		mask = count - 1;
-		set = isc_mem_allocatex(mctx, size, ISC_MEM_ZERO);
+		set = isc_mem_callocate(mctx, count, sizeof(*set));
 	} else {
 		mask = ARRAY_SIZE(cctx->smallset) - 1;
 		set = cctx->smallset;
@@ -60,6 +57,7 @@ dns_compress_init(dns_compress_t *cctx, isc_mem_t *mctx,
 		.mctx = mctx,
 		.mask = mask,
 		.set = set,
+		.coff = 0xffff,
 	};
 }
 
@@ -73,6 +71,23 @@ dns_compress_invalidate(dns_compress_t *cctx) {
 }
 
 void
+dns_compress_setmultiuse(dns_compress_t *cctx, bool multi) {
+	REQUIRE(CCTX_VALID(cctx));
+	if (multi) {
+		cctx->flags |= DNS_COMPRESS_MULTIUSE;
+	} else {
+		cctx->flags &= ~DNS_COMPRESS_MULTIUSE;
+	}
+	cctx->coff = 0xffff;
+}
+
+bool
+dns_compress_getmultiuse(dns_compress_t *cctx) {
+	REQUIRE(CCTX_VALID(cctx));
+	return (cctx->flags & DNS_COMPRESS_MULTIUSE) != 0;
+}
+
+void
 dns_compress_setpermitted(dns_compress_t *cctx, bool permitted) {
 	REQUIRE(CCTX_VALID(cctx));
 	if (permitted) {
@@ -80,12 +95,13 @@ dns_compress_setpermitted(dns_compress_t *cctx, bool permitted) {
 	} else {
 		cctx->flags &= ~DNS_COMPRESS_PERMITTED;
 	}
+	dns_compress_setmultiuse(cctx, false);
 }
 
 bool
 dns_compress_getpermitted(dns_compress_t *cctx) {
 	REQUIRE(CCTX_VALID(cctx));
-	return ((cctx->flags & DNS_COMPRESS_PERMITTED) != 0);
+	return (cctx->flags & DNS_COMPRESS_PERMITTED) != 0;
 }
 
 /*
@@ -112,16 +128,16 @@ hash_label(uint16_t init, uint8_t *ptr, bool sensitive) {
 		}
 	}
 
-	return (isc_hash_bits32(hash, 16));
+	return isc_hash_bits32(hash, 16);
 }
 
 static bool
 match_wirename(uint8_t *a, uint8_t *b, unsigned int len, bool sensitive) {
 	if (sensitive) {
-		return (memcmp(a, b, len) == 0);
+		return memcmp(a, b, len) == 0;
 	} else {
 		/* label lengths are < 'A' so unaffected by tolower() */
-		return (isc_ascii_lowerequal(a, b, len));
+		return isc_ascii_lowerequal(a, b, len);
 	}
 }
 
@@ -167,7 +183,7 @@ match_suffix(isc_buffer_t *buffer, unsigned int new_coff, uint8_t *sptr,
 	INSIST(llen <= 64 && llen < slen);
 
 	if (blen < new_coff + llen) {
-		return (false);
+		return false;
 	}
 
 	blen -= new_coff;
@@ -175,12 +191,12 @@ match_suffix(isc_buffer_t *buffer, unsigned int new_coff, uint8_t *sptr,
 
 	/* does the first label of the suffix appear here? */
 	if (!match_wirename(bptr, sptr, llen, sensitive)) {
-		return (false);
+		return false;
 	}
 
 	/* is this label followed by the previously matched suffix? */
 	if (old_coff == new_coff + llen) {
-		return (true);
+		return true;
 	}
 
 	blen -= llen;
@@ -190,16 +206,16 @@ match_suffix(isc_buffer_t *buffer, unsigned int new_coff, uint8_t *sptr,
 
 	/* are both labels followed by the root label? */
 	if (blen >= 1 && slen == 1 && bptr[0] == 0 && sptr[0] == 0) {
-		return (true);
+		return true;
 	}
 
 	/* is this label followed by a pointer to the previous match? */
 	if (blen >= 2 && bptr[0] == pptr[0] && bptr[1] == pptr[1]) {
-		return (true);
+		return true;
 	}
 
 	/* is this label followed by a copy of the rest of the suffix? */
-	return (blen >= slen && match_wirename(bptr, sptr, slen, sensitive));
+	return blen >= slen && match_wirename(bptr, sptr, slen, sensitive);
 }
 
 /*
@@ -212,22 +228,23 @@ match_suffix(isc_buffer_t *buffer, unsigned int new_coff, uint8_t *sptr,
  */
 static unsigned int
 probe_distance(dns_compress_t *cctx, unsigned int slot) {
-	return ((slot - cctx->set[slot].hash) & cctx->mask);
+	return (slot - cctx->set[slot].hash) & cctx->mask;
 }
 
 static unsigned int
 slot_index(dns_compress_t *cctx, unsigned int hash, unsigned int probe) {
-	return ((hash + probe) & cctx->mask);
+	return (hash + probe) & cctx->mask;
 }
 
 static bool
-insert_label(dns_compress_t *cctx, isc_buffer_t *buffer, const dns_name_t *name,
-	     unsigned int label, uint16_t hash, unsigned int probe) {
+insert_label(dns_compress_t *cctx, isc_buffer_t *buffer,
+	     const dns_offsets_t offsets, unsigned int label, uint16_t hash,
+	     unsigned int probe) {
 	/*
 	 * hash set entries must have valid compression offsets
 	 * and the hash set must not get too full (75% load)
 	 */
-	unsigned int prefix_len = name->offsets[label];
+	unsigned int prefix_len = offsets[label];
 	unsigned int coff = isc_buffer_usedlength(buffer) + prefix_len;
 	if (coff >= 0x4000 || cctx->count > cctx->mask * 3 / 4) {
 		return false;
@@ -256,17 +273,18 @@ insert_label(dns_compress_t *cctx, isc_buffer_t *buffer, const dns_name_t *name,
  */
 static void
 insert(dns_compress_t *cctx, isc_buffer_t *buffer, const dns_name_t *name,
-       unsigned int label, uint16_t hash, unsigned int probe) {
+       const dns_offsets_t offsets, unsigned int label, uint16_t hash,
+       unsigned int probe) {
 	bool sensitive = (cctx->flags & DNS_COMPRESS_CASE) != 0;
 	/*
 	 * this insertion loop continues from the search loop inside
 	 * dns_compress_name() below, iterating over the remaining labels
 	 * of the name and accumulating the hash in the same manner
 	 */
-	while (insert_label(cctx, buffer, name, label, hash, probe) &&
+	while (insert_label(cctx, buffer, offsets, label, hash, probe) &&
 	       label-- > 0)
 	{
-		unsigned int prefix_len = name->offsets[label];
+		unsigned int prefix_len = offsets[label];
 		uint8_t *suffix_ptr = name->ndata + prefix_len;
 		hash = hash_label(hash, suffix_ptr, sensitive);
 		probe = 0;
@@ -280,8 +298,6 @@ dns_compress_name(dns_compress_t *cctx, isc_buffer_t *buffer,
 	REQUIRE(CCTX_VALID(cctx));
 	REQUIRE(ISC_BUFFER_VALID(buffer));
 	REQUIRE(dns_name_isabsolute(name));
-	REQUIRE(name->labels > 0);
-	REQUIRE(name->offsets != NULL);
 	REQUIRE(return_prefix != NULL);
 	REQUIRE(return_coff != NULL);
 	REQUIRE(*return_coff == 0);
@@ -290,17 +306,21 @@ dns_compress_name(dns_compress_t *cctx, isc_buffer_t *buffer,
 		return;
 	}
 
+	dns_offsets_t offsets;
+	size_t labels = dns_name_offsets(name, offsets);
+	INSIST(labels > 0);
+
 	bool sensitive = (cctx->flags & DNS_COMPRESS_CASE) != 0;
 
 	uint16_t hash = HASH_INIT_DJB2;
-	unsigned int label = name->labels - 1; /* skip the root label */
+	size_t label = labels - 1; /* skip the root label */
 
 	/*
 	 * find out how much of the name's suffix is in the hash set,
 	 * stepping backwards from the end one label at a time
 	 */
 	while (label-- > 0) {
-		unsigned int prefix_len = name->offsets[label];
+		unsigned int prefix_len = offsets[label];
 		unsigned int suffix_len = name->length - prefix_len;
 		uint8_t *suffix_ptr = name->ndata + prefix_len;
 		hash = hash_label(hash, suffix_ptr, sensitive);
@@ -316,7 +336,8 @@ dns_compress_name(dns_compress_t *cctx, isc_buffer_t *buffer,
 			 * the rest of the name (its prefix) into the set
 			 */
 			if (coff == 0 || probe > probe_distance(cctx, slot)) {
-				insert(cctx, buffer, name, label, hash, probe);
+				insert(cctx, buffer, name, offsets, label, hash,
+				       probe);
 				return;
 			}
 

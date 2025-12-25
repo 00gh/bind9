@@ -28,11 +28,13 @@
 
 #include <isc/buffer.h>
 #include <isc/file.h>
+#include <isc/lib.h>
 #include <isc/stdio.h>
 #include <isc/types.h>
 #include <isc/util.h>
 
 #include <dns/dnstap.h>
+#include <dns/lib.h>
 #include <dns/view.h>
 
 #include <tests/dns.h>
@@ -43,12 +45,10 @@
 #define TAPSAVED TESTS_DIR "/testdata/dnstap/dnstap.saved"
 #define TAPTEXT	 TESTS_DIR "/testdata/dnstap/dnstap.text"
 
-static int
+static void
 cleanup(void **state ISC_ATTR_UNUSED) {
 	(void)isc_file_remove(TAPFILE);
 	(void)isc_file_remove(TAPSOCK);
-
-	return (0);
 }
 
 static int
@@ -63,11 +63,23 @@ setup(void **state) {
 	 * the testdata was originally generated.
 	 */
 	setenv("TZ", "PDT8", 1);
-	return (0);
+
+	setup_loopmgr(state);
+
+	return 0;
+}
+
+static int
+teardown(void **state) {
+	cleanup(state);
+
+	teardown_loopmgr(state);
+
+	return 0;
 }
 
 /* set up dnstap environment */
-ISC_RUN_TEST_IMPL(dns_dt_create) {
+ISC_LOOP_TEST_IMPL(dns_dt_create) {
 	isc_result_t result;
 	dns_dtenv_t *dtenv = NULL;
 	struct fstrm_iothr_options *fopt;
@@ -76,8 +88,8 @@ ISC_RUN_TEST_IMPL(dns_dt_create) {
 	assert_non_null(fopt);
 	fstrm_iothr_options_set_num_input_queues(fopt, 1);
 
-	result = dns_dt_create(mctx, dns_dtmode_file, TAPFILE, &fopt, NULL,
-			       &dtenv);
+	result = dns_dt_create(isc_g_mctx, dns_dtmode_file, TAPFILE, &fopt,
+			       NULL, &dtenv);
 	assert_int_equal(result, ISC_R_SUCCESS);
 	if (dtenv != NULL) {
 		dns_dt_detach(&dtenv);
@@ -92,8 +104,8 @@ ISC_RUN_TEST_IMPL(dns_dt_create) {
 	assert_non_null(fopt);
 	fstrm_iothr_options_set_num_input_queues(fopt, 1);
 
-	result = dns_dt_create(mctx, dns_dtmode_unix, TAPSOCK, &fopt, NULL,
-			       &dtenv);
+	result = dns_dt_create(isc_g_mctx, dns_dtmode_unix, TAPSOCK, &fopt,
+			       NULL, &dtenv);
 	assert_int_equal(result, ISC_R_SUCCESS);
 	if (dtenv != NULL) {
 		dns_dt_detach(&dtenv);
@@ -109,7 +121,7 @@ ISC_RUN_TEST_IMPL(dns_dt_create) {
 	assert_non_null(fopt);
 	fstrm_iothr_options_set_num_input_queues(fopt, 1);
 
-	result = dns_dt_create(mctx, 33, TAPSOCK, &fopt, NULL, &dtenv);
+	result = dns_dt_create(isc_g_mctx, 33, TAPSOCK, &fopt, NULL, &dtenv);
 	assert_int_equal(result, ISC_R_FAILURE);
 	assert_null(dtenv);
 	if (dtenv != NULL) {
@@ -118,10 +130,12 @@ ISC_RUN_TEST_IMPL(dns_dt_create) {
 	if (fopt != NULL) {
 		fstrm_iothr_options_destroy(&fopt);
 	}
+
+	isc_loopmgr_shutdown();
 }
 
 /* send dnstap messages */
-ISC_RUN_TEST_IMPL(dns_dt_send) {
+ISC_LOOP_TEST_IMPL(dns_dt_send) {
 	isc_result_t result;
 	dns_dtenv_t *dtenv = NULL;
 	dns_dthandle_t *handle = NULL;
@@ -146,15 +160,15 @@ ISC_RUN_TEST_IMPL(dns_dt_send) {
 	isc_time_t p, f;
 	struct fstrm_iothr_options *fopt;
 
-	result = dns_test_makeview("test", false, &view);
+	result = dns_test_makeview("test", false, false, &view);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	fopt = fstrm_iothr_options_init();
 	assert_non_null(fopt);
 	fstrm_iothr_options_set_num_input_queues(fopt, 1);
 
-	result = dns_dt_create(mctx, dns_dtmode_file, TAPFILE, &fopt, NULL,
-			       &dtenv);
+	result = dns_dt_create(isc_g_mctx, dns_dtmode_file, TAPFILE, &fopt,
+			       NULL, &dtenv);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	dns_dt_attach(dtenv, &view->dtenv);
@@ -166,12 +180,12 @@ ISC_RUN_TEST_IMPL(dns_dt_send) {
 	zname = dns_fixedname_initname(&zfname);
 	isc_buffer_constinit(&zb, "example.com.", 12);
 	isc_buffer_add(&zb, 12);
-	result = dns_name_fromtext(zname, &zb, NULL, 0, NULL);
+	result = dns_name_fromtext(zname, &zb, NULL, 0);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	memset(&zr, 0, sizeof(zr));
 	isc_buffer_init(&zb, zone, sizeof(zone));
-	dns_compress_init(&cctx, mctx, 0);
+	dns_compress_init(&cctx, isc_g_mctx, 0);
 	dns_compress_setpermitted(&cctx, false);
 	result = dns_name_towire(zname, &cctx, &zb);
 	assert_int_equal(result, ISC_R_SUCCESS);
@@ -230,21 +244,27 @@ ISC_RUN_TEST_IMPL(dns_dt_send) {
 			break;
 		}
 
-		dns_dt_send(view, dt, q, r, false, &zr, &p, &f, m);
-		dns_dt_send(view, dt, q, r, false, &zr, NULL, &f, m);
-		dns_dt_send(view, dt, q, r, false, &zr, &p, NULL, m);
-		dns_dt_send(view, dt, q, r, false, &zr, NULL, NULL, m);
-		dns_dt_send(view, dt, q, r, true, &zr, &p, &f, m);
-		dns_dt_send(view, dt, q, r, true, &zr, NULL, &f, m);
-		dns_dt_send(view, dt, q, r, true, &zr, &p, NULL, m);
-		dns_dt_send(view, dt, q, r, true, &zr, NULL, NULL, m);
+		dns_dt_send(view, dt, q, r, DNS_TRANSPORT_UDP, &zr, &p, &f, m);
+		dns_dt_send(view, dt, q, r, DNS_TRANSPORT_UDP, &zr, NULL, &f,
+			    m);
+		dns_dt_send(view, dt, q, r, DNS_TRANSPORT_UDP, &zr, &p, NULL,
+			    m);
+		dns_dt_send(view, dt, q, r, DNS_TRANSPORT_UDP, &zr, NULL, NULL,
+			    m);
+		dns_dt_send(view, dt, q, r, DNS_TRANSPORT_TCP, &zr, &p, &f, m);
+		dns_dt_send(view, dt, q, r, DNS_TRANSPORT_TCP, &zr, NULL, &f,
+			    m);
+		dns_dt_send(view, dt, q, r, DNS_TRANSPORT_TCP, &zr, &p, NULL,
+			    m);
+		dns_dt_send(view, dt, q, r, DNS_TRANSPORT_TCP, &zr, NULL, NULL,
+			    m);
 	}
 
 	dns_dt_detach(&view->dtenv);
 	dns_dt_detach(&dtenv);
 	dns_view_detach(&view);
 
-	result = dns_dt_open(TAPFILE, dns_dtmode_file, mctx, &handle);
+	result = dns_dt_open(TAPFILE, dns_dtmode_file, isc_g_mctx, &handle);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	while (dns_dt_getframe(handle, &data, &dsize) == ISC_R_SUCCESS) {
@@ -256,7 +276,7 @@ ISC_RUN_TEST_IMPL(dns_dt_send) {
 		r.base = data;
 		r.length = dsize;
 
-		result = dns_dt_parse(mctx, &r, &dtdata);
+		result = dns_dt_parse(isc_g_mctx, &r, &dtdata);
 		assert_int_equal(result, ISC_R_SUCCESS);
 		if (result != ISC_R_SUCCESS) {
 			n++;
@@ -277,19 +297,19 @@ ISC_RUN_TEST_IMPL(dns_dt_send) {
 	if (handle != NULL) {
 		dns_dt_close(&handle);
 	}
+
+	isc_loopmgr_shutdown();
 }
 
 /* dnstap message to text */
-ISC_RUN_TEST_IMPL(dns_dt_totext) {
+ISC_LOOP_TEST_IMPL(dns_dt_totext) {
 	isc_result_t result;
 	dns_dthandle_t *handle = NULL;
 	uint8_t *data;
 	size_t dsize;
 	FILE *fp = NULL;
 
-	UNUSED(state);
-
-	result = dns_dt_open(TAPSAVED, dns_dtmode_file, mctx, &handle);
+	result = dns_dt_open(TAPSAVED, dns_dtmode_file, isc_g_mctx, &handle);
 	assert_int_equal(result, ISC_R_SUCCESS);
 
 	result = isc_stdio_open(TAPTEXT, "r", &fp);
@@ -317,13 +337,13 @@ ISC_RUN_TEST_IMPL(dns_dt_totext) {
 		}
 
 		/* parse dnstap frame */
-		result = dns_dt_parse(mctx, &r, &dtdata);
+		result = dns_dt_parse(isc_g_mctx, &r, &dtdata);
 		assert_int_equal(result, ISC_R_SUCCESS);
 		if (result != ISC_R_SUCCESS) {
 			continue;
 		}
 
-		isc_buffer_allocate(mctx, &b, 2048);
+		isc_buffer_allocate(isc_g_mctx, &b, 2048);
 		assert_non_null(b);
 		if (b == NULL) {
 			break;
@@ -342,13 +362,14 @@ ISC_RUN_TEST_IMPL(dns_dt_totext) {
 	if (handle != NULL) {
 		dns_dt_close(&handle);
 	}
+	isc_loopmgr_shutdown();
 }
 
 ISC_TEST_LIST_START
 
-ISC_TEST_ENTRY_CUSTOM(dns_dt_create, setup, cleanup)
-ISC_TEST_ENTRY_CUSTOM(dns_dt_send, setup, cleanup)
-ISC_TEST_ENTRY_CUSTOM(dns_dt_totext, setup, cleanup)
+ISC_TEST_ENTRY_CUSTOM(dns_dt_create, setup, teardown)
+ISC_TEST_ENTRY_CUSTOM(dns_dt_send, setup, teardown)
+ISC_TEST_ENTRY_CUSTOM(dns_dt_totext, setup, teardown)
 
 ISC_TEST_LIST_END
 

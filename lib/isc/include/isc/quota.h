@@ -32,29 +32,41 @@
 
 #include <isc/atomic.h>
 #include <isc/job.h>
-#include <isc/lang.h>
 #include <isc/magic.h>
 #include <isc/mutex.h>
+#include <isc/os.h>
 #include <isc/refcount.h>
 #include <isc/types.h>
+#include <isc/urcu.h>
 
 /*****
 ***** Types.
 *****/
 
-#undef ISC_QUOTA_TRACE
+/* Add -DISC_QUOTA_TRACE=1 to CFLAGS for detailed reference tracing */
 
-ISC_LANG_BEGINDECLS
-
-/*% isc_quota structure */
+/*%
+ * isc_quota structure
+ *
+ * NOTE: We are using struct cds_wfcq_head which has an internal
+ * mutex, because we are using enqueue and dequeue, and dequeues need
+ * synchronization between multiple threads (see urcu/wfcqueue.h for
+ * detailed description).
+ */
+STATIC_ASSERT(ISC_OS_CACHELINE_SIZE >= sizeof(struct __cds_wfcq_head),
+	      "ISC_OS_CACHELINE_SIZE smaller than "
+	      "sizeof(struct __cds_wfcq_head)");
 struct isc_quota {
 	int		     magic;
 	atomic_uint_fast32_t max;
 	atomic_uint_fast32_t used;
 	atomic_uint_fast32_t soft;
-	atomic_uint_fast32_t waiting;
-	isc_mutex_t	     cblock;
-	ISC_LIST(isc_job_t) jobs;
+	struct {
+		struct cds_wfcq_head head;
+		uint8_t		     __padding[ISC_OS_CACHELINE_SIZE -
+				       sizeof(struct __cds_wfcq_head)];
+		struct cds_wfcq_tail tail;
+	} jobs;
 	ISC_LINK(isc_quota_t) link;
 };
 
@@ -127,5 +139,3 @@ isc_quota_release(isc_quota_t *quota);
 /*%<
  * Release one unit of quota.
  */
-
-ISC_LANG_ENDDECLS

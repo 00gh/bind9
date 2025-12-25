@@ -21,15 +21,13 @@ dnssec-keygen: DNSSEC key generation tool
 Synopsis
 ~~~~~~~~
 
-:program:`dnssec-keygen` [**-3**] [**-A** date/offset] [**-a** algorithm] [**-b** keysize] [**-C**] [**-c** class] [**-D** date/offset] [**-d** bits] [**-D** sync date/offset] [**-E** engine] [**-f** flag] [**-F**] [**-G**] [**-h**] [**-I** date/offset] [**-i** interval] [**-K** directory] [**-k** policy] [**-L** ttl] [**-l** file] [**-n** nametype] [**-P** date/offset] [**-P** sync date/offset] [**-p** protocol] [**-q**] [**-R** date/offset] [**-S** key] [**-s** strength] [**-T** rrtype] [**-t** type] [**-V**] [**-v** level] {name}
+:program:`dnssec-keygen` [**-3**] [**-A** date/offset] [**-a** algorithm] [**-b** keysize] [**-C**] [**-c** class] [**-D** date/offset] [**-D** sync date/offset] [**-f** flag] [**-F**] [**-G**] [**-h**] [**-I** date/offset] [**-i** interval] [**-K** directory] [**-k** policy] [**-L** ttl] [**-l** file] [**-M** tag_min:tag_max] [**-P** date/offset] [**-P** sync date/offset] [**-p** protocol] [**-q**] [**-R** date/offset] [**-S** key] [**-s** strength] [**-T** rrtype] [**-V**] [**-v** level] {name}
 
 Description
 ~~~~~~~~~~~
 
 :program:`dnssec-keygen` generates keys for DNSSEC (Secure DNS), as defined in
-:rfc:`2535` and :rfc:`4034`. It can also generate keys for use with TSIG
-(Transaction Signatures) as defined in :rfc:`2845`, or TKEY (Transaction
-Key) as defined in :rfc:`2930`.
+:rfc:`2535` and :rfc:`4034`.
 
 The ``name`` of the key is specified on the command line. For DNSSEC
 keys, this must match the name of the zone for which the key is being
@@ -40,21 +38,24 @@ Options
 
 .. option:: -3
 
-   This option uses an NSEC3-capable algorithm to generate a DNSSEC key. If this
-   option is used with an algorithm that has both NSEC and NSEC3
-   versions, then the NSEC3 version is selected; for example,
-   ``dnssec-keygen -3 -a RSASHA1`` specifies the NSEC3RSASHA1 algorithm.
+   This option uses an NSEC3-capable algorithm to generate a DNSSEC
+   key. If this option is used with an algorithm that has both NSEC
+   and NSEC3 versions, then the NSEC3 version is selected; for
+   example, ``dnssec-keygen -3 -a RSASHA1`` specifies the NSEC3RSASHA1
+   (deprecated) algorithm.
 
 .. option:: -a algorithm
 
-   This option selects the cryptographic algorithm. For DNSSEC keys, the value of
-   ``algorithm`` must be one of RSASHA1, NSEC3RSASHA1, RSASHA256,
-   RSASHA512, ECDSAP256SHA256, ECDSAP384SHA384, ED25519, or ED448.
+   This option selects the cryptographic algorithm. For DNSSEC keys,
+   the value of ``algorithm`` must be one of RSASHA1 (deprecated),
+   NSEC3RSASHA1 (deprecated), RSASHA256, RSASHA512, ECDSAP256SHA256,
+   ECDSAP384SHA384, ED25519, or ED448.
 
-   These values are case-insensitive. In some cases, abbreviations are
-   supported, such as ECDSA256 for ECDSAP256SHA256 and ECDSA384 for
-   ECDSAP384SHA384. If RSASHA1 is specified along with the :option:`-3`
-   option, NSEC3RSASHA1 is used instead.
+   These values are case-insensitive. In some cases, abbreviations
+   are supported, such as ECDSA256 for ECDSAP256SHA256 and ECDSA384
+   for ECDSAP384SHA384. If RSASHA1 (deprecated) is specified along
+   with the :option:`-3` option, NSEC3RSASHA1 (deprecated) is used
+   instead.
 
    This parameter *must* be specified except when using the :option:`-S`
    option, which copies the algorithm from the predecessor key.
@@ -89,25 +90,16 @@ Options
    This option indicates that the DNS record containing the key should have the
    specified class. If not specified, class IN is used.
 
-.. option:: -d bits
-
-   This option specifies the key size in bits. For the algorithms RSASHA1, NSEC3RSASA1, RSASHA256, and
-   RSASHA512 the key size must be between 1024 and 4096 bits; DH size is between 128
-   and 4096 bits. This option is ignored for algorithms ECDSAP256SHA256,
-   ECDSAP384SHA384, ED25519, and ED448.
-
-.. option:: -E engine
-
-   This option specifies the cryptographic hardware to use, when applicable.
-
-   When BIND 9 is built with OpenSSL, this needs to be set to the OpenSSL
-   engine identifier that drives the cryptographic accelerator or
-   hardware service module (usually ``pkcs11``).
-
 .. option:: -f flag
 
    This option sets the specified flag in the flag field of the KEY/DNSKEY record.
-   The only recognized flags are KSK (Key-Signing Key) and REVOKE.
+   The only recognized flags are ZSK (Zone-Signing Key), KSK (Key-Signing Key)
+   and REVOKE.
+
+   Note that ZSK is not a physical flag in the DNSKEY record, it is merely used
+   to explicitly tell that you want to create a ZSK. Setting :option:`-f` in
+   conjunction with :option:`-k` will result in generating keys that only
+   match the given role set with this option.
 
 .. option:: -F
 
@@ -154,20 +146,18 @@ Options
    This option provides a configuration file that contains a ``dnssec-policy`` statement
    (matching the policy set with :option:`-k`).
 
-.. option:: -n nametype
+.. option:: -M tag_min:tag_max
 
-   This option specifies the owner type of the key. The value of ``nametype`` must
-   either be ZONE (for a DNSSEC zone key (KEY/DNSKEY)), HOST or ENTITY
-   (for a key associated with a host (KEY)), USER (for a key associated
-   with a user (KEY)), or OTHER (DNSKEY). These values are
-   case-insensitive. The default is ZONE for DNSKEY generation.
-
-.. option:: -p protocol
-
-   This option sets the protocol value for the generated key, for use with
-   :option:`-T KEY <-T>`. The protocol is a number between 0 and 255. The default
-   is 3 (DNSSEC). Other possible values for this argument are listed in
-   :rfc:`2535` and its successors.
+   This option sets the range of acceptable key tag values that ``dnssec-keygen``
+   will produce. If the key tag of the new key or the key tag of
+   the revoked version of the new key is outside this range,
+   the new key will be rejected and another new key will be generated.
+   This is designed to be used when generating keys in a multi-signer
+   scenario, where each operator is given a range of key tags to
+   prevent collisions among different operators.  The valid values
+   for ``tag_min`` and ``tag_max`` are [0..65535].  The default allows all
+   key tag values to be produced.  This option is ignored when ``-k policy``
+   is specified.
 
 .. option:: -q
 
@@ -189,24 +179,12 @@ Options
    set to the activation date minus the prepublication interval,
    which defaults to 30 days.
 
-.. option:: -s strength
-
-   This option specifies the strength value of the key. The strength is a number
-   between 0 and 15, and currently has no defined purpose in DNSSEC.
-
 .. option:: -T rrtype
 
    This option specifies the resource record type to use for the key. ``rrtype``
    must be either DNSKEY or KEY. The default is DNSKEY when using a
    DNSSEC algorithm, but it can be overridden to KEY for use with
    SIG(0).
-
-.. option:: -t type
-
-   This option indicates the type of the key for use with :option:`-T KEY <-T>`. ``type``
-   must be one of AUTHCONF, NOAUTHCONF, NOAUTH, or NOCONF. The default
-   is AUTHCONF. AUTH refers to the ability to authenticate data, and
-   CONF to the ability to encrypt data.
 
 .. option:: -V
 

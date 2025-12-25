@@ -16,7 +16,7 @@
 #include <stdbool.h>
 
 #include <isc/async.h>
-#include <isc/condition.h>
+#include <isc/atomic.h>
 #include <isc/heap.h>
 #include <isc/job.h>
 #include <isc/log.h>
@@ -51,18 +51,12 @@ isc_timer_create(isc_loop_t *loop, isc_job_cb cb, void *cbarg,
 		 isc_timer_t **timerp) {
 	int r;
 	isc_timer_t *timer;
-	isc_loopmgr_t *loopmgr = NULL;
 
 	REQUIRE(cb != NULL);
 	REQUIRE(timerp != NULL && *timerp == NULL);
 
 	REQUIRE(VALID_LOOP(loop));
-
-	loopmgr = loop->loopmgr;
-
-	REQUIRE(VALID_LOOPMGR(loopmgr));
-
-	REQUIRE(loop == isc_loop_current(loopmgr));
+	REQUIRE(loop == isc_loop());
 
 	timer = isc_mem_get(loop->mctx, sizeof(*timer));
 	*timer = (isc_timer_t){
@@ -92,7 +86,7 @@ isc_timer_stop(isc_timer_t *timer) {
 	}
 
 	/* Stop the timer, if the loops are matching */
-	if (timer->loop == isc_loop_current(timer->loop->loopmgr)) {
+	if (timer->loop == isc_loop()) {
 		uv_timer_stop(&timer->timer);
 	}
 }
@@ -114,21 +108,16 @@ timer_cb(uv_timer_t *handle) {
 void
 isc_timer_start(isc_timer_t *timer, isc_timertype_t type,
 		const isc_interval_t *interval) {
-	isc_loopmgr_t *loopmgr = NULL;
 	isc_loop_t *loop = NULL;
 	int r;
 
 	REQUIRE(VALID_TIMER(timer));
 	REQUIRE(type == isc_timertype_ticker || type == isc_timertype_once);
-	REQUIRE(timer->loop == isc_loop_current(timer->loop->loopmgr));
+	REQUIRE(timer->loop == isc_loop());
 
 	loop = timer->loop;
 
 	REQUIRE(VALID_LOOP(loop));
-
-	loopmgr = loop->loopmgr;
-
-	REQUIRE(VALID_LOOPMGR(loopmgr));
 
 	switch (type) {
 	case isc_timertype_once:
@@ -180,7 +169,7 @@ isc_timer_destroy(isc_timer_t **timerp) {
 	timer = *timerp;
 	*timerp = NULL;
 
-	REQUIRE(timer->loop == isc_loop_current(timer->loop->loopmgr));
+	REQUIRE(timer->loop == isc_loop());
 
 	timer_destroy(timer);
 }
@@ -196,4 +185,11 @@ isc_timer_async_destroy(isc_timer_t **timerp) {
 
 	isc_timer_stop(timer);
 	isc_async_run(timer->loop, timer_destroy, timer);
+}
+
+bool
+isc_timer_running(isc_timer_t *timer) {
+	REQUIRE(VALID_TIMER(timer));
+
+	return atomic_load_acquire(&timer->running);
 }

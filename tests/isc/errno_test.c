@@ -12,6 +12,7 @@
  */
 
 #include <errno.h>
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -23,6 +24,7 @@
 #include <cmocka.h>
 
 #include <isc/errno.h>
+#include <isc/lib.h>
 #include <isc/result.h>
 #include <isc/util.h>
 

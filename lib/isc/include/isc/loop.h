@@ -15,20 +15,31 @@
 
 #include <inttypes.h>
 
+#include <urcu/compiler.h>
+#include <urcu/system.h>
+
 #include <isc/job.h>
-#include <isc/lang.h>
 #include <isc/mem.h>
 #include <isc/refcount.h>
 #include <isc/types.h>
 
 typedef void (*isc_job_cb)(void *);
 
-#undef ISC_LOOP_TRACE
+/* Add -DISC_LOOP_TRACE=1 to CFLAGS for detailed reference tracing */
 
-ISC_LANG_BEGINDECLS
+/*%<
+ * Returns the current running loop.
+ */
+
+extern thread_local isc_loop_t *isc__loop_local;
+
+static inline isc_loop_t *
+isc_loop(void) {
+	return isc__loop_local;
+}
 
 void
-isc_loopmgr_create(isc_mem_t *mctx, uint32_t nloops, isc_loopmgr_t **loopmgrp);
+isc_loopmgr_create(isc_mem_t *mctx, uint32_t nloops);
 /*%<
  * Create a loop manager supporting 'nloops' loops.
  *
@@ -37,76 +48,63 @@ isc_loopmgr_create(isc_mem_t *mctx, uint32_t nloops, isc_loopmgr_t **loopmgrp);
  */
 
 void
-isc_loopmgr_destroy(isc_loopmgr_t **loopmgrp);
+isc_loopmgr_destroy(void);
 /*%<
- * Destroy the loop manager pointed to by 'loopmgrp'.
- *
- * Requires:
- *\li	'loopmgr' points to a valid loop manager.
+ * Destroy the loop manager.
  */
 
 void
-isc_loopmgr_shutdown(isc_loopmgr_t *loopmgr);
+isc_loopmgr_shutdown(void);
 /*%<
- * Request shutdown of the loop manager 'loopmgr'.
+ * Request shutdown of the loop manager.
  *
  * This will stop all signal handlers and send shutdown events to
  * all active loops. As a final action on shutting down, each loop
  * will run the function (or functions) set by isc_loopmgr_teardown()
  * or isc_loop_teardown().
- *
- * Requires:
- *\li	'loopmgr' is a valid loop manager.
  */
 
 void
-isc_loopmgr_run(isc_loopmgr_t *loopmgr);
+isc_loopmgr_run(void);
 /*%<
- * Run the loops in 'loopmgr'. Each loop will start by running the
+ * Run the loops in loop manager. Each loop will start by running the
  * function (or functions) set by isc_loopmgr_setup() or isc_loop_setup().
- *
- * Requires:
- *\li	'loopmgr' is a valid loop manager.
  */
 
 void
-isc_loopmgr_wakeup(isc_loopmgr_t *loopmgr);
+isc_loopmgr_pause(void);
 /*%<
- * Send no-op events to wake up all running loops in 'loopmgr' except
- * the current one. (See <isc/qsbr.h>.)
- *
- * Requires:
- *\li  'loopmgr' is a valid loop manager.
- *\li  We are in a running loop.
- */
-
-void
-isc_loopmgr_pause(isc_loopmgr_t *loopmgr);
-/*%<
- * Send pause events to all running loops in 'loopmgr' except the
+ * Send pause events to all running loops in loop manager except the
  * current one. This can only be called from a running loop.
  * All the paused loops will wait until isc_loopmgr_resume() is
  * run in the calling loop before continuing.
  *
  * Requires:
- *\li	'loopmgr' is a valid loop manager.
+ *\li	We are in a running loop.
+ */
+
+bool
+isc_loopmgr_paused(void);
+/*%<
+ * Returns true if the loopmgr has been paused and not yet resumed.
+ *
+ * Requires:
  *\li	We are in a running loop.
  */
 
 void
-isc_loopmgr_resume(isc_loopmgr_t *loopmgr);
+isc_loopmgr_resume(void);
 /*%<
- * Send resume events to all paused loops in 'loopmgr'. This can
+ * Send resume events to all paused loops in loop manager. This can
  * only be called by a running loop (which must therefore be the
  * loop that called isc_loopmgr_pause()).
  *
  * Requires:
- *\li	'loopmgr' is a valid loop manager.
  *\li	We are in a running loop.
  */
 
 uint32_t
-isc_loopmgr_nloops(isc_loopmgr_t *loopmgr);
+isc_loopmgr_nloops(void);
 
 isc_job_t *
 isc_loop_setup(isc_loop_t *loop, isc_job_cb cb, void *cbarg);
@@ -123,14 +121,9 @@ isc_loop_teardown(isc_loop_t *loop, isc_job_cb cb, void *cbarg);
  */
 
 void
-isc_loop_nosetup(isc_loop_t *loop, isc_job_t *job);
+isc_loopmgr_setup(isc_job_cb cb, void *cbarg);
 void
-isc_loop_noteardown(isc_loop_t *loop, isc_job_t *job);
-
-void
-isc_loopmgr_setup(isc_loopmgr_t *loopmgr, isc_job_cb cb, void *cbarg);
-void
-isc_loopmgr_teardown(isc_loopmgr_t *loopmgr, isc_job_cb cb, void *cbarg);
+isc_loopmgr_teardown(isc_job_cb cb, void *cbarg);
 /*%<
  * Schedule actions to be run when starting, and when shutting down,
  * *all* of the loops in loopmgr.
@@ -139,8 +132,7 @@ isc_loopmgr_teardown(isc_loopmgr_t *loopmgr, isc_job_cb cb, void *cbarg);
  * isc_loop_teardown() on each of the loops in turn.
  *
  * Requires:
- *\li	'loopmgr' is a valid loop manager.
- *\li	'loopmgr' is paused or has not yet been started.
+ *\li	loopmgr is paused or has not yet been started.
  */
 
 isc_mem_t *
@@ -154,36 +146,20 @@ isc_loop_getmctx(isc_loop_t *loop);
  */
 
 isc_loop_t *
-isc_loop_main(isc_loopmgr_t *loopmgr);
+isc_loop_main(void);
 /*%<
- * Returns the main loop for the 'loopmgr' (which is 'loopmgr->loops[0]',
+ * Returns the main loop for the loop manager (which is 'loops[0]',
  * regardless of how many loops there are).
- *
- * Requires:
- *\li	'loopmgr' is a valid loop manager.
  */
 
 isc_loop_t *
-isc_loop_current(isc_loopmgr_t *loopmgr);
-/*%<
- * Returns the loop object from which the function has been called,
- * or NULL if not called from a loop.
- *
- * Requires:
- *\li	'loopmgr' is a valid loop manager.
- */
-
-isc_loop_t *
-isc_loop_get(isc_loopmgr_t *loopmgr, uint32_t tid);
+isc_loop_get(isc_tid_t tid);
 /*%<
  * Return the loop object associated with the 'tid' threadid
  *
  * Requires:
- *\li	'loopmgr' is a valid loop manager.
  *\li   'tid' is smaller than number of initialized loops
  */
-
-#
 
 #if ISC_LOOP_TRACE
 #define isc_loop_ref(ptr)   isc_loop__ref(ptr, __func__, __FILE__, __LINE__)
@@ -201,24 +177,41 @@ ISC_REFCOUNT_DECL(isc_loop);
  */
 
 void
-isc_loopmgr_blocking(isc_loopmgr_t *loopmgr);
+isc_loopmgr_blocking(void);
 void
-isc_loopmgr_nonblocking(isc_loopmgr_t *loopmgr);
+isc_loopmgr_nonblocking(void);
 /*%<
  * isc_loopmgr_blocking() stops the SIGINT and SIGTERM signal handlers
  * during blocking operations, for example while waiting for user
  * interaction; isc_loopmgr_nonblocking() restarts them.
- *
- * Requires:
- *\li	'loopmgr' is a valid loop manager.
  */
 
-isc_loopmgr_t *
-isc_loop_getloopmgr(isc_loop_t *loop);
+isc_time_t
+isc_loop_now(isc_loop_t *loop);
 /*%<
- * Return the loopmgr associated with 'loop'.
+ * Returns the start time of the current loop tick.
  *
  * Requires:
- *\li	'loop' is a valid loop.
+ *
+ * \li 'loop' is a valid loop.
  */
-ISC_LANG_ENDDECLS
+
+bool
+isc_loop_shuttingdown(isc_loop_t *loop);
+/*%<
+ * Returns whether the loop is shutting down.
+ *
+ * Requires:
+ *
+ * \li 'loop' is a valid loop and the loop tid matches the current tid.
+ */
+
+isc_loop_t *
+isc_loop_helper(isc_loop_t *loop);
+/*%<
+ * Returns the helper thread corresponding to the thread ID for 'loop'.
+ *
+ * Requires:
+ *
+ * \li 'loop' is a valid loop.
+ */

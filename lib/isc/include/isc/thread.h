@@ -27,10 +27,7 @@
 #include <pthread_np.h>
 #endif /* if defined(HAVE_PTHREAD_NP_H) */
 
-#include <isc/lang.h>
 #include <isc/result.h>
-
-ISC_LANG_BEGINDECLS
 
 typedef pthread_t isc_thread_t;
 typedef void *(*isc_threadfunc_t)(void *);
@@ -54,6 +51,9 @@ isc_thread_yield(void);
 void
 isc_thread_setname(isc_thread_t thread, const char *name);
 
-#define isc_thread_self (uintptr_t) pthread_self
+#define isc_thread_self (uintptr_t)pthread_self
 
-ISC_LANG_ENDDECLS
+size_t
+isc_thread_getstacksize(void);
+void
+isc_thread_setstacksize(size_t stacksize);

@@ -20,8 +20,8 @@
 #include <isc/attributes.h>
 #include <isc/commandline.h>
 #include <isc/dir.h>
-#include <isc/file.h>
 #include <isc/hash.h>
+#include <isc/lib.h>
 #include <isc/log.h>
 #include <isc/mem.h>
 #include <isc/result.h>
@@ -31,7 +31,7 @@
 
 #include <dns/db.h>
 #include <dns/fixedname.h>
-#include <dns/log.h>
+#include <dns/lib.h>
 #include <dns/master.h>
 #include <dns/masterdump.h>
 #include <dns/name.h>
@@ -43,12 +43,10 @@
 #include "check-tool.h"
 
 static int quiet = 0;
-static isc_mem_t *mctx = NULL;
 dns_zone_t *zone = NULL;
 dns_zonetype_t zonetype = dns_zone_primary;
 static int dumpzone = 0;
 static const char *output_filename;
-static const char *prog_name = NULL;
 static const dns_master_style_t *outputstyle = NULL;
 static enum { progmode_check, progmode_compile } progmode;
 
@@ -62,7 +60,7 @@ static enum { progmode_check, progmode_compile } progmode;
 		}                                                             \
 	} while (0)
 
-noreturn static void
+ISC_NORETURN static void
 usage(void);
 
 static void
@@ -77,9 +75,9 @@ usage(void) {
 		"[-M (ignore|warn|fail)] [-S (ignore|warn|fail)] "
 		"[-W (ignore|warn)] "
 		"%s zonename [ (filename|-) ]\n",
-		prog_name,
+		isc_commandline_progname,
 		progmode == progmode_check ? "[-o filename]" : "-o filename");
-	exit(1);
+	exit(EXIT_FAILURE);
 }
 
 static void
@@ -95,7 +93,6 @@ main(int argc, char **argv) {
 	int c;
 	char *origin = NULL;
 	const char *filename = NULL;
-	isc_log_t *lctx = NULL;
 	isc_result_t result;
 	char classname_in[] = "IN";
 	char *classname = classname_in;
@@ -112,50 +109,26 @@ main(int argc, char **argv) {
 	FILE *errout = stdout;
 	char *endp;
 
-	/*
-	 * Uncomment the following line if memory debugging is needed:
-	 * isc_mem_debugging |= ISC_MEM_DEBUGRECORD;
-	 */
-
 	outputstyle = &dns_master_style_full;
 
-	prog_name = strrchr(argv[0], '/');
-	if (prog_name == NULL) {
-		prog_name = strrchr(argv[0], '\\');
-	}
-	if (prog_name != NULL) {
-		prog_name++;
-	} else {
-		prog_name = argv[0];
-	}
-	/*
-	 * Libtool doesn't preserve the program name prior to final
-	 * installation.  Remove the libtool prefix ("lt-").
-	 */
-	if (strncmp(prog_name, "lt-", 3) == 0) {
-		prog_name += 3;
-	}
+	isc_commandline_init(argc, argv);
 
-#define PROGCMP(X) \
-	(strcasecmp(prog_name, X) == 0 || strcasecmp(prog_name, X ".exe") == 0)
-
-	if (PROGCMP("named-checkzone")) {
+	if (strcasecmp(isc_commandline_progname, "named-checkzone") == 0) {
 		progmode = progmode_check;
-	} else if (PROGCMP("named-compilezone")) {
+	} else if (strcasecmp(isc_commandline_progname, "named-compilezone") ==
+		   0)
+	{
 		progmode = progmode_compile;
 	} else {
 		UNREACHABLE();
 	}
 
-	/* Compilation specific defaults */
+	/* When compiling, disable checks by default */
 	if (progmode == progmode_compile) {
-		zone_options |= (DNS_ZONEOPT_CHECKNS | DNS_ZONEOPT_FATALNS |
-				 DNS_ZONEOPT_CHECKSPF | DNS_ZONEOPT_CHECKDUPRR |
-				 DNS_ZONEOPT_CHECKNAMES |
-				 DNS_ZONEOPT_CHECKNAMESFAIL |
-				 DNS_ZONEOPT_CHECKWILDCARD);
-	} else {
-		zone_options |= (DNS_ZONEOPT_CHECKDUPRR | DNS_ZONEOPT_CHECKSPF);
+		zone_options = 0;
+		docheckmx = false;
+		docheckns = false;
+		dochecksrv = false;
 	}
 
 #define ARGCMP(X) (strcmp(isc_commandline_argument, X) == 0)
@@ -164,7 +137,7 @@ main(int argc, char **argv) {
 
 	while ((c = isc_commandline_parse(argc, argv,
 					  "c:df:hi:jJ:k:L:l:m:n:qr:s:t:o:vw:C:"
-					  "DF:M:S:T:W:")) != EOF)
+					  "DF:M:R:S:T:W:")) != EOF)
 	{
 		switch (c) {
 		case 'c':
@@ -209,7 +182,7 @@ main(int argc, char **argv) {
 			} else {
 				fprintf(stderr, "invalid argument to -i: %s\n",
 					isc_commandline_argument);
-				exit(1);
+				exit(EXIT_FAILURE);
 			}
 			break;
 
@@ -243,7 +216,7 @@ main(int argc, char **argv) {
 			} else {
 				fprintf(stderr, "invalid argument to -k: %s\n",
 					isc_commandline_argument);
-				exit(1);
+				exit(EXIT_FAILURE);
 			}
 			break;
 
@@ -254,7 +227,7 @@ main(int argc, char **argv) {
 			if (*endp != '\0') {
 				fprintf(stderr, "source serial number "
 						"must be numeric");
-				exit(1);
+				exit(EXIT_FAILURE);
 			}
 			break;
 
@@ -265,7 +238,7 @@ main(int argc, char **argv) {
 			if (*endp != '\0') {
 				fprintf(stderr, "maximum TTL "
 						"must be numeric");
-				exit(1);
+				exit(EXIT_FAILURE);
 			}
 			break;
 
@@ -282,7 +255,7 @@ main(int argc, char **argv) {
 			} else {
 				fprintf(stderr, "invalid argument to -n: %s\n",
 					isc_commandline_argument);
-				exit(1);
+				exit(EXIT_FAILURE);
 			}
 			break;
 
@@ -299,7 +272,7 @@ main(int argc, char **argv) {
 			} else {
 				fprintf(stderr, "invalid argument to -m: %s\n",
 					isc_commandline_argument);
-				exit(1);
+				exit(EXIT_FAILURE);
 			}
 			break;
 
@@ -324,7 +297,19 @@ main(int argc, char **argv) {
 			} else {
 				fprintf(stderr, "invalid argument to -r: %s\n",
 					isc_commandline_argument);
-				exit(1);
+				exit(EXIT_FAILURE);
+			}
+			break;
+
+		case 'R':
+			if (ARGCMP("fail")) {
+				zone_options |= DNS_ZONEOPT_LOGREPORTS;
+			} else if (ARGCMP("ignore")) {
+				zone_options &= ~DNS_ZONEOPT_LOGREPORTS;
+			} else {
+				fprintf(stderr, "invalid argument to -R: %s\n",
+					isc_commandline_argument);
+				exit(EXIT_FAILURE);
 			}
 			break;
 
@@ -337,7 +322,7 @@ main(int argc, char **argv) {
 				fprintf(stderr,
 					"unknown or unsupported style: %s\n",
 					isc_commandline_argument);
-				exit(1);
+				exit(EXIT_FAILURE);
 			}
 			break;
 
@@ -347,13 +332,13 @@ main(int argc, char **argv) {
 				fprintf(stderr, "isc_dir_chroot: %s: %s\n",
 					isc_commandline_argument,
 					isc_result_totext(result));
-				exit(1);
+				exit(EXIT_FAILURE);
 			}
 			break;
 
 		case 'v':
 			printf("%s\n", PACKAGE_VERSION);
-			exit(0);
+			exit(EXIT_SUCCESS);
 
 		case 'w':
 			workdir = isc_commandline_argument;
@@ -367,7 +352,7 @@ main(int argc, char **argv) {
 			} else {
 				fprintf(stderr, "invalid argument to -C: %s\n",
 					isc_commandline_argument);
-				exit(1);
+				exit(EXIT_FAILURE);
 			}
 			break;
 
@@ -388,7 +373,7 @@ main(int argc, char **argv) {
 			} else {
 				fprintf(stderr, "invalid argument to -M: %s\n",
 					isc_commandline_argument);
-				exit(1);
+				exit(EXIT_FAILURE);
 			}
 			break;
 
@@ -405,7 +390,7 @@ main(int argc, char **argv) {
 			} else {
 				fprintf(stderr, "invalid argument to -S: %s\n",
 					isc_commandline_argument);
-				exit(1);
+				exit(EXIT_FAILURE);
 			}
 			break;
 
@@ -417,7 +402,7 @@ main(int argc, char **argv) {
 			} else {
 				fprintf(stderr, "invalid argument to -T: %s\n",
 					isc_commandline_argument);
-				exit(1);
+				exit(EXIT_FAILURE);
 			}
 			break;
 
@@ -432,16 +417,18 @@ main(int argc, char **argv) {
 		case '?':
 			if (isc_commandline_option != '?') {
 				fprintf(stderr, "%s: invalid argument -%c\n",
-					prog_name, isc_commandline_option);
+					isc_commandline_progname,
+					isc_commandline_option);
 			}
 			FALLTHROUGH;
 		case 'h':
 			usage();
 
 		default:
-			fprintf(stderr, "%s: unhandled option -%c\n", prog_name,
+			fprintf(stderr, "%s: unhandled option -%c\n",
+				isc_commandline_progname,
 				isc_commandline_option);
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 	}
 
@@ -450,7 +437,7 @@ main(int argc, char **argv) {
 		if (result != ISC_R_SUCCESS) {
 			fprintf(stderr, "isc_dir_chdir: %s: %s\n", workdir,
 				isc_result_totext(result));
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 	}
 
@@ -466,7 +453,7 @@ main(int argc, char **argv) {
 		} else {
 			fprintf(stderr, "unknown file format: %s\n",
 				inputformatstr);
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 	}
 
@@ -484,12 +471,12 @@ main(int argc, char **argv) {
 			    rawversion > 1U)
 			{
 				fprintf(stderr, "unknown raw format version\n");
-				exit(1);
+				exit(EXIT_FAILURE);
 			}
 		} else {
 			fprintf(stderr, "unknown file format: %s\n",
 				outputformatstr);
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 	}
 
@@ -526,10 +513,8 @@ main(int argc, char **argv) {
 		usage();
 	}
 
-	isc_mem_create(&mctx);
 	if (!quiet) {
-		RUNTIME_CHECK(setup_logging(mctx, errout, &lctx) ==
-			      ISC_R_SUCCESS);
+		RUNTIME_CHECK(setup_logging(errout) == ISC_R_SUCCESS);
 	}
 
 	origin = argv[isc_commandline_index++];
@@ -543,7 +528,7 @@ main(int argc, char **argv) {
 
 	isc_commandline_index++;
 
-	result = load_zone(mctx, origin, filename, inputformat, classname,
+	result = load_zone(isc_g_mctx, origin, filename, inputformat, classname,
 			   maxttl, &zone);
 
 	if (snset) {
@@ -569,10 +554,6 @@ main(int argc, char **argv) {
 		fprintf(errout, "OK\n");
 	}
 	destroy();
-	if (lctx != NULL) {
-		isc_log_destroy(&lctx);
-	}
-	isc_mem_destroy(&mctx);
 
-	return ((result == ISC_R_SUCCESS) ? 0 : 1);
+	return (result == ISC_R_SUCCESS) ? 0 : 1;
 }

@@ -13,6 +13,7 @@
 
 /* ! \file */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -24,6 +25,7 @@
 #include <cmocka.h>
 
 #include <isc/heap.h>
+#include <isc/lib.h>
 #include <isc/mem.h>
 #include <isc/util.h>
 
@@ -39,7 +41,7 @@ compare(void *p1, void *p2) {
 	struct e *e1 = p1;
 	struct e *e2 = p2;
 
-	return (e1->value < e2->value);
+	return e1->value < e2->value;
 }
 
 static void
@@ -56,7 +58,7 @@ ISC_RUN_TEST_IMPL(isc_heap_delete) {
 
 	UNUSED(state);
 
-	isc_heap_create(mctx, compare, idx, 0, &heap);
+	isc_heap_create(isc_g_mctx, compare, idx, 0, &heap);
 	assert_non_null(heap);
 
 	isc_heap_insert(heap, &e1);

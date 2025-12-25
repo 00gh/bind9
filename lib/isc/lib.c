@@ -13,53 +13,68 @@
 
 /*! \file */
 
+#include <isc/crypto.h>
+#include <isc/hash.h>
 #include <isc/iterated_hash.h>
 #include <isc/md.h>
 #include <isc/mem.h>
 #include <isc/os.h>
+#include <isc/refcount.h>
 #include <isc/tls.h>
+#include <isc/urcu.h>
 #include <isc/util.h>
 #include <isc/uv.h>
 #include <isc/xml.h>
 
-#include "config.h"
 #include "mem_p.h"
 #include "mutex_p.h"
 #include "os_p.h"
-
-#ifndef ISC_CONSTRUCTOR
-#error Either __attribute__((constructor|destructor))__ or DllMain support needed to compile BIND 9.
-#endif
+#include "thread_p.h"
 
 /***
  *** Functions
  ***/
 
-void
-isc__initialize(void) ISC_CONSTRUCTOR;
-void
-isc__shutdown(void) ISC_DESTRUCTOR;
+static isc_refcount_t isc__lib_references = 0;
 
 void
-isc__initialize(void) {
+isc__lib_initialize(void);
+void
+isc__lib_shutdown(void);
+
+void
+isc__lib_initialize(void) {
+	if (isc_refcount_increment0(&isc__lib_references) > 0) {
+		return;
+	}
+
+	rcu_register_thread();
 	isc__os_initialize();
 	isc__mutex_initialize();
 	isc__mem_initialize();
-	isc__tls_initialize();
+	isc__log_initialize();
+	isc__crypto_initialize();
 	isc__uv_initialize();
 	isc__xml_initialize();
-	isc__md_initialize();
+	isc__hash_initialize();
 	isc__iterated_hash_initialize();
 	(void)isc_os_ncpus();
 }
 
 void
-isc__shutdown(void) {
+isc__lib_shutdown(void) {
+	if (isc_refcount_decrement(&isc__lib_references) > 1) {
+		return;
+	}
+
+	rcu_barrier();
+	rcu_unregister_thread();
+
 	isc__iterated_hash_shutdown();
-	isc__md_shutdown();
 	isc__xml_shutdown();
 	isc__uv_shutdown();
-	isc__tls_shutdown();
+	isc__crypto_shutdown();
+	isc__log_shutdown();
 	isc__mem_shutdown();
 	isc__mutex_shutdown();
 	isc__os_shutdown();

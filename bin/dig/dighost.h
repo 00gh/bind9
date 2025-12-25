@@ -21,7 +21,6 @@
 #include <isc/attributes.h>
 #include <isc/buffer.h>
 #include <isc/formatcheck.h>
-#include <isc/lang.h>
 #include <isc/list.h>
 #include <isc/loop.h>
 #include <isc/magic.h>
@@ -31,6 +30,7 @@
 #include <isc/sockaddr.h>
 #include <isc/time.h>
 
+#include <dns/fixedname.h>
 #include <dns/rdatalist.h>
 
 #include <dst/dst.h>
@@ -85,8 +85,6 @@
  * in a tight loop of constant lookups.  It's value is arbitrary.
  */
 
-ISC_LANG_BEGINDECLS
-
 typedef struct dig_lookup dig_lookup_t;
 typedef struct dig_query dig_query_t;
 typedef struct dig_server dig_server_t;
@@ -105,11 +103,10 @@ typedef struct dig_searchlist dig_searchlist_t;
 struct dig_lookup {
 	unsigned int magic;
 	isc_refcount_t references;
-	bool aaonly, adflag, badcookie, besteffort, cdflag, cleared, comments,
-		dns64prefix, dnssec, doing_xfr, done_as_is, ednsneg, expandaaaa,
-		expire, fuzzing, header_only, identify, /*%< Append an "on
-							   server <foo>" message
-							 */
+	bool aaonly, adflag, badcookie, besteffort, cdflag, cleared, coflag,
+		comments, dns64prefix, dnssec, doing_xfr, done_as_is, ednsneg,
+		expandaaaa, svcparamkeycompat, expire, fuzzing, header_only,
+		identify, /*%< Append an "on server <foo>" message */
 		identify_previous_line, /*% Prepend a "Nameserver <foo>:"
 					   message, with newline and tab */
 		idnin, idnout, ignore, multiline, need_search, new_search,
@@ -121,11 +118,11 @@ struct dig_lookup {
 		section_answer, section_authority, section_question,
 		seenbadcookie, sendcookie, servfail_stops,
 		setqid, /*% use a speciied query ID */
-		showbadcookie, stats, tcflag, tcp_keepalive, tcp_mode,
-		tcp_mode_set, tls_mode, /*% connect using TLS */
-		trace,			/*% dig +trace */
+		showbadcookie, showbadvers, stats, tcflag, tcp_keepalive,
+		tcp_mode, tcp_mode_set, tls_mode, /*% connect using TLS */
+		trace,				  /*% dig +trace */
 		trace_root, /*% initial query for either +trace or +nssearch */
-		ttlunits, use_usec, waiting_connect, zflag;
+		ttlunits, use_usec, waiting_connect, zflag, zoneversion;
 	char textname[MXNAME]; /*% Name we're going to be looking up */
 	char cmdline[MXNAME];
 	dns_rdatatype_t rdtype;
@@ -135,8 +132,6 @@ struct dig_lookup {
 	bool rdclassset;
 	char name_space[BUFSIZE];
 	char oname_space[BUFSIZE];
-	isc_buffer_t namebuf;
-	isc_buffer_t onamebuf;
 	isc_buffer_t renderbuf;
 	char *sendspace;
 	dns_name_t *name;
@@ -154,6 +149,7 @@ struct dig_lookup {
 	int nsfound;
 	int16_t udpsize;
 	int16_t edns;
+	int16_t original_edns;
 	int16_t padding;
 	uint32_t ixfr_serial;
 	isc_buffer_t rdatabuf;
@@ -186,6 +182,13 @@ struct dig_lookup {
 		bool tls_key_file_set;
 		char *tls_key_file;
 		isc_tlsctx_cache_t *tls_ctx_cache;
+	};
+	struct {
+		bool proxy_mode;
+		bool proxy_plain;
+		bool proxy_local;
+		isc_sockaddr_t proxy_src_addr;
+		isc_sockaddr_t proxy_dst_addr;
 	};
 	isc_stdtime_t fuzztime;
 };
@@ -250,7 +253,6 @@ extern bool check_ra, have_ipv4, have_ipv6, specified_source, usesearch,
 extern in_port_t port;
 extern bool port_set;
 extern unsigned int timeout;
-extern isc_mem_t *mctx;
 extern isc_refcount_t sendcount;
 extern int ndots;
 extern int lookup_counter;
@@ -259,17 +261,15 @@ extern isc_sockaddr_t localaddr;
 extern char keynametext[MXNAME];
 extern char keyfile[MXNAME];
 extern char keysecret[MXNAME];
-extern const dns_name_t *hmacname;
+extern dst_algorithm_t hmac_alg;
 extern unsigned int digestbits;
 extern dns_tsigkey_t *tsigkey;
 extern bool validated;
-extern isc_loopmgr_t *loopmgr;
 extern isc_loop_t *mainloop;
 extern bool free_now;
 extern bool debugging, debugtiming, memdebugging;
 extern bool keep_open;
 
-extern char *progname;
 extern int tries;
 extern int fatalexit;
 extern bool verbose;
@@ -286,13 +286,13 @@ getaddresses(dig_lookup_t *lookup, const char *host, isc_result_t *resultp);
 isc_result_t
 get_reverse(char *reverse, size_t len, char *value, bool strict);
 
-noreturn void
+ISC_NORETURN void
 fatal(const char *format, ...) ISC_FORMAT_PRINTF(1, 2);
 
 void
 warn(const char *format, ...) ISC_FORMAT_PRINTF(1, 2);
 
-noreturn void
+ISC_NORETURN void
 digexit(void);
 
 void
@@ -322,11 +322,8 @@ onrun_callback(void *arg);
 void
 run_loop(void *arg);
 
-int
-dhmain(int argc, char **argv);
-
 void
-setup_libs(void);
+setup_libs(int argc, char **argv);
 
 void
 setup_system(bool ipv4only, bool ipv6only);
@@ -341,7 +338,7 @@ isc_result_t
 parse_netprefix(isc_sockaddr_t **sap, const char *value);
 
 void
-parse_hmac(const char *hmacstr);
+parse_hmac(const char *algname);
 
 dig_lookup_t *
 requeue_lookup(dig_lookup_t *lookold, bool servers);
@@ -459,5 +456,3 @@ dig_shutdown(void);
 
 bool
 dig_lookup_is_tls(const dig_lookup_t *lookup);
-
-ISC_LANG_ENDDECLS

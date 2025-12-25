@@ -19,7 +19,9 @@ options {
 	pid-file "named.pid";
 	listen-on { 10.53.0.2; };
 	listen-on-v6 { none; };
+	allow-transfer { any; };
 	recursion no;
+	dnssec-validation no;
 	notify yes;
 	ixfr-from-differences yes;
 	check-integrity no;
@@ -45,7 +47,7 @@ acl tzkey {
 
 zone "." {
 	type hint;
-	file "../../common/root.hint";
+	file "../../_common/root.hint";
 };
 
 zone "example" {
@@ -59,7 +61,7 @@ zone "tsigzone" {
 	allow-transfer { tzkey; };
 };
 
-primaries "ns1" port @PORT@ source 10.53.0.2 {
+remote-servers "ns1" port @PORT@ source 10.53.0.2 {
 	10.53.0.1;
 };
 

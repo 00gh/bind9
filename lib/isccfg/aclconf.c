@@ -15,6 +15,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
+#include <isc/log.h>
 #include <isc/mem.h>
 #include <isc/string.h>
 #include <isc/util.h>
@@ -22,7 +23,6 @@
 #include <dns/acl.h>
 #include <dns/fixedname.h>
 #include <dns/iptable.h>
-#include <dns/log.h>
 
 #include <isccfg/aclconf.h>
 #include <isccfg/namedconf.h>
@@ -55,7 +55,7 @@ cfg_aclconfctx_create(isc_mem_t *mctx, cfg_aclconfctx_t **ret) {
 #endif /* if defined(HAVE_GEOIP2) */
 
 	*ret = actx;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 void
@@ -70,16 +70,13 @@ cfg_aclconfctx_attach(cfg_aclconfctx_t *src, cfg_aclconfctx_t **dest) {
 void
 cfg_aclconfctx_detach(cfg_aclconfctx_t **actxp) {
 	REQUIRE(actxp != NULL && *actxp != NULL);
+
 	cfg_aclconfctx_t *actx = *actxp;
 	*actxp = NULL;
 
 	if (isc_refcount_decrement(&actx->references) == 1) {
-		dns_acl_t *dacl, *next;
 		isc_refcount_destroy(&actx->references);
-		for (dacl = ISC_LIST_HEAD(actx->named_acl_cache); dacl != NULL;
-		     dacl = next)
-		{
-			next = ISC_LIST_NEXT(dacl, nextincache);
+		ISC_LIST_FOREACH (actx->named_acl_cache, dacl, nextincache) {
 			ISC_LIST_UNLINK(actx->named_acl_cache, dacl,
 					nextincache);
 			dns_acl_detach(&dacl);
@@ -95,14 +92,12 @@ static isc_result_t
 get_acl_def(const cfg_obj_t *cctx, const char *name, const cfg_obj_t **ret) {
 	isc_result_t result;
 	const cfg_obj_t *acls = NULL;
-	const cfg_listelt_t *elt;
 
 	result = cfg_map_get(cctx, "acl", &acls);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
-	for (elt = cfg_list_first(acls); elt != NULL; elt = cfg_list_next(elt))
-	{
+	CFG_LIST_FOREACH (acls, elt) {
 		const cfg_obj_t *acl = cfg_listelt_value(elt);
 		const char *aclname =
 			cfg_obj_asstring(cfg_tuple_get(acl, "name"));
@@ -110,42 +105,39 @@ get_acl_def(const cfg_obj_t *cctx, const char *name, const cfg_obj_t **ret) {
 			if (ret != NULL) {
 				*ret = cfg_tuple_get(acl, "value");
 			}
-			return (ISC_R_SUCCESS);
+			return ISC_R_SUCCESS;
 		}
 	}
-	return (ISC_R_NOTFOUND);
+	return ISC_R_NOTFOUND;
 }
 
 static isc_result_t
 convert_named_acl(const cfg_obj_t *nameobj, const cfg_obj_t *cctx,
-		  isc_log_t *lctx, cfg_aclconfctx_t *ctx, isc_mem_t *mctx,
+		  cfg_aclconfctx_t *ctx, isc_mem_t *mctx,
 		  unsigned int nest_level, dns_acl_t **target) {
 	isc_result_t result;
 	const cfg_obj_t *cacl = NULL;
-	dns_acl_t *dacl;
-	dns_acl_t loop;
+	dns_acl_t loop, *acl = NULL;
 	const char *aclname = cfg_obj_asstring(nameobj);
 
 	/* Look for an already-converted version. */
-	for (dacl = ISC_LIST_HEAD(ctx->named_acl_cache); dacl != NULL;
-	     dacl = ISC_LIST_NEXT(dacl, nextincache))
-	{
+	ISC_LIST_FOREACH (ctx->named_acl_cache, dacl, nextincache) {
 		if (strcasecmp(aclname, dacl->name) == 0) {
 			if (ISC_MAGIC_VALID(dacl, LOOP_MAGIC)) {
-				cfg_obj_log(nameobj, lctx, ISC_LOG_ERROR,
+				cfg_obj_log(nameobj, ISC_LOG_ERROR,
 					    "acl loop detected: %s", aclname);
-				return (ISC_R_FAILURE);
+				return ISC_R_FAILURE;
 			}
 			dns_acl_attach(dacl, target);
-			return (ISC_R_SUCCESS);
+			return ISC_R_SUCCESS;
 		}
 	}
 	/* Not yet converted.  Convert now. */
 	result = get_acl_def(cctx, aclname, &cacl);
 	if (result != ISC_R_SUCCESS) {
-		cfg_obj_log(nameobj, lctx, ISC_LOG_WARNING,
-			    "undefined ACL '%s'", aclname);
-		return (result);
+		cfg_obj_log(nameobj, ISC_LOG_WARNING, "undefined ACL '%s'",
+			    aclname);
+		return result;
 	}
 	/*
 	 * Add a loop detection element.
@@ -155,23 +147,21 @@ convert_named_acl(const cfg_obj_t *nameobj, const cfg_obj_t *cctx,
 	loop.name = UNCONST(aclname);
 	loop.magic = LOOP_MAGIC;
 	ISC_LIST_APPEND(ctx->named_acl_cache, &loop, nextincache);
-	result = cfg_acl_fromconfig(cacl, cctx, lctx, ctx, mctx, nest_level,
-				    &dacl);
+	result = cfg_acl_fromconfig(cacl, cctx, ctx, mctx, nest_level, &acl);
 	ISC_LIST_UNLINK(ctx->named_acl_cache, &loop, nextincache);
 	loop.magic = 0;
 	loop.name = NULL;
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
-	dacl->name = isc_mem_strdup(dacl->mctx, aclname);
-	ISC_LIST_APPEND(ctx->named_acl_cache, dacl, nextincache);
-	dns_acl_attach(dacl, target);
-	return (ISC_R_SUCCESS);
+	acl->name = isc_mem_strdup(acl->mctx, aclname);
+	ISC_LIST_APPEND(ctx->named_acl_cache, acl, nextincache);
+	dns_acl_attach(acl, target);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
-convert_keyname(const cfg_obj_t *keyobj, isc_log_t *lctx, isc_mem_t *mctx,
-		dns_name_t *dnsname) {
+convert_keyname(const cfg_obj_t *keyobj, isc_mem_t *mctx, dns_name_t *dnsname) {
 	isc_result_t result;
 	isc_buffer_t buf;
 	dns_fixedname_t fixname;
@@ -183,15 +173,15 @@ convert_keyname(const cfg_obj_t *keyobj, isc_log_t *lctx, isc_mem_t *mctx,
 	isc_buffer_add(&buf, keylen);
 	dns_fixedname_init(&fixname);
 	result = dns_name_fromtext(dns_fixedname_name(&fixname), &buf,
-				   dns_rootname, 0, NULL);
+				   dns_rootname, 0);
 	if (result != ISC_R_SUCCESS) {
-		cfg_obj_log(keyobj, lctx, ISC_LOG_WARNING,
+		cfg_obj_log(keyobj, ISC_LOG_WARNING,
 			    "key name '%s' is not a valid domain name",
 			    txtname);
-		return (result);
+		return result;
 	}
 	dns_name_dup(dns_fixedname_name(&fixname), mctx, dnsname);
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 /*
@@ -203,20 +193,16 @@ convert_keyname(const cfg_obj_t *keyobj, isc_log_t *lctx, isc_mem_t *mctx,
  */
 static isc_result_t
 count_acl_elements(const cfg_obj_t *caml, const cfg_obj_t *cctx,
-		   isc_log_t *lctx, cfg_aclconfctx_t *ctx, isc_mem_t *mctx,
-		   uint32_t *count, bool *has_negative) {
-	const cfg_listelt_t *elt;
+		   cfg_aclconfctx_t *ctx, isc_mem_t *mctx, uint32_t *count,
+		   bool *has_negative) {
 	isc_result_t result;
 	uint32_t n = 0;
 
 	REQUIRE(count != NULL);
 
-	if (has_negative != NULL) {
-		*has_negative = false;
-	}
+	SET_IF_NOT_NULL(has_negative, false);
 
-	for (elt = cfg_list_first(caml); elt != NULL; elt = cfg_list_next(elt))
-	{
+	CFG_LIST_FOREACH (caml, elt) {
 		const cfg_obj_t *ce = cfg_listelt_value(elt);
 
 		/* might be a negated element, in which case get the value. */
@@ -235,10 +221,10 @@ count_acl_elements(const cfg_obj_t *caml, const cfg_obj_t *cctx,
 		} else if (cfg_obj_islist(ce)) {
 			bool negative;
 			uint32_t sub;
-			result = count_acl_elements(ce, cctx, lctx, ctx, mctx,
-						    &sub, &negative);
+			result = count_acl_elements(ce, cctx, ctx, mctx, &sub,
+						    &negative);
 			if (result != ISC_R_SUCCESS) {
-				return (result);
+				return result;
 			}
 			n += sub;
 			if (negative) {
@@ -263,8 +249,8 @@ count_acl_elements(const cfg_obj_t *caml, const cfg_obj_t *cctx,
 				 * Convert any named acls we reference now if
 				 * they have not already been converted.
 				 */
-				result = convert_named_acl(ce, cctx, lctx, ctx,
-							   mctx, 0, &inneracl);
+				result = convert_named_acl(ce, cctx, ctx, mctx,
+							   0, &inneracl);
 				if (result == ISC_R_SUCCESS) {
 					if (inneracl->has_negatives) {
 						n++;
@@ -273,81 +259,81 @@ count_acl_elements(const cfg_obj_t *caml, const cfg_obj_t *cctx,
 					}
 					dns_acl_detach(&inneracl);
 				} else {
-					return (result);
+					return result;
 				}
 			}
 		}
 	}
 
 	*count = n;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 #if defined(HAVE_GEOIP2)
 static dns_geoip_subtype_t
-get_subtype(const cfg_obj_t *obj, isc_log_t *lctx, dns_geoip_subtype_t subtype,
+get_subtype(const cfg_obj_t *obj, dns_geoip_subtype_t subtype,
 	    const char *dbname) {
 	if (dbname == NULL) {
-		return (subtype);
+		return subtype;
 	}
 
 	switch (subtype) {
 	case dns_geoip_countrycode:
 		if (strcasecmp(dbname, "city") == 0) {
-			return (dns_geoip_city_countrycode);
+			return dns_geoip_city_countrycode;
 		} else if (strcasecmp(dbname, "country") == 0) {
-			return (dns_geoip_country_code);
+			return dns_geoip_country_code;
 		}
-		cfg_obj_log(obj, lctx, ISC_LOG_ERROR,
+		cfg_obj_log(obj, ISC_LOG_ERROR,
 			    "invalid database specified for "
 			    "country search: ignored");
-		return (subtype);
+		return subtype;
 	case dns_geoip_countryname:
 		if (strcasecmp(dbname, "city") == 0) {
-			return (dns_geoip_city_countryname);
+			return dns_geoip_city_countryname;
 		} else if (strcasecmp(dbname, "country") == 0) {
-			return (dns_geoip_country_name);
+			return dns_geoip_country_name;
 		}
-		cfg_obj_log(obj, lctx, ISC_LOG_ERROR,
+		cfg_obj_log(obj, ISC_LOG_ERROR,
 			    "invalid database specified for "
 			    "country search: ignored");
-		return (subtype);
+		return subtype;
 	case dns_geoip_continentcode:
 		if (strcasecmp(dbname, "city") == 0) {
-			return (dns_geoip_city_continentcode);
+			return dns_geoip_city_continentcode;
 		} else if (strcasecmp(dbname, "country") == 0) {
-			return (dns_geoip_country_continentcode);
+			return dns_geoip_country_continentcode;
 		}
-		cfg_obj_log(obj, lctx, ISC_LOG_ERROR,
+		cfg_obj_log(obj, ISC_LOG_ERROR,
 			    "invalid database specified for "
 			    "continent search: ignored");
-		return (subtype);
+		return subtype;
 	case dns_geoip_continent:
 		if (strcasecmp(dbname, "city") == 0) {
-			return (dns_geoip_city_continent);
+			return dns_geoip_city_continent;
 		} else if (strcasecmp(dbname, "country") == 0) {
-			return (dns_geoip_country_continent);
+			return dns_geoip_country_continent;
 		}
-		cfg_obj_log(obj, lctx, ISC_LOG_ERROR,
+		cfg_obj_log(obj, ISC_LOG_ERROR,
 			    "invalid database specified for "
 			    "continent search: ignored");
-		return (subtype);
+		return subtype;
 	case dns_geoip_region:
 		if (strcasecmp(dbname, "city") == 0) {
-			return (dns_geoip_city_region);
+			return dns_geoip_city_region;
 		}
-		cfg_obj_log(obj, lctx, ISC_LOG_ERROR,
+		cfg_obj_log(obj, ISC_LOG_ERROR,
 			    "invalid database specified for "
 			    "region/subdivision search: ignored");
-		return (subtype);
+		return subtype;
 	case dns_geoip_regionname:
 		if (strcasecmp(dbname, "city") == 0) {
-			return (dns_geoip_city_regionname);
+			return dns_geoip_city_regionname;
 		}
-		cfg_obj_log(obj, lctx, ISC_LOG_ERROR,
+		cfg_obj_log(obj, ISC_LOG_ERROR,
 			    "invalid database specified for "
 			    "region/subdivision search: ignored");
-		return (subtype);
+		return subtype;
 
 	/*
 	 * Log a warning if the wrong database was specified
@@ -359,46 +345,46 @@ get_subtype(const cfg_obj_t *obj, isc_log_t *lctx, dns_geoip_subtype_t subtype,
 	case dns_geoip_city_areacode:
 	case dns_geoip_city_timezonecode:
 		if (strcasecmp(dbname, "city") != 0) {
-			cfg_obj_log(obj, lctx, ISC_LOG_WARNING,
+			cfg_obj_log(obj, ISC_LOG_WARNING,
 				    "invalid database specified for "
 				    "a 'city'-only search type: ignoring");
 		}
-		return (subtype);
+		return subtype;
 	case dns_geoip_isp_name:
 		if (strcasecmp(dbname, "isp") != 0) {
-			cfg_obj_log(obj, lctx, ISC_LOG_WARNING,
+			cfg_obj_log(obj, ISC_LOG_WARNING,
 				    "invalid database specified for "
 				    "an 'isp' search: ignoring");
 		}
-		return (subtype);
+		return subtype;
 	case dns_geoip_org_name:
 		if (strcasecmp(dbname, "org") != 0) {
-			cfg_obj_log(obj, lctx, ISC_LOG_WARNING,
+			cfg_obj_log(obj, ISC_LOG_WARNING,
 				    "invalid database specified for "
 				    "an 'org' search: ignoring");
 		}
-		return (subtype);
+		return subtype;
 	case dns_geoip_as_asnum:
 		if (strcasecmp(dbname, "asnum") != 0) {
-			cfg_obj_log(obj, lctx, ISC_LOG_WARNING,
+			cfg_obj_log(obj, ISC_LOG_WARNING,
 				    "invalid database specified for "
 				    "an 'asnum' search: ignoring");
 		}
-		return (subtype);
+		return subtype;
 	case dns_geoip_domain_name:
 		if (strcasecmp(dbname, "domain") != 0) {
-			cfg_obj_log(obj, lctx, ISC_LOG_WARNING,
+			cfg_obj_log(obj, ISC_LOG_WARNING,
 				    "invalid database specified for "
 				    "a 'domain' search: ignoring");
 		}
-		return (subtype);
+		return subtype;
 	case dns_geoip_netspeed_id:
 		if (strcasecmp(dbname, "netspeed") != 0) {
-			cfg_obj_log(obj, lctx, ISC_LOG_WARNING,
+			cfg_obj_log(obj, ISC_LOG_WARNING,
 				    "invalid database specified for "
 				    "a 'netspeed' search: ignoring");
 		}
-		return (subtype);
+		return subtype;
 	default:
 		UNREACHABLE();
 	}
@@ -407,7 +393,7 @@ get_subtype(const cfg_obj_t *obj, isc_log_t *lctx, dns_geoip_subtype_t subtype,
 static bool
 geoip_can_answer(dns_aclelement_t *elt, cfg_aclconfctx_t *ctx) {
 	if (ctx->geoip == NULL) {
-		return (true);
+		return true;
 	}
 
 	switch (elt->geoip_elem.subtype) {
@@ -416,7 +402,7 @@ geoip_can_answer(dns_aclelement_t *elt, cfg_aclconfctx_t *ctx) {
 	case dns_geoip_continentcode:
 	case dns_geoip_continent:
 		if (ctx->geoip->country != NULL || ctx->geoip->city != NULL) {
-			return (true);
+			return true;
 		}
 		break;
 	case dns_geoip_country_code:
@@ -424,7 +410,7 @@ geoip_can_answer(dns_aclelement_t *elt, cfg_aclconfctx_t *ctx) {
 	case dns_geoip_country_continentcode:
 	case dns_geoip_country_continent:
 		if (ctx->geoip->country != NULL) {
-			return (true);
+			return true;
 		}
 		/* city db can answer these too, so: */
 		FALLTHROUGH;
@@ -442,35 +428,35 @@ geoip_can_answer(dns_aclelement_t *elt, cfg_aclconfctx_t *ctx) {
 	case dns_geoip_city_continent:
 	case dns_geoip_city_timezonecode:
 		if (ctx->geoip->city != NULL) {
-			return (true);
+			return true;
 		}
 		break;
 	case dns_geoip_isp_name:
 		if (ctx->geoip->isp != NULL) {
-			return (true);
+			return true;
 		}
 		break;
 	case dns_geoip_as_asnum:
 	case dns_geoip_org_name:
 		if (ctx->geoip->as != NULL) {
-			return (true);
+			return true;
 		}
 		break;
 	case dns_geoip_domain_name:
 		if (ctx->geoip->domain != NULL) {
-			return (true);
+			return true;
 		}
 		break;
 	default:
 		break;
 	}
 
-	return (false);
+	return false;
 }
 
 static isc_result_t
-parse_geoip_element(const cfg_obj_t *obj, isc_log_t *lctx,
-		    cfg_aclconfctx_t *ctx, dns_aclelement_t *dep) {
+parse_geoip_element(const cfg_obj_t *obj, cfg_aclconfctx_t *ctx,
+		    dns_aclelement_t *dep) {
 	const cfg_obj_t *ge;
 	const char *dbname = NULL;
 	const char *stype = NULL, *search = NULL;
@@ -494,10 +480,10 @@ parse_geoip_element(const cfg_obj_t *obj, isc_log_t *lctx,
 			}
 		}
 		if (geoip_dbnames[i] == NULL) {
-			cfg_obj_log(obj, lctx, ISC_LOG_ERROR,
+			cfg_obj_log(obj, ISC_LOG_ERROR,
 				    "database '%s' is not defined for GeoIP2",
 				    dbname);
-			return (ISC_R_UNEXPECTED);
+			return ISC_R_UNEXPECTED;
 		}
 	}
 
@@ -506,9 +492,9 @@ parse_geoip_element(const cfg_obj_t *obj, isc_log_t *lctx,
 	len = strlen(search);
 
 	if (len == 0) {
-		cfg_obj_log(obj, lctx, ISC_LOG_ERROR,
+		cfg_obj_log(obj, ISC_LOG_ERROR,
 			    "zero-length geoip search field");
-		return (ISC_R_FAILURE);
+		return ISC_R_FAILURE;
 	}
 
 	if (strcasecmp(stype, "country") == 0 && len == 2) {
@@ -518,10 +504,10 @@ parse_geoip_element(const cfg_obj_t *obj, isc_log_t *lctx,
 			sizeof(de.geoip_elem.as_string));
 	} else if (strcasecmp(stype, "country") == 0 && len == 3) {
 		/* Three-letter country code */
-		cfg_obj_log(obj, lctx, ISC_LOG_ERROR,
+		cfg_obj_log(obj, ISC_LOG_ERROR,
 			    "three-letter country codes are unavailable "
 			    "in GeoIP2 databases");
-		return (ISC_R_FAILURE);
+		return ISC_R_FAILURE;
 	} else if (strcasecmp(stype, "country") == 0) {
 		/* Country name */
 		subtype = dns_geoip_countryname;
@@ -564,9 +550,9 @@ parse_geoip_element(const cfg_obj_t *obj, isc_log_t *lctx,
 			strlcpy(de.geoip_elem.as_string, search,
 				sizeof(de.geoip_elem.as_string));
 		} else {
-			cfg_obj_log(obj, lctx, ISC_LOG_ERROR,
+			cfg_obj_log(obj, ISC_LOG_ERROR,
 				    "geoiop postal code (%s) too long", search);
-			return (ISC_R_FAILURE);
+			return ISC_R_FAILURE;
 		}
 	} else if (strcasecmp(stype, "metro") == 0 ||
 		   strcasecmp(stype, "metrocode") == 0)
@@ -596,47 +582,37 @@ parse_geoip_element(const cfg_obj_t *obj, isc_log_t *lctx,
 		strlcpy(de.geoip_elem.as_string, search,
 			sizeof(de.geoip_elem.as_string));
 	} else {
-		cfg_obj_log(obj, lctx, ISC_LOG_ERROR,
+		cfg_obj_log(obj, ISC_LOG_ERROR,
 			    "type '%s' is unavailable "
 			    "in GeoIP2 databases",
 			    stype);
-		return (ISC_R_FAILURE);
+		return ISC_R_FAILURE;
 	}
 
-	de.geoip_elem.subtype = get_subtype(obj, lctx, subtype, dbname);
+	de.geoip_elem.subtype = get_subtype(obj, subtype, dbname);
 
 	if (!geoip_can_answer(&de, ctx)) {
-		cfg_obj_log(obj, lctx, ISC_LOG_ERROR,
+		cfg_obj_log(obj, ISC_LOG_ERROR,
 			    "no GeoIP2 database installed which can answer "
 			    "queries of type '%s'",
 			    stype);
-		return (ISC_R_FAILURE);
+		return ISC_R_FAILURE;
 	}
 
 	*dep = de;
 
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 #endif /* HAVE_GEOIP2 */
 
 isc_result_t
-cfg_acl_fromconfig(const cfg_obj_t *caml, const cfg_obj_t *cctx,
-		   isc_log_t *lctx, cfg_aclconfctx_t *ctx, isc_mem_t *mctx,
+cfg_acl_fromconfig(const cfg_obj_t *acl_data, const cfg_obj_t *cctx,
+		   cfg_aclconfctx_t *ctx, isc_mem_t *mctx,
 		   unsigned int nest_level, dns_acl_t **target) {
-	return (cfg_acl_fromconfig2(caml, cctx, lctx, ctx, mctx, nest_level, 0,
-				    target));
-}
-
-isc_result_t
-cfg_acl_fromconfig2(const cfg_obj_t *acl_data, const cfg_obj_t *cctx,
-		    isc_log_t *lctx, cfg_aclconfctx_t *ctx, isc_mem_t *mctx,
-		    unsigned int nest_level, uint16_t family,
-		    dns_acl_t **target) {
 	isc_result_t result;
 	dns_acl_t *dacl = NULL, *inneracl = NULL;
-	dns_aclelement_t *de;
-	const cfg_listelt_t *elt;
-	dns_iptable_t *iptab;
+	dns_aclelement_t *de = NULL;
+	dns_iptable_t *iptab = NULL;
 	int new_nest_level = 0;
 	bool setpos;
 	const cfg_obj_t *caml = NULL;
@@ -685,19 +661,16 @@ cfg_acl_fromconfig2(const cfg_obj_t *acl_data, const cfg_obj_t *cctx,
 		uint32_t nelem;
 
 		if (nest_level == 0) {
-			result = count_acl_elements(caml, cctx, lctx, ctx, mctx,
+			result = count_acl_elements(caml, cctx, ctx, mctx,
 						    &nelem, NULL);
 			if (result != ISC_R_SUCCESS) {
-				return (result);
+				return result;
 			}
 		} else {
 			nelem = cfg_list_length(caml, false);
 		}
 
-		result = dns_acl_create(mctx, nelem, &dacl);
-		if (result != ISC_R_SUCCESS) {
-			return (result);
-		}
+		dns_acl_create(mctx, nelem, &dacl);
 	}
 
 	if (is_tuple) {
@@ -713,7 +686,8 @@ cfg_acl_fromconfig2(const cfg_obj_t *acl_data, const cfg_obj_t *cctx,
 			if (strcasecmp(cfg_obj_asstring(obj_transport),
 				       "udp") == 0)
 			{
-				transports = isc_nm_udpsocket;
+				transports = isc_nm_udpsocket |
+					     isc_nm_proxyudpsocket;
 				encrypted = false;
 			} else if (strcasecmp(cfg_obj_asstring(obj_transport),
 					      "tcp") == 0)
@@ -725,7 +699,8 @@ cfg_acl_fromconfig2(const cfg_obj_t *acl_data, const cfg_obj_t *cctx,
 			{
 				/* Good ol' DNS over port 53 */
 				transports = isc_nm_streamdnssocket |
-					     isc_nm_udpsocket;
+					     isc_nm_udpsocket |
+					     isc_nm_proxyudpsocket;
 				encrypted = false;
 			} else if (strcasecmp(cfg_obj_asstring(obj_transport),
 					      "tls") == 0)
@@ -755,8 +730,7 @@ cfg_acl_fromconfig2(const cfg_obj_t *acl_data, const cfg_obj_t *cctx,
 	}
 
 	de = dacl->elements;
-	for (elt = cfg_list_first(caml); elt != NULL; elt = cfg_list_next(elt))
-	{
+	CFG_LIST_FOREACH (caml, elt) {
 		const cfg_obj_t *ce = cfg_listelt_value(elt);
 		bool neg = false;
 
@@ -780,12 +754,8 @@ cfg_acl_fromconfig2(const cfg_obj_t *acl_data, const cfg_obj_t *cctx,
 		iptab = dacl->iptable;
 
 		if (nest_level != 0) {
-			result = dns_acl_create(mctx,
-						cfg_list_length(ce, false),
-						&de->nestedacl);
-			if (result != ISC_R_SUCCESS) {
-				goto cleanup;
-			}
+			dns_acl_create(mctx, cfg_list_length(ce, false),
+				       &de->nestedacl);
 			iptab = de->nestedacl->iptable;
 		}
 
@@ -795,23 +765,11 @@ cfg_acl_fromconfig2(const cfg_obj_t *acl_data, const cfg_obj_t *cctx,
 			unsigned int bitlen;
 
 			cfg_obj_asnetprefix(ce, &addr, &bitlen);
-			if (family != 0 && family != addr.family) {
-				char buf[ISC_NETADDR_FORMATSIZE + 1];
-				isc_netaddr_format(&addr, buf, sizeof(buf));
-				cfg_obj_log(ce, lctx, ISC_LOG_WARNING,
-					    "'%s': incorrect address family; "
-					    "ignoring",
-					    buf);
-				if (nest_level != 0) {
-					dns_acl_detach(&de->nestedacl);
-				}
-				continue;
-			}
 			result = isc_netaddr_prefixok(&addr, bitlen);
 			if (result != ISC_R_SUCCESS) {
 				char buf[ISC_NETADDR_FORMATSIZE + 1];
 				isc_netaddr_format(&addr, buf, sizeof(buf));
-				cfg_obj_log(ce, lctx, ISC_LOG_ERROR,
+				cfg_obj_log(ce, ISC_LOG_ERROR,
 					    "'%s/%u': address/prefix length "
 					    "mismatch",
 					    buf, bitlen);
@@ -840,14 +798,13 @@ cfg_acl_fromconfig2(const cfg_obj_t *acl_data, const cfg_obj_t *cctx,
 			/*
 			 * If we're nesting ACLs, put the nested
 			 * ACL onto the elements list; otherwise
-			 * merge it into *this* ACL.  We nest ACLs
-			 * in two cases: 1) sortlist, 2) if the
-			 * nested ACL contains negated members.
+			 * merge it into *this* ACL.  We nest the
+			 * ACL if it contains negated members.
 			 */
 			if (inneracl != NULL) {
 				dns_acl_detach(&inneracl);
 			}
-			result = cfg_acl_fromconfig(ce, cctx, lctx, ctx, mctx,
+			result = cfg_acl_fromconfig(ce, cctx, ctx, mctx,
 						    new_nest_level, &inneracl);
 			if (result != ISC_R_SUCCESS) {
 				goto cleanup;
@@ -883,8 +840,8 @@ cfg_acl_fromconfig2(const cfg_obj_t *acl_data, const cfg_obj_t *cctx,
 			INSIST(dacl->length < dacl->alloc);
 			de->type = dns_aclelementtype_keyname;
 			de->negative = neg;
-			dns_name_init(&de->keyname, NULL);
-			result = convert_keyname(ce, lctx, mctx, &de->keyname);
+			dns_name_init(&de->keyname);
+			result = convert_keyname(ce, mctx, &de->keyname);
 			if (result != ISC_R_SUCCESS) {
 				goto cleanup;
 			}
@@ -893,7 +850,7 @@ cfg_acl_fromconfig2(const cfg_obj_t *acl_data, const cfg_obj_t *cctx,
 			   cfg_obj_isvoid(cfg_tuple_get(ce, "negated")))
 		{
 			INSIST(dacl->length < dacl->alloc);
-			result = parse_geoip_element(ce, lctx, ctx, de);
+			result = parse_geoip_element(ce, ctx, de);
 			if (result != ISC_R_SUCCESS) {
 				goto cleanup;
 			}
@@ -961,8 +918,8 @@ cfg_acl_fromconfig2(const cfg_obj_t *acl_data, const cfg_obj_t *cctx,
 				 * This call should just find the cached
 				 * of the named acl.
 				 */
-				result = convert_named_acl(ce, cctx, lctx, ctx,
-							   mctx, new_nest_level,
+				result = convert_named_acl(ce, cctx, ctx, mctx,
+							   new_nest_level,
 							   &inneracl);
 				if (result != ISC_R_SUCCESS) {
 					goto cleanup;
@@ -971,7 +928,7 @@ cfg_acl_fromconfig2(const cfg_obj_t *acl_data, const cfg_obj_t *cctx,
 				goto nested_acl;
 			}
 		} else {
-			cfg_obj_log(ce, lctx, ISC_LOG_WARNING,
+			cfg_obj_log(ce, ISC_LOG_WARNING,
 				    "address match list contains "
 				    "unsupported element type");
 			result = ISC_R_FAILURE;
@@ -981,7 +938,7 @@ cfg_acl_fromconfig2(const cfg_obj_t *acl_data, const cfg_obj_t *cctx,
 		/*
 		 * This should only be reached for localhost, localnets
 		 * and keyname elements, and nested ACLs if nest_level is
-		 * nonzero (i.e., in sortlists).
+		 * nonzero.
 		 */
 		if (de->nestedacl != NULL &&
 		    de->type != dns_aclelementtype_nestedacl)
@@ -1005,5 +962,5 @@ cleanup:
 		dns_acl_detach(&inneracl);
 	}
 	dns_acl_detach(&dacl);
-	return (result);
+	return result;
 }

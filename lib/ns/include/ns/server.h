@@ -32,23 +32,25 @@
 
 #include <ns/types.h>
 
-#define NS_SERVER_LOGQUERIES	 0x00000001U /*%< log queries */
-#define NS_SERVER_NOAA		 0x00000002U /*%< -T noaa */
-#define NS_SERVER_NOSOA		 0x00000004U /*%< -T nosoa */
-#define NS_SERVER_NONEAREST	 0x00000008U /*%< -T nonearest */
-#define NS_SERVER_NOEDNS	 0x00000020U /*%< -T noedns */
-#define NS_SERVER_DROPEDNS	 0x00000040U /*%< -T dropedns */
-#define NS_SERVER_NOTCP		 0x00000080U /*%< -T notcp */
-#define NS_SERVER_DISABLE4	 0x00000100U /*%< -6 */
-#define NS_SERVER_DISABLE6	 0x00000200U /*%< -4 */
-#define NS_SERVER_FIXEDLOCAL	 0x00000400U /*%< -T fixedlocal */
-#define NS_SERVER_SIGVALINSECS	 0x00000800U /*%< -T sigvalinsecs */
-#define NS_SERVER_EDNSFORMERR	 0x00001000U /*%< -T ednsformerr (STD13) */
-#define NS_SERVER_EDNSNOTIMP	 0x00002000U /*%< -T ednsnotimp */
-#define NS_SERVER_EDNSREFUSED	 0x00004000U /*%< -T ednsrefused */
-#define NS_SERVER_TRANSFERINSECS 0x00008000U /*%< -T transferinsecs */
-#define NS_SERVER_TRANSFERSLOWLY 0x00010000U /*%< -T transferslowly */
-#define NS_SERVER_TRANSFERSTUCK	 0x00020000U /*%< -T transferstuck */
+#define NS_SERVER_LOGQUERIES	    0x00000001U /*%< log queries */
+#define NS_SERVER_NOAA		    0x00000002U /*%< -T noaa */
+#define NS_SERVER_NOSOA		    0x00000004U /*%< -T nosoa */
+#define NS_SERVER_NONEAREST	    0x00000008U /*%< -T nonearest */
+#define NS_SERVER_NOEDNS	    0x00000020U /*%< -T noedns */
+#define NS_SERVER_DROPEDNS	    0x00000040U /*%< -T dropedns */
+#define NS_SERVER_NOTCP		    0x00000080U /*%< -T notcp */
+#define NS_SERVER_DISABLE4	    0x00000100U /*%< -6 */
+#define NS_SERVER_DISABLE6	    0x00000200U /*%< -4 */
+#define NS_SERVER_FIXEDLOCAL	    0x00000400U /*%< -T fixedlocal */
+#define NS_SERVER_SIGVALINSECS	    0x00000800U /*%< -T sigvalinsecs */
+#define NS_SERVER_EDNSFORMERR	    0x00001000U /*%< -T ednsformerr (STD13) */
+#define NS_SERVER_EDNSNOTIMP	    0x00002000U /*%< -T ednsnotimp */
+#define NS_SERVER_EDNSREFUSED	    0x00004000U /*%< -T ednsrefused */
+#define NS_SERVER_TRANSFERINSECS    0x00008000U /*%< -T transferinsecs */
+#define NS_SERVER_TRANSFERSLOWLY    0x00010000U /*%< -T transferslowly */
+#define NS_SERVER_TRANSFERSTUCK	    0x00020000U /*%< -T transferstuck */
+#define NS_SERVER_LOGRESPONSES	    0x00040000U /*%< log responses */
+#define NS_SERVER_COOKIEALWAYSVALID 0x00080000U /*%< -T cookiealwaysvalid */
 
 /*%
  * Type for callback function to get hostname.
@@ -66,7 +68,9 @@ typedef void (*ns_fuzzcb_t)(void);
  */
 typedef isc_result_t (*ns_matchview_t)(
 	isc_netaddr_t *srcaddr, isc_netaddr_t *destaddr, dns_message_t *message,
-	dns_aclenv_t *env, isc_result_t *sigresultp, dns_view_t **viewp);
+	dns_aclenv_t *env, ns_server_t *sctx, isc_loop_t *loop, isc_job_cb cb,
+	void *cbarg, isc_result_t *sigresultp, isc_result_t *viewmatchresult,
+	dns_view_t **viewp);
 
 /*%
  * Server context.
@@ -88,6 +92,8 @@ struct ns_server {
 	isc_quota_t tcpquota;
 	isc_quota_t xfroutquota;
 	isc_quota_t updquota;
+	isc_quota_t sig0checksquota;
+	dns_acl_t  *sig0checksquota_exempt;
 	ISC_LIST(isc_quota_t) http_quotas;
 	isc_mutex_t http_quotas_lock;
 
@@ -99,6 +105,7 @@ struct ns_server {
 	uint16_t       transfer_tcp_message_size;
 	bool	       interface_auto;
 	dns_tkeyctx_t *tkeyctx;
+	uint8_t	       max_restarts;
 
 	/*% Server id for NSID */
 	char *server_id;
@@ -133,7 +140,7 @@ struct ns_altsecret {
 	unsigned char secret[32];
 };
 
-isc_result_t
+void
 ns_server_create(isc_mem_t *mctx, ns_matchview_t matchingview,
 		 ns_server_t **sctxp);
 /*%<

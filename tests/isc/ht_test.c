@@ -25,6 +25,7 @@
 
 #include <isc/hash.h>
 #include <isc/ht.h>
+#include <isc/lib.h>
 #include <isc/mem.h>
 #include <isc/string.h>
 #include <isc/util.h>
@@ -33,9 +34,7 @@
 
 /* INCLUDE LAST */
 
-#define mctx __mctx
 #include "ht.c"
-#undef mctx
 
 static void
 test_ht_full(uint8_t init_bits, uintptr_t count) {
@@ -43,7 +42,7 @@ test_ht_full(uint8_t init_bits, uintptr_t count) {
 	isc_result_t result;
 	uintptr_t i;
 
-	isc_ht_init(&ht, mctx, init_bits, ISC_HT_CASE_SENSITIVE);
+	isc_ht_init(&ht, isc_g_mctx, init_bits, ISC_HT_CASE_SENSITIVE);
 	assert_non_null(ht);
 
 	for (i = 1; i < count; i++) {
@@ -65,7 +64,7 @@ test_ht_full(uint8_t init_bits, uintptr_t count) {
 		strlcat((char *)key, " key of a raw hashtable!!", sizeof(key));
 		result = isc_ht_find(ht, key, 16, &f);
 		assert_int_equal(result, ISC_R_SUCCESS);
-		assert_ptr_equal((void *)i, (uintptr_t)f);
+		assert_ptr_equal((void *)i, (void *)f);
 	}
 
 	for (i = 1; i < count; i++) {
@@ -160,7 +159,7 @@ test_ht_full(uint8_t init_bits, uintptr_t count) {
 		strlcat((char *)key, " KEY of a raw hashtable!!", sizeof(key));
 		result = isc_ht_find(ht, key, 16, &f);
 		assert_int_equal(result, ISC_R_SUCCESS);
-		assert_ptr_equal((void *)i, (uintptr_t)f);
+		assert_ptr_equal((void *)i, (void *)f);
 	}
 
 	for (i = 1; i < count; i++) {
@@ -188,7 +187,7 @@ test_ht_iterator(void) {
 	unsigned char key[16];
 	size_t tksize;
 
-	isc_ht_init(&ht, mctx, HT_MIN_BITS, ISC_HT_CASE_SENSITIVE);
+	isc_ht_init(&ht, isc_g_mctx, HT_MIN_BITS, ISC_HT_CASE_SENSITIVE);
 	assert_non_null(ht);
 	for (i = 1; i <= count; i++) {
 		/*
@@ -330,7 +329,57 @@ ISC_RUN_TEST_IMPL(isc_ht_iterator) {
 	test_ht_iterator();
 }
 
+ISC_RUN_TEST_IMPL(isc_ht_case) {
+	isc_ht_t *ht = NULL;
+	void *f = NULL;
+	isc_result_t result = ISC_R_UNSET;
+
+	unsigned char lower[16] = { "test case" };
+	unsigned char same[16] = { "test case" };
+	unsigned char upper[16] = { "TEST CASE" };
+	unsigned char mixed[16] = { "tEsT CaSe" };
+
+	isc_ht_init(&ht, isc_g_mctx, 8, ISC_HT_CASE_SENSITIVE);
+	assert_non_null(ht);
+
+	result = isc_ht_add(ht, lower, 16, (void *)lower);
+	assert_int_equal(result, ISC_R_SUCCESS);
+
+	result = isc_ht_add(ht, same, 16, (void *)same);
+	assert_int_equal(result, ISC_R_EXISTS);
+
+	result = isc_ht_add(ht, upper, 16, (void *)upper);
+	assert_int_equal(result, ISC_R_SUCCESS);
+
+	result = isc_ht_find(ht, mixed, 16, &f);
+	assert_int_equal(result, ISC_R_NOTFOUND);
+	assert_null(f);
+
+	isc_ht_destroy(&ht);
+	assert_null(ht);
+
+	isc_ht_init(&ht, isc_g_mctx, 8, ISC_HT_CASE_INSENSITIVE);
+	assert_non_null(ht);
+
+	result = isc_ht_add(ht, lower, 16, (void *)lower);
+	assert_int_equal(result, ISC_R_SUCCESS);
+
+	result = isc_ht_add(ht, same, 16, (void *)same);
+	assert_int_equal(result, ISC_R_EXISTS);
+
+	result = isc_ht_add(ht, upper, 16, (void *)upper);
+	assert_int_equal(result, ISC_R_EXISTS);
+
+	result = isc_ht_find(ht, mixed, 16, &f);
+	assert_int_equal(result, ISC_R_SUCCESS);
+	assert_ptr_equal(f, &lower);
+
+	isc_ht_destroy(&ht);
+	assert_null(ht);
+}
+
 ISC_TEST_LIST_START
+ISC_TEST_ENTRY(isc_ht_case)
 ISC_TEST_ENTRY(isc_ht_1_120)
 ISC_TEST_ENTRY(isc_ht_6_1000)
 ISC_TEST_ENTRY(isc_ht_24_200000)

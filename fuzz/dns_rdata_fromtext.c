@@ -37,7 +37,7 @@ int
 LLVMFuzzerInitialize(int *argc, char ***argv) {
 	UNUSED(argc);
 	UNUSED(argv);
-	return (0);
+	return 0;
 }
 
 /* following code was copied from named-rrchecker */
@@ -46,7 +46,7 @@ isc_lexspecials_t specials = { ['('] = 1, [')'] = 1, ['"'] = 1 };
 int
 LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 	isc_mem_t *mctx = NULL;
-	isc_mem_create(&mctx);
+	isc_mem_create("fuzz", &mctx);
 
 	isc_lex_t *lex = NULL;
 	isc_token_t token;
@@ -145,6 +145,6 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 cleanup:
 	isc_lex_close(lex);
 	isc_lex_destroy(&lex);
-	isc_mem_destroy(&mctx);
-	return (0);
+	isc_mem_detach(&mctx);
+	return 0;
 }

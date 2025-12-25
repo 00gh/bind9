@@ -25,10 +25,11 @@ options {
 	session-keyfile "session.key";
 	listen-on { 10.53.0.3; };
 	listen-on-v6 { none; };
+	allow-transfer { any; };
 	notify yes;
 	minimal-responses no;
 	recursion yes;
-	dnssec-validation yes;
+	dnssec-validation no;
 	min-refresh-time 1;
 	min-retry-time 1;
 
@@ -50,6 +51,8 @@ options {
 	    zone "bl.tld2";
 	    zone "manual-update-rpz"	ede forged;
 	    zone "mixed-case-rpz";
+	    zone "evil-cname"  policy cname a12.tld2. ede blocked;
+	    zone "wild-cname"  ede blocked;
 	}
 	add-soa yes
 	min-ns-dots 0
@@ -59,10 +62,10 @@ options {
 	nsip-enable yes
 	;
 
-	include "../dnsrps.conf";
 	also-notify { 10.53.0.3 port @EXTRAPORT1@; };
 	notify-delay 0;
 };
+
 
 logging { category rpz { default_debug; }; };
 
@@ -149,6 +152,16 @@ zone "static-stub-nomatch." {
 	server-addresses { 10.53.0.10; };
 };
 
+zone "evil-cname" {
+	type primary;
+	file "evil-cname.db";
+};
+
+zone "wild-cname" {
+	type primary;
+	file "wild-cname.db";
+};
+
 # A faulty dlz configuration to check if named with response policy zones
 # survives a certain class of failed configuration attempts (see GL #3880).
 # "dlz" is used because the dlz processing code is located in an ideal place in
@@ -156,5 +169,5 @@ zone "static-stub-nomatch." {
 # The "BAD" comments below are necessary, because they will be removed using
 # 'sed' by tests.sh in order to activate the faulty configuration.
 #BAD	dlz "bad-dlz" {
-#BAD		database "dlopen bad-dlz.so example.org";
+#BAD		database "dlopen bad-dlz.@DYLIB@ example.org";
 #BAD	};

@@ -22,7 +22,6 @@
 #include <dns/zone.h>
 #include <dns/zt.h>
 
-#include <ns/log.h>
 #include <ns/notify.h>
 #include <ns/types.h>
 
@@ -56,7 +55,7 @@ respond(ns_client_t *client, isc_result_t result) {
 	}
 	if (msg_result != ISC_R_SUCCESS) {
 		ns_client_drop(client, msg_result);
-		isc_nmhandle_detach(&client->reqhandle);
+		isc_nmhandle_detach(&client->inner.reqhandle);
 		return;
 	}
 	message->rcode = rcode;
@@ -67,7 +66,7 @@ respond(ns_client_t *client, isc_result_t result) {
 	}
 
 	ns_client_send(client);
-	isc_nmhandle_detach(&client->reqhandle);
+	isc_nmhandle_detach(&client->inner.reqhandle);
 }
 
 void
@@ -84,13 +83,12 @@ ns_notify_start(ns_client_t *client, isc_nmhandle_t *handle) {
 	/*
 	 * Attach to the request handle
 	 */
-	isc_nmhandle_attach(handle, &client->reqhandle);
+	isc_nmhandle_attach(handle, &client->inner.reqhandle);
 
 	/*
 	 * Interpret the question section.
 	 */
-	result = dns_message_firstname(request, DNS_SECTION_QUESTION);
-	if (result != ISC_R_SUCCESS) {
+	if (ISC_LIST_EMPTY(request->sections[DNS_SECTION_QUESTION])) {
 		notify_log(client, ISC_LOG_NOTICE,
 			   "notify question section empty");
 		result = DNS_R_FORMERR;
@@ -100,8 +98,7 @@ ns_notify_start(ns_client_t *client, isc_nmhandle_t *handle) {
 	/*
 	 * The question section must contain exactly one question.
 	 */
-	zonename = NULL;
-	dns_message_currentname(request, DNS_SECTION_QUESTION, &zonename);
+	zonename = ISC_LIST_HEAD(request->sections[DNS_SECTION_QUESTION]);
 	zone_rdataset = ISC_LIST_HEAD(zonename->list);
 	if (ISC_LIST_NEXT(zone_rdataset, link) != NULL) {
 		notify_log(client, ISC_LOG_NOTICE,
@@ -111,8 +108,7 @@ ns_notify_start(ns_client_t *client, isc_nmhandle_t *handle) {
 	}
 
 	/* The zone section must have exactly one name. */
-	result = dns_message_nextname(request, DNS_SECTION_ZONE);
-	if (result != ISC_R_NOMORE) {
+	if (ISC_LIST_NEXT(zonename, link) != NULL) {
 		notify_log(client, ISC_LOG_NOTICE,
 			   "notify question section contains multiple RRs");
 		result = DNS_R_FORMERR;
@@ -129,7 +125,7 @@ ns_notify_start(ns_client_t *client, isc_nmhandle_t *handle) {
 
 	tsigkey = dns_message_gettsigkey(request);
 	if (tsigkey != NULL) {
-		dns_name_format(&tsigkey->name, namebuf, sizeof(namebuf));
+		dns_name_format(tsigkey->name, namebuf, sizeof(namebuf));
 
 		if (tsigkey->generated) {
 			char cnamebuf[DNS_NAME_FORMATSIZE];
@@ -146,7 +142,8 @@ ns_notify_start(ns_client_t *client, isc_nmhandle_t *handle) {
 	}
 
 	dns_name_format(zonename, namebuf, sizeof(namebuf));
-	result = dns_view_findzone(client->view, zonename, &zone);
+	result = dns_view_findzone(client->inner.view, zonename,
+				   DNS_ZTFIND_EXACT, &zone);
 	if (result == ISC_R_SUCCESS) {
 		dns_zonetype_t zonetype = dns_zone_gettype(zone);
 

@@ -56,12 +56,9 @@
 
 #include <stdbool.h>
 
-#include <isc/lang.h>
 #include <isc/magic.h>
 
 #include <dns/types.h>
-
-ISC_LANG_BEGINDECLS
 
 /*****
 ***** Types
@@ -101,6 +98,22 @@ struct dns_dbiterator {
 	dns_db_t		*db;
 	bool			 relative_names;
 };
+
+/* clang-format off */
+/*
+ * This is a hack to build a unique variable name to
+ * replace 'res' below. (Two layers of macro indirection are
+ * needed to make the line number be part of the variable
+ * name; otherwise it would just be "x__LINE__".)
+ */
+#define DNS__DBITERATOR_CONNECT(x,y) x##y
+#define DNS__DBITERATOR_CONCAT(x,y) DNS__DBITERATOR_CONNECT(x,y)
+#define DNS_DBITERATOR_FOREACH_RES(rds, res)                         \
+	for (isc_result_t res = dns_dbiterator_first((rds));       \
+	     res == ISC_R_SUCCESS; res = dns_dbiterator_next((rds)))
+#define DNS_DBITERATOR_FOREACH(rds)               \
+	DNS_DBITERATOR_FOREACH_RES(rds, DNS__DBITERATOR_CONCAT(x, __LINE__))
+/* clang-format on */
 
 #define dns_dbiterator_destroy(iteratorp) \
 	dns__dbiterator_destroy(iteratorp DNS__DB_FILELINE)
@@ -236,12 +249,11 @@ dns__dbiterator_current(dns_dbiterator_t *iterator, dns_dbnode_t **nodep,
  * Returns:
  *
  *\li	#ISC_R_SUCCESS
- *\li	#DNS_R_NEWORIGIN			If this iterator was created
- * with 'relative_names' set to true, then #DNS_R_NEWORIGIN will be returned
- *when
- * the origin the names are relative to changes.  This result can occur only
- *when
- *'name' is not NULL.  This is also a successful result.
+ *\li	#DNS_R_NEWORIGIN
+ *      If this iterator was created with 'relative_names' set to true,
+ *      then #DNS_R_NEWORIGIN will be returned when there is a change in
+ *      origin to which the names are relative.  This result can occur only
+ *      when 'name' is not NULL.  This is also a successful result.
  *
  *\li	Other results are possible, depending on the DB implementation.
  */
@@ -289,5 +301,3 @@ dns_dbiterator_origin(dns_dbiterator_t *iterator, dns_name_t *name);
  *
  *\li	Other results are possible, depending on the DB implementation.
  */
-
-ISC_LANG_ENDDECLS

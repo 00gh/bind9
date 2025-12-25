@@ -15,11 +15,15 @@
 
 /*! \file dns/rdatatype.h */
 
-#include <isc/lang.h>
-
 #include <dns/types.h>
 
-ISC_LANG_BEGINDECLS
+#define DNS_TYPEPAIR_TYPE(type)	  ((dns_rdatatype_t)((type) & 0xFFFF))
+#define DNS_TYPEPAIR_COVERS(type) ((dns_rdatatype_t)((type) >> 16))
+#define DNS_TYPEPAIR_VALUE(base, ext) \
+	((dns_typepair_t)(((uint32_t)ext) << 16) | (((uint32_t)base) & 0xffff))
+#define DNS_SIGTYPE(type)                           \
+	((dns_typepair_t)(((uint32_t)type) << 16) | \
+	 (((uint32_t)dns_rdatatype_rrsig) & 0xffff))
 
 isc_result_t
 dns_rdatatype_fromtext(dns_rdatatype_t *typep, isc_textregion_t *source);
@@ -90,5 +94,3 @@ dns_rdatatype_format(dns_rdatatype_t rdtype, char *array, unsigned int size);
  * May need to be adjusted if a new RR type with a very long
  * name is defined.
  */
-
-ISC_LANG_ENDDECLS

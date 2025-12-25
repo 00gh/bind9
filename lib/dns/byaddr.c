@@ -57,10 +57,10 @@ dns_byaddr_createptrname(const isc_netaddr_t *address, dns_name_t *name) {
 	if (address->family == AF_INET) {
 		(void)snprintf(textname, sizeof(textname),
 			       "%u.%u.%u.%u.in-addr.arpa.",
-			       ((unsigned int)bytes[3] & 0xffU),
-			       ((unsigned int)bytes[2] & 0xffU),
-			       ((unsigned int)bytes[1] & 0xffU),
-			       ((unsigned int)bytes[0] & 0xffU));
+			       (unsigned int)bytes[3] & 0xffU,
+			       (unsigned int)bytes[2] & 0xffU,
+			       (unsigned int)bytes[1] & 0xffU,
+			       (unsigned int)bytes[0] & 0xffU);
 	} else if (address->family == AF_INET6) {
 		size_t remaining;
 
@@ -74,11 +74,11 @@ dns_byaddr_createptrname(const isc_netaddr_t *address, dns_name_t *name) {
 		remaining = sizeof(textname) - (cp - textname);
 		strlcpy(cp, "ip6.arpa.", remaining);
 	} else {
-		return (ISC_R_NOTIMPLEMENTED);
+		return ISC_R_NOTIMPLEMENTED;
 	}
 
 	len = (unsigned int)strlen(textname);
 	isc_buffer_init(&buffer, textname, len);
 	isc_buffer_add(&buffer, len);
-	return (dns_name_fromtext(name, &buffer, dns_rootname, 0, NULL));
+	return dns_name_fromtext(name, &buffer, dns_rootname, 0);
 }

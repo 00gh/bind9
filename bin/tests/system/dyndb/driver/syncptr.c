@@ -166,7 +166,7 @@ syncptr_find_zone(sample_instance_t *inst, dns_rdata_t *rdata, dns_name_t *name,
 	}
 
 	/* Find a zone containing owner name of the PTR record. */
-	result = dns_zt_find(inst->view->zonetable, name, 0, zone);
+	result = dns_view_findzone(inst->view, name, 0, zone);
 	if (result == DNS_R_PARTIALMATCH) {
 		result = ISC_R_SUCCESS;
 	} else if (result != ISC_R_SUCCESS) {
@@ -190,7 +190,7 @@ cleanup:
 		dns_rdata_freestruct(&ipv6);
 	}
 
-	return (result);
+	return result;
 }
 
 /*
@@ -224,9 +224,10 @@ syncptr(sample_instance_t *inst, dns_name_t *name, dns_rdata_t *addr_rdata,
 
 	dns_fixedname_init(&ptr_name);
 	DNS_RDATACOMMON_INIT(&ptr_struct, dns_rdatatype_ptr, dns_rdataclass_in);
-	dns_name_init(&ptr_struct.ptr, NULL);
+	dns_name_init(&ptr_struct.ptr);
 
-	syncptr = isc_mem_getx(mctx, sizeof(*syncptr), ISC_MEM_ZERO);
+	syncptr = isc_mem_get(mctx, sizeof(*syncptr));
+	*syncptr = (syncptr_t){ 0 };
 	isc_mem_attach(mctx, &syncptr->mctx);
 	isc_buffer_init(&syncptr->b, syncptr->buf, sizeof(syncptr->buf));
 	dns_fixedname_init(&syncptr->ptr_target_name);
@@ -258,14 +259,8 @@ syncptr(sample_instance_t *inst, dns_name_t *name, dns_rdata_t *addr_rdata,
 	}
 
 	/* Create diff */
-	result = dns_difftuple_create(mctx, op, dns_fixedname_name(&ptr_name),
-				      ttl, &ptr_rdata, &tp);
-	if (result != ISC_R_SUCCESS) {
-		log_write(ISC_LOG_ERROR,
-			  "syncptr: dns_difftuple_create -> %s\n",
-			  isc_result_totext(result));
-		goto cleanup;
-	}
+	dns_difftuple_create(mctx, op, dns_fixedname_name(&ptr_name), ttl,
+			     &ptr_rdata, &tp);
 	dns_diff_append(&syncptr->diff, &tp);
 
 	/*
@@ -286,7 +281,7 @@ cleanup:
 		isc_mem_put(mctx, syncptr, sizeof(*syncptr));
 	}
 
-	return (result);
+	return result;
 }
 
 /*
@@ -300,22 +295,15 @@ cleanup:
 isc_result_t
 syncptrs(sample_instance_t *inst, dns_name_t *name, dns_rdataset_t *rdataset,
 	 dns_diffop_t op) {
-	isc_result_t result;
-	dns_rdata_t rdata = DNS_RDATA_INIT;
-
-	for (result = dns_rdataset_first(rdataset); result == ISC_R_SUCCESS;
-	     result = dns_rdataset_next(rdataset))
-	{
+	isc_result_t result = ISC_R_SUCCESS;
+	DNS_RDATASET_FOREACH (rdataset) {
+		dns_rdata_t rdata = DNS_RDATA_INIT;
 		dns_rdataset_current(rdataset, &rdata);
 		result = syncptr(inst, name, &rdata, rdataset->ttl, op);
 		if (result != ISC_R_SUCCESS && result != ISC_R_NOTFOUND) {
-			goto cleanup;
+			break;
 		}
 	}
-	if (result == ISC_R_NOMORE) {
-		result = ISC_R_SUCCESS;
-	}
 
-cleanup:
-	return (result);
+	return result;
 }

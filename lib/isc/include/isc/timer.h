@@ -56,11 +56,8 @@
 #include <stdbool.h>
 
 #include <isc/job.h>
-#include <isc/lang.h>
 #include <isc/time.h>
 #include <isc/types.h>
-
-ISC_LANG_BEGINDECLS
 
 /***
  *** Types
@@ -156,4 +153,12 @@ isc_timer_destroy(isc_timer_t **timerp);
  *\li	*timerp is NULL.
  */
 
-ISC_LANG_ENDDECLS
+bool
+isc_timer_running(isc_timer_t *timer);
+/*%<
+ * Return true if the timer has been started.
+ *
+ * Requires:
+ *
+ *\li	'timer' is a valid timer*
+ */

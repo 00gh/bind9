@@ -30,17 +30,15 @@
  *** Imports.
  ***/
 
-#include <isc/lang.h>
 #include <isc/mutex.h>
+#include <isc/refcount.h>
 #include <isc/types.h>
 
 /*****
 ***** Types.
 *****/
 
-ISC_LANG_BEGINDECLS
-
-isc_result_t
+void
 isc_counter_create(isc_mem_t *mctx, int limit, isc_counter_t **counterp);
 /*%<
  * Allocate and initialize a counter object.
@@ -68,17 +66,10 @@ isc_counter_setlimit(isc_counter_t *counter, int limit);
  * Set the counter limit.
  */
 
-void
-isc_counter_attach(isc_counter_t *source, isc_counter_t **targetp);
+unsigned int
+isc_counter_getlimit(isc_counter_t *counter);
 /*%<
- * Attach to a counter object, increasing its reference counter.
+ * Get the counter limit.
  */
 
-void
-isc_counter_detach(isc_counter_t **counterp);
-/*%<
- * Detach (and destroy if reference counter has dropped to zero)
- * a counter object.
- */
-
-ISC_LANG_ENDDECLS
+ISC_REFCOUNT_DECL(isc_counter);

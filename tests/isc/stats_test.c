@@ -11,6 +11,7 @@
  * information regarding copyright ownership.
  */
 
+#include <inttypes.h>
 #include <sched.h> /* IWYU pragma: keep */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -21,6 +22,7 @@
 #define UNIT_TESTING
 #include <cmocka.h>
 
+#include <isc/lib.h>
 #include <isc/mem.h>
 #include <isc/result.h>
 #include <isc/stats.h>
@@ -31,12 +33,8 @@
 /* test stats */
 ISC_RUN_TEST_IMPL(isc_stats_basic) {
 	isc_stats_t *stats = NULL;
-	isc_result_t result;
 
-	UNUSED(state);
-
-	result = isc_stats_create(mctx, &stats, 4);
-	assert_int_equal(result, ISC_R_SUCCESS);
+	isc_stats_create(isc_g_mctx, &stats, 4);
 	assert_int_equal(isc_stats_ncounters(stats), 4);
 
 	/* Default all 0. */

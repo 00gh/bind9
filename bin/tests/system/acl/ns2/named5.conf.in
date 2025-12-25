@@ -32,6 +32,7 @@ options {
 	notify yes;
 	ixfr-from-differences yes;
 	check-integrity no;
+	dnssec-validation no;
 	allow-query-on { 10.53.0.2; };
 	blackhole { 10.53.0.8; };
 };
@@ -48,7 +49,7 @@ key two {
 
 zone "." {
 	type hint;
-	file "../../common/root.hint";
+	file "../../_common/root.hint";
 };
 
 zone "example" {

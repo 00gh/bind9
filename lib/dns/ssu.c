@@ -47,6 +47,7 @@ struct dns_ssurule {
 	dns_ssuruletype_t *types;     /*%< the data types.  Can include */
 				      /*   ANY. if NULL, defaults to all */
 				      /*   types except SIG, SOA, and NS */
+	char *debug;		      /*%< text version for debugging */
 	ISC_LINK(dns_ssurule_t) link;
 };
 
@@ -65,7 +66,7 @@ dns_ssutable_create(isc_mem_t *mctx, dns_ssutable_t **tablep) {
 	REQUIRE(tablep != NULL && *tablep == NULL);
 	REQUIRE(mctx != NULL);
 
-	table = isc_mem_get(mctx, sizeof(dns_ssutable_t));
+	table = isc_mem_get(mctx, sizeof(*table));
 	isc_refcount_init(&table->references, 1);
 	table->mctx = NULL;
 	isc_mem_attach(mctx, &table->mctx);
@@ -81,8 +82,7 @@ destroy(dns_ssutable_t *table) {
 	REQUIRE(VALID_SSUTABLE(table));
 
 	mctx = table->mctx;
-	while (!ISC_LIST_EMPTY(table->rules)) {
-		dns_ssurule_t *rule = ISC_LIST_HEAD(table->rules);
+	ISC_LIST_FOREACH (table->rules, rule, link) {
 		if (rule->identity != NULL) {
 			dns_name_free(rule->identity, mctx);
 			isc_mem_put(mctx, rule->identity,
@@ -93,8 +93,11 @@ destroy(dns_ssutable_t *table) {
 			isc_mem_put(mctx, rule->name, sizeof(*rule->name));
 		}
 		if (rule->types != NULL) {
-			isc_mem_put(mctx, rule->types,
-				    rule->ntypes * sizeof(*rule->types));
+			isc_mem_cput(mctx, rule->types, rule->ntypes,
+				     sizeof(*rule->types));
+		}
+		if (rule->debug != NULL) {
+			isc_mem_free(mctx, rule->debug);
 		}
 		ISC_LIST_UNLINK(table->rules, rule, link);
 		rule->magic = 0;
@@ -129,11 +132,56 @@ dns_ssutable_detach(dns_ssutable_t **tablep) {
 	}
 }
 
+static const char *
+mtypetostring(dns_ssumatchtype_t matchtype) {
+	switch (matchtype) {
+	case dns_ssumatchtype_name:
+		return "name";
+	case dns_ssumatchtype_wildcard:
+		return "wildcard";
+	case dns_ssumatchtype_self:
+		return "self";
+	case dns_ssumatchtype_selfsub:
+		return "selfsub";
+	case dns_ssumatchtype_selfwild:
+		return "selfwild";
+	case dns_ssumatchtype_selfms:
+		return "ms-self";
+	case dns_ssumatchtype_selfsubms:
+		return "ms-selfsub";
+	case dns_ssumatchtype_selfkrb5:
+		return "krb5-self";
+	case dns_ssumatchtype_selfsubkrb5:
+		return "krb5-selfsub";
+	case dns_ssumatchtype_subdomainms:
+		return "ms-subdomain";
+	case dns_ssumatchtype_subdomainselfmsrhs:
+		return "ms-subdomain-self-rhs";
+	case dns_ssumatchtype_subdomainkrb5:
+		return "krb5-subdomain";
+	case dns_ssumatchtype_subdomainselfkrb5rhs:
+		return "krb5-subdomain-self-rhs";
+	case dns_ssumatchtype_tcpself:
+		return "tcp-self";
+	case dns_ssumatchtype_6to4self:
+		return "6to4-self";
+	case dns_ssumatchtype_subdomain:
+		return "subdomain";
+	case dns_ssumatchtype_external:
+		return "external";
+	case dns_ssumatchtype_local:
+		return "local";
+	case dns_ssumatchtype_dlz:
+		return "dlz";
+	}
+	return "UnknownMatchType";
+}
+
 void
 dns_ssutable_addrule(dns_ssutable_t *table, bool grant,
 		     const dns_name_t *identity, dns_ssumatchtype_t matchtype,
 		     const dns_name_t *name, unsigned int ntypes,
-		     dns_ssuruletype_t *types) {
+		     dns_ssuruletype_t *types, const char *debug) {
 	dns_ssurule_t *rule;
 	isc_mem_t *mctx;
 
@@ -147,42 +195,41 @@ dns_ssutable_addrule(dns_ssutable_t *table, bool grant,
 	if (ntypes > 0) {
 		REQUIRE(types != NULL);
 	}
+	REQUIRE(debug != NULL);
 
 	mctx = table->mctx;
 	rule = isc_mem_get(mctx, sizeof(*rule));
+	*rule = (dns_ssurule_t){
+		.grant = grant,
+		.matchtype = matchtype,
+		.identity = isc_mem_get(mctx, sizeof(*rule->identity)),
+		.name = isc_mem_get(mctx, sizeof(*rule->name)),
+		.ntypes = ntypes,
+		.types = ntypes == 0 ? NULL
+				     : isc_mem_cget(mctx, ntypes,
+						    sizeof(*rule->types)),
+		.link = ISC_LINK_INITIALIZER,
+		.magic = SSURULEMAGIC,
+	};
 
-	rule->identity = NULL;
-	rule->name = NULL;
-	rule->types = NULL;
-
-	rule->grant = grant;
-
-	rule->identity = isc_mem_get(mctx, sizeof(*rule->identity));
-	dns_name_init(rule->identity, NULL);
+	dns_name_init(rule->identity);
 	dns_name_dup(identity, mctx, rule->identity);
-
-	rule->name = isc_mem_get(mctx, sizeof(*rule->name));
-	dns_name_init(rule->name, NULL);
+	dns_name_init(rule->name);
 	dns_name_dup(name, mctx, rule->name);
 
-	rule->matchtype = matchtype;
-
-	rule->ntypes = ntypes;
 	if (ntypes > 0) {
-		rule->types = isc_mem_get(mctx, ntypes * sizeof(*rule->types));
 		memmove(rule->types, types, ntypes * sizeof(*rule->types));
-	} else {
-		rule->types = NULL;
 	}
 
-	rule->magic = SSURULEMAGIC;
+	rule->debug = isc_mem_strdup(mctx, debug);
+
 	ISC_LIST_INITANDAPPEND(table->rules, rule, link);
 }
 
 static bool
 isusertype(dns_rdatatype_t type) {
-	return (type != dns_rdatatype_ns && type != dns_rdatatype_soa &&
-		type != dns_rdatatype_rrsig);
+	return type != dns_rdatatype_ns && type != dns_rdatatype_soa &&
+	       type != dns_rdatatype_rrsig;
 }
 
 static void
@@ -230,7 +277,7 @@ reverse_from_address(dns_name_t *tcpself, const isc_netaddr_t *tcpaddr) {
 	}
 	isc_buffer_init(&b, buf, strlen(buf));
 	isc_buffer_add(&b, strlen(buf));
-	result = dns_name_fromtext(tcpself, &b, dns_rootname, 0, NULL);
+	result = dns_name_fromtext(tcpself, &b, dns_rootname, 0);
 	RUNTIME_CHECK(result == ISC_R_SUCCESS);
 }
 
@@ -245,13 +292,12 @@ stf_from_address(dns_name_t *stfself, const isc_netaddr_t *tcpaddr) {
 	switch (tcpaddr->family) {
 	case AF_INET:
 		l = ntohl(tcpaddr->type.in.s_addr);
-		result = snprintf(buf, sizeof(buf),
-				  "%lx.%lx.%lx.%lx.%lx.%lx.%lx.%lx"
-				  "2.0.0.2.IP6.ARPA.",
-				  l & 0xf, (l >> 4) & 0xf, (l >> 8) & 0xf,
-				  (l >> 12) & 0xf, (l >> 16) & 0xf,
-				  (l >> 20) & 0xf, (l >> 24) & 0xf,
-				  (l >> 28) & 0xf);
+		result = snprintf(
+			buf, sizeof(buf),
+			"%lx.%lx.%lx.%lx.%lx.%lx.%lx.%lx.2.0.0.2.IP6.ARPA.",
+			l & 0xf, (l >> 4) & 0xf, (l >> 8) & 0xf,
+			(l >> 12) & 0xf, (l >> 16) & 0xf, (l >> 20) & 0xf,
+			(l >> 24) & 0xf, (l >> 28) & 0xf);
 		RUNTIME_CHECK(result < sizeof(buf));
 		break;
 	case AF_INET6:
@@ -271,7 +317,7 @@ stf_from_address(dns_name_t *stfself, const isc_netaddr_t *tcpaddr) {
 	}
 	isc_buffer_init(&b, buf, strlen(buf));
 	isc_buffer_add(&b, strlen(buf));
-	result = dns_name_fromtext(stfself, &b, dns_rootname, 0, NULL);
+	result = dns_name_fromtext(stfself, &b, dns_rootname, 0);
 	RUNTIME_CHECK(result == ISC_R_SUCCESS);
 }
 
@@ -285,24 +331,92 @@ dns_ssutable_checkrules(dns_ssutable_t *table, const dns_name_t *signer,
 	dns_name_t *stfself;
 	dns_name_t *tcpself;
 	dns_name_t *wildcard;
-	dns_ssurule_t *rule;
 	const dns_name_t *tname;
 	int match;
 	isc_result_t result;
 	unsigned int i;
+	bool logit = isc_log_wouldlog(99);
 
 	REQUIRE(VALID_SSUTABLE(table));
 	REQUIRE(signer == NULL || dns_name_isabsolute(signer));
 	REQUIRE(dns_name_isabsolute(name));
 	REQUIRE(addr == NULL || env != NULL);
 
-	if (signer == NULL && addr == NULL) {
-		return (false);
+	if (logit) {
+		char signerbuf[DNS_NAME_FORMATSIZE] = { 0 };
+		char namebuf[DNS_NAME_FORMATSIZE] = { 0 };
+		char targetbuf[DNS_NAME_FORMATSIZE] = { 0 };
+		char addrbuf[ISC_NETADDR_FORMATSIZE] = { 0 };
+		char typebuf[DNS_RDATATYPE_FORMATSIZE] = { 0 };
+
+		if (signer != NULL) {
+			dns_name_format(signer, signerbuf, sizeof(signerbuf));
+		}
+		dns_name_format(name, namebuf, sizeof(namebuf));
+		if (target != NULL) {
+			dns_name_format(target, targetbuf, sizeof(targetbuf));
+		}
+		dns_rdatatype_format(type, typebuf, sizeof(typebuf));
+		if (addr != NULL) {
+			isc_netaddr_format(addr, addrbuf, sizeof(addrbuf));
+		}
+
+		isc_log_write(DNS_LOGCATEGORY_UPDATE_POLICY, DNS_LOGMODULE_SSU,
+			      ISC_LOG_DEBUG(99),
+			      "update-policy: using: signer=%s name=%s addr=%s "
+			      "tcp=%u type=%s target=%s",
+			      signerbuf, namebuf, addrbuf, tcp, typebuf,
+			      targetbuf);
 	}
 
-	for (rule = ISC_LIST_HEAD(table->rules); rule != NULL;
-	     rule = ISC_LIST_NEXT(rule, link))
-	{
+	if (signer == NULL && addr == NULL) {
+		return false;
+	}
+
+	ISC_LIST_FOREACH (table->rules, rule, link) {
+		if (logit) {
+			isc_log_write(DNS_LOGCATEGORY_UPDATE_POLICY,
+				      DNS_LOGMODULE_SSU, ISC_LOG_DEBUG(99),
+				      "update-policy: trying: %s",
+				      rule->debug != NULL ? rule->debug
+							  : "not available");
+
+			if (tcp && addr != NULL) {
+				char namebuf[DNS_NAME_FORMATSIZE] = { 0 };
+				switch (rule->matchtype) {
+				case dns_ssumatchtype_tcpself:
+					tcpself =
+						dns_fixedname_initname(&fixed);
+					reverse_from_address(tcpself, addr);
+					dns_name_format(tcpself, namebuf,
+							sizeof(namebuf));
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: %s=%s",
+						mtypetostring(rule->matchtype),
+						namebuf);
+					break;
+				case dns_ssumatchtype_6to4self:
+					stfself =
+						dns_fixedname_initname(&fixed);
+					stf_from_address(stfself, addr);
+					dns_name_format(stfself, namebuf,
+							sizeof(namebuf));
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: %s=%s",
+						mtypetostring(rule->matchtype),
+						namebuf);
+					break;
+				default:
+					break;
+				}
+			}
+		}
 		switch (rule->matchtype) {
 		case dns_ssumatchtype_local:
 		case dns_ssumatchtype_name:
@@ -312,16 +426,43 @@ dns_ssutable_checkrules(dns_ssutable_t *table, const dns_name_t *signer,
 		case dns_ssumatchtype_subdomain:
 		case dns_ssumatchtype_wildcard:
 			if (signer == NULL) {
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next "
+						"rule: no signer");
+				}
 				continue;
 			}
 			if (dns_name_iswildcard(rule->identity)) {
 				if (!dns_name_matcheswildcard(signer,
 							      rule->identity))
 				{
+					if (logit) {
+						isc_log_write(
+							DNS_LOGCATEGORY_UPDATE_POLICY,
+							DNS_LOGMODULE_SSU,
+							ISC_LOG_DEBUG(99),
+							"update-policy: next "
+							"rule: signer does not "
+							"match wildcard "
+							"identity");
+					}
 					continue;
 				}
 			} else {
 				if (!dns_name_equal(signer, rule->identity)) {
+					if (logit) {
+						isc_log_write(
+							DNS_LOGCATEGORY_UPDATE_POLICY,
+							DNS_LOGMODULE_SSU,
+							ISC_LOG_DEBUG(99),
+							"update-policy: next "
+							"rule: signer does not "
+							"match identity");
+					}
 					continue;
 				}
 			}
@@ -335,12 +476,28 @@ dns_ssutable_checkrules(dns_ssutable_t *table, const dns_name_t *signer,
 		case dns_ssumatchtype_subdomainselfkrb5rhs:
 		case dns_ssumatchtype_subdomainselfmsrhs:
 			if (signer == NULL) {
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next "
+						"rule: no signer");
+				}
 				continue;
 			}
 			break;
 		case dns_ssumatchtype_tcpself:
 		case dns_ssumatchtype_6to4self:
 			if (!tcp || addr == NULL) {
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next rule: %s",
+						tcp ? "no address" : "not TCP");
+				}
 				continue;
 			}
 			break;
@@ -352,29 +509,61 @@ dns_ssutable_checkrules(dns_ssutable_t *table, const dns_name_t *signer,
 		switch (rule->matchtype) {
 		case dns_ssumatchtype_name:
 			if (!dns_name_equal(name, rule->name)) {
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next "
+						"rule: name mismatch");
+				}
 				continue;
 			}
 			break;
 		case dns_ssumatchtype_subdomain:
 			if (!dns_name_issubdomain(name, rule->name)) {
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next rule: "
+						"name/subdomain mismatch");
+				}
 				continue;
 			}
 			break;
 		case dns_ssumatchtype_local:
 			if (addr == NULL) {
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next "
+						"rule: no address");
+				}
 				continue;
 			}
 			if (!dns_name_issubdomain(name, rule->name)) {
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next rule: "
+						"name/subdomain mismatch");
+				}
 				continue;
 			}
-			RWLOCK(&env->rwlock, isc_rwlocktype_read);
-			dns_acl_match(addr, NULL, env->localhost, NULL, &match,
+			rcu_read_lock();
+			dns_acl_t *localhost = rcu_dereference(env->localhost);
+			dns_acl_match(addr, NULL, localhost, NULL, &match,
 				      NULL);
-			RWUNLOCK(&env->rwlock, isc_rwlocktype_read);
+			rcu_read_unlock();
 			if (match == 0) {
 				if (signer != NULL) {
-					isc_log_write(dns_lctx,
-						      DNS_LOGCATEGORY_GENERAL,
+					isc_log_write(DNS_LOGCATEGORY_GENERAL,
 						      DNS_LOGMODULE_SSU,
 						      ISC_LOG_WARNING,
 						      "update-policy local: "
@@ -382,32 +571,85 @@ dns_ssutable_checkrules(dns_ssutable_t *table, const dns_name_t *signer,
 						      "key not from "
 						      "localhost");
 				}
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next rule: "
+						"address not local");
+				}
 				continue;
 			}
 			break;
 		case dns_ssumatchtype_wildcard:
 			if (!dns_name_matcheswildcard(name, rule->name)) {
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next "
+						"rule: record name does "
+						"not match wilcard name");
+				}
 				continue;
 			}
 			break;
 		case dns_ssumatchtype_self:
 			if (!dns_name_equal(signer, name)) {
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next "
+						"rule: record named not "
+						"equal signer");
+				}
 				continue;
 			}
 			break;
 		case dns_ssumatchtype_selfsub:
 			if (!dns_name_issubdomain(name, signer)) {
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next "
+						"rule: record name not "
+						"subdomain of signer");
+				}
 				continue;
 			}
 			break;
 		case dns_ssumatchtype_selfwild:
 			wildcard = dns_fixedname_initname(&fixed);
 			result = dns_name_concatenate(dns_wildcardname, signer,
-						      wildcard, NULL);
+						      wildcard);
 			if (result != ISC_R_SUCCESS) {
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next "
+						"rule: wilcard, signer "
+						"concatenation failed");
+				}
 				continue;
 			}
 			if (!dns_name_matcheswildcard(name, wildcard)) {
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next rule: "
+						"record name does not match "
+						"wildcarded signer");
+				}
 				continue;
 			}
 			break;
@@ -417,12 +659,26 @@ dns_ssutable_checkrules(dns_ssutable_t *table, const dns_name_t *signer,
 			{
 				break;
 			}
+			if (logit) {
+				isc_log_write(
+					DNS_LOGCATEGORY_UPDATE_POLICY,
+					DNS_LOGMODULE_SSU, ISC_LOG_DEBUG(99),
+					"update-policy: next rule: krb5 signer "
+					"doesn't map to record name");
+			}
 			continue;
 		case dns_ssumatchtype_selfms:
 			if (dst_gssapi_identitymatchesrealmms(
 				    signer, name, rule->identity, false))
 			{
 				break;
+			}
+			if (logit) {
+				isc_log_write(
+					DNS_LOGCATEGORY_UPDATE_POLICY,
+					DNS_LOGMODULE_SSU, ISC_LOG_DEBUG(99),
+					"update-policy: next rule: MS Windows "
+					"signer doesn't map to record name");
 			}
 			continue;
 		case dns_ssumatchtype_selfsubkrb5:
@@ -431,6 +687,14 @@ dns_ssutable_checkrules(dns_ssutable_t *table, const dns_name_t *signer,
 			{
 				break;
 			}
+			if (logit) {
+				isc_log_write(DNS_LOGCATEGORY_UPDATE_POLICY,
+					      DNS_LOGMODULE_SSU,
+					      ISC_LOG_DEBUG(99),
+					      "update-policy: next rule: "
+					      "record name not a subdomain of "
+					      "krb5 signer mapped name");
+			}
 			continue;
 		case dns_ssumatchtype_selfsubms:
 			if (dst_gssapi_identitymatchesrealmms(
@@ -438,10 +702,27 @@ dns_ssutable_checkrules(dns_ssutable_t *table, const dns_name_t *signer,
 			{
 				break;
 			}
+			if (logit) {
+				isc_log_write(DNS_LOGCATEGORY_UPDATE_POLICY,
+					      DNS_LOGMODULE_SSU,
+					      ISC_LOG_DEBUG(99),
+					      "update-policy: next rule: "
+					      "record name not a subdomain of "
+					      "MS Windows signer mapped name");
+			}
 			continue;
 		case dns_ssumatchtype_subdomainkrb5:
 		case dns_ssumatchtype_subdomainselfkrb5rhs:
 			if (!dns_name_issubdomain(name, rule->name)) {
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next "
+						"rule: record name not a "
+						"subdomain of rule name");
+				}
 				continue;
 			}
 			tname = NULL;
@@ -462,10 +743,27 @@ dns_ssutable_checkrules(dns_ssutable_t *table, const dns_name_t *signer,
 			{
 				break;
 			}
+			if (logit) {
+				isc_log_write(DNS_LOGCATEGORY_UPDATE_POLICY,
+					      DNS_LOGMODULE_SSU,
+					      ISC_LOG_DEBUG(99),
+					      "update-policy: next rule: rdata "
+					      "name does not match krb5 signer "
+					      "mapped name");
+			}
 			continue;
 		case dns_ssumatchtype_subdomainms:
 		case dns_ssumatchtype_subdomainselfmsrhs:
 			if (!dns_name_issubdomain(name, rule->name)) {
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next "
+						"rule: record name not a "
+						"subdomain of rule name");
+				}
 				continue;
 			}
 			tname = NULL;
@@ -486,6 +784,14 @@ dns_ssutable_checkrules(dns_ssutable_t *table, const dns_name_t *signer,
 			{
 				break;
 			}
+			if (logit) {
+				isc_log_write(DNS_LOGCATEGORY_UPDATE_POLICY,
+					      DNS_LOGMODULE_SSU,
+					      ISC_LOG_DEBUG(99),
+					      "update-policy: next rule: rdata "
+					      "name does not match MS Windows "
+					      "signer mapped name");
+			}
 			continue;
 		case dns_ssumatchtype_tcpself:
 			tcpself = dns_fixedname_initname(&fixed);
@@ -494,14 +800,43 @@ dns_ssutable_checkrules(dns_ssutable_t *table, const dns_name_t *signer,
 				if (!dns_name_matcheswildcard(tcpself,
 							      rule->identity))
 				{
+					if (logit) {
+						isc_log_write(
+							DNS_LOGCATEGORY_UPDATE_POLICY,
+							DNS_LOGMODULE_SSU,
+							ISC_LOG_DEBUG(99),
+							"update-policy: next "
+							"rule: tcp-self name "
+							"does not match "
+							"wildcard identity");
+					}
 					continue;
 				}
 			} else {
 				if (!dns_name_equal(tcpself, rule->identity)) {
+					if (logit) {
+						isc_log_write(
+							DNS_LOGCATEGORY_UPDATE_POLICY,
+							DNS_LOGMODULE_SSU,
+							ISC_LOG_DEBUG(99),
+							"update-policy: next "
+							"rule: tcp-self name "
+							"does not match "
+							"identity");
+					}
 					continue;
 				}
 			}
 			if (!dns_name_equal(tcpself, name)) {
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next rule: "
+						"tcp-self name does not match "
+						"record name");
+				}
 				continue;
 			}
 			break;
@@ -512,14 +847,47 @@ dns_ssutable_checkrules(dns_ssutable_t *table, const dns_name_t *signer,
 				if (!dns_name_matcheswildcard(stfself,
 							      rule->identity))
 				{
+					if (logit) {
+						isc_log_write(
+							DNS_LOGCATEGORY_UPDATE_POLICY,
+							DNS_LOGMODULE_SSU,
+							ISC_LOG_DEBUG(99),
+							"update-policy: next "
+							"rule: %s name "
+							"does not match "
+							"wildcard identity",
+							mtypetostring(
+								rule->matchtype));
+					}
 					continue;
 				}
 			} else {
 				if (!dns_name_equal(stfself, rule->identity)) {
+					if (logit) {
+						isc_log_write(
+							DNS_LOGCATEGORY_UPDATE_POLICY,
+							DNS_LOGMODULE_SSU,
+							ISC_LOG_DEBUG(99),
+							"update-policy: next "
+							"rule: %s name does "
+							"not match identity",
+							mtypetostring(
+								rule->matchtype));
+					}
 					continue;
 				}
 			}
 			if (!dns_name_equal(stfself, name)) {
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next "
+						"rule: %s name does not "
+						"match record name",
+						mtypetostring(rule->matchtype));
+				}
 				continue;
 			}
 			break;
@@ -528,6 +896,14 @@ dns_ssutable_checkrules(dns_ssutable_t *table, const dns_name_t *signer,
 						    name, addr, type, key,
 						    table->mctx))
 			{
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next rule: "
+						"external match failed");
+				}
 				continue;
 			}
 			break;
@@ -535,6 +911,14 @@ dns_ssutable_checkrules(dns_ssutable_t *table, const dns_name_t *signer,
 			if (!dns_dlz_ssumatch(table->dlzdatabase, signer, name,
 					      addr, type, key))
 			{
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next "
+						"rule: dlz match failed");
+				}
 				continue;
 			}
 			break;
@@ -548,6 +932,14 @@ dns_ssutable_checkrules(dns_ssutable_t *table, const dns_name_t *signer,
 			if (rule->matchtype != dns_ssumatchtype_dlz &&
 			    !isusertype(type))
 			{
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next "
+						"rule: not user type");
+				}
 				continue;
 			}
 		} else {
@@ -559,40 +951,60 @@ dns_ssutable_checkrules(dns_ssutable_t *table, const dns_name_t *signer,
 				}
 			}
 			if (i == rule->ntypes) {
+				if (logit) {
+					isc_log_write(
+						DNS_LOGCATEGORY_UPDATE_POLICY,
+						DNS_LOGMODULE_SSU,
+						ISC_LOG_DEBUG(99),
+						"update-policy: next rule: "
+						"type not in type list");
+				}
 				continue;
 			}
 		}
 		if (rule->grant && rulep != NULL) {
 			*rulep = rule;
 		}
-		return (rule->grant);
+		if (logit) {
+			isc_log_write(DNS_LOGCATEGORY_UPDATE_POLICY,
+				      DNS_LOGMODULE_SSU, ISC_LOG_DEBUG(99),
+				      "update-policy: matched: %s",
+				      rule->debug != NULL ? rule->debug
+							  : "not available");
+		}
+		return rule->grant;
+	}
+	if (logit) {
+		isc_log_write(DNS_LOGCATEGORY_UPDATE_POLICY, DNS_LOGMODULE_SSU,
+			      ISC_LOG_DEBUG(99),
+			      "update-policy: no match found");
 	}
 
-	return (false);
+	return false;
 }
 
 bool
 dns_ssurule_isgrant(const dns_ssurule_t *rule) {
 	REQUIRE(VALID_SSURULE(rule));
-	return (rule->grant);
+	return rule->grant;
 }
 
 dns_name_t *
 dns_ssurule_identity(const dns_ssurule_t *rule) {
 	REQUIRE(VALID_SSURULE(rule));
-	return (rule->identity);
+	return rule->identity;
 }
 
 unsigned int
 dns_ssurule_matchtype(const dns_ssurule_t *rule) {
 	REQUIRE(VALID_SSURULE(rule));
-	return (rule->matchtype);
+	return rule->matchtype;
 }
 
 dns_name_t *
 dns_ssurule_name(const dns_ssurule_t *rule) {
 	REQUIRE(VALID_SSURULE(rule));
-	return (rule->name);
+	return rule->name;
 }
 
 unsigned int
@@ -600,7 +1012,7 @@ dns_ssurule_types(const dns_ssurule_t *rule, dns_ssuruletype_t **types) {
 	REQUIRE(VALID_SSURULE(rule));
 	REQUIRE(types != NULL && *types != NULL);
 	*types = rule->types;
-	return (rule->ntypes);
+	return rule->ntypes;
 }
 
 unsigned int
@@ -615,10 +1027,10 @@ dns_ssurule_max(const dns_ssurule_t *rule, dns_rdatatype_t type) {
 			max = rule->types[i].max;
 		}
 		if (rule->types[i].type == type) {
-			return (rule->types[i].max);
+			return rule->types[i].max;
 		}
 	}
-	return (max);
+	return max;
 }
 
 isc_result_t
@@ -626,7 +1038,7 @@ dns_ssutable_firstrule(const dns_ssutable_t *table, dns_ssurule_t **rule) {
 	REQUIRE(VALID_SSUTABLE(table));
 	REQUIRE(rule != NULL && *rule == NULL);
 	*rule = ISC_LIST_HEAD(table->rules);
-	return (*rule != NULL ? ISC_R_SUCCESS : ISC_R_NOMORE);
+	return *rule != NULL ? ISC_R_SUCCESS : ISC_R_NOMORE;
 }
 
 isc_result_t
@@ -634,7 +1046,7 @@ dns_ssutable_nextrule(dns_ssurule_t *rule, dns_ssurule_t **nextrule) {
 	REQUIRE(VALID_SSURULE(rule));
 	REQUIRE(nextrule != NULL && *nextrule == NULL);
 	*nextrule = ISC_LIST_NEXT(rule, link);
-	return (*nextrule != NULL ? ISC_R_SUCCESS : ISC_R_NOMORE);
+	return *nextrule != NULL ? ISC_R_SUCCESS : ISC_R_NOMORE;
 }
 
 /*
@@ -654,13 +1066,13 @@ dns_ssutable_createdlz(isc_mem_t *mctx, dns_ssutable_t **tablep,
 
 	rule = isc_mem_get(table->mctx, sizeof(dns_ssurule_t));
 
-	rule->identity = NULL;
-	rule->name = NULL;
-	rule->grant = true;
-	rule->matchtype = dns_ssumatchtype_dlz;
-	rule->ntypes = 0;
-	rule->types = NULL;
-	rule->magic = SSURULEMAGIC;
+	*rule = (dns_ssurule_t){
+		.grant = true,
+		.matchtype = dns_ssumatchtype_dlz,
+		.magic = SSURULEMAGIC,
+	};
+
+	rule->debug = isc_mem_strdup(mctx, "grant dlz");
 
 	ISC_LIST_INITANDAPPEND(table->rules, rule, link);
 	*tablep = table;
@@ -708,7 +1120,7 @@ dns_ssu_mtypefromstring(const char *str, dns_ssumatchtype_t *mtype) {
 	} else if (strcasecmp(str, "external") == 0) {
 		*mtype = dns_ssumatchtype_external;
 	} else {
-		return (ISC_R_NOTFOUND);
+		return ISC_R_NOTFOUND;
 	}
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }

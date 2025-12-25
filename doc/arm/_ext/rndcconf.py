@@ -15,10 +15,14 @@
 Sphinx domain "rndcconf". See iscconf.py for details.
 """
 
+from pathlib import Path
+
 from docutils import nodes
 
 import iscconf
 import parsegrammar
+
+grammar_path = Path(__file__).resolve().parent.parent.parent / "misc" / "rndc.grammar"
 
 
 class ToBeReplacedStatementList(nodes.General, nodes.Element):
@@ -29,8 +33,9 @@ class ToBeReplacedStatementList(nodes.General, nodes.Element):
 
 
 def setup(app):
-    with open("../misc/rndc.grammar", encoding="utf-8") as filein:
+    with open(grammar_path, encoding="utf-8") as filein:
         grammar = parsegrammar.parse_mapbody(filein)
+
     return iscconf.setup(
         app, "rndcconf", "rndc.conf", ToBeReplacedStatementList, grammar
     )

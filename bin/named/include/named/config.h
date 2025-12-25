@@ -27,6 +27,9 @@
 isc_result_t
 named_config_parsedefaults(cfg_parser_t *parser, cfg_obj_t **conf);
 
+isc_result_t
+named_config_parsefile(cfg_parser_t *parser, cfg_obj_t **conf);
+
 const char *
 named_config_getdefault(void);
 
@@ -57,17 +60,17 @@ named_config_getremotesdef(const cfg_obj_t *cctx, const char *list,
 			   const char *name, const cfg_obj_t **ret);
 
 isc_result_t
-named_config_getipandkeylist(const cfg_obj_t *config, const char *listtype,
-			     const cfg_obj_t *list, isc_mem_t *mctx,
-			     dns_ipkeylist_t *ipkl);
+named_config_getipandkeylist(const cfg_obj_t *config, const cfg_obj_t *list,
+			     isc_mem_t *mctx, dns_ipkeylist_t *ipkl);
 
 isc_result_t
 named_config_getport(const cfg_obj_t *config, const char *type,
 		     in_port_t *portp);
 
 isc_result_t
-named_config_getkeyalgorithm(const char *str, const dns_name_t **name,
+named_config_getkeyalgorithm(const char *str, unsigned int *typep,
 			     uint16_t *digestbits);
+
 isc_result_t
-named_config_getkeyalgorithm2(const char *str, const dns_name_t **name,
-			      unsigned int *typep, uint16_t *digestbits);
+named_config_findopt(const cfg_obj_t *opts1, const cfg_obj_t *opts2,
+		     const char *name, const cfg_obj_t **objp);

@@ -17,17 +17,15 @@
 
 #include <isc/barrier.h>
 #include <isc/job.h>
-#include <isc/lang.h>
 #include <isc/loop.h>
 #include <isc/magic.h>
 #include <isc/mem.h>
-#include <isc/qsbr.h>
 #include <isc/refcount.h>
 #include <isc/result.h>
 #include <isc/signal.h>
-#include <isc/stack.h>
 #include <isc/thread.h>
 #include <isc/types.h>
+#include <isc/urcu.h>
 #include <isc/uv.h>
 #include <isc/work.h>
 
@@ -45,10 +43,8 @@ struct isc_loop {
 	isc_refcount_t references;
 	isc_thread_t thread;
 
-	isc_loopmgr_t *loopmgr;
-
 	uv_loop_t loop;
-	uint32_t tid;
+	isc_tid_t tid;
 
 	isc_mem_t *mctx;
 
@@ -58,7 +54,7 @@ struct isc_loop {
 
 	/* Async queue */
 	uv_async_t async_trigger;
-	isc_asyncstack_t async_jobs;
+	isc_jobqueue_t async_jobs;
 
 	/* Jobs queue */
 	uv_idle_t run_trigger;
@@ -69,16 +65,14 @@ struct isc_loop {
 
 	/* Shutdown */
 	uv_async_t shutdown_trigger;
-	isc_joblist_t setup_jobs;
-	isc_joblist_t teardown_jobs;
+	isc_jobqueue_t setup_jobs;
+	isc_jobqueue_t teardown_jobs;
 
 	/* Destroy */
 	uv_async_t destroy_trigger;
 
 	/* safe memory reclamation */
-	uv_async_t wakeup_trigger;
 	uv_prepare_t quiescent;
-	isc_qsbr_phase_t qsbr_phase;
 };
 
 /*
@@ -87,7 +81,7 @@ struct isc_loop {
 #define LOOPMGR_MAGIC	 ISC_MAGIC('L', 'o', 'o', 'M')
 #define VALID_LOOPMGR(t) ISC_MAGIC_VALID(t, LOOPMGR_MAGIC)
 
-struct isc_loopmgr {
+typedef struct isc_loopmgr {
 	int magic;
 	isc_mem_t *mctx;
 
@@ -113,10 +107,8 @@ struct isc_loopmgr {
 
 	/* per-thread objects */
 	isc_loop_t *loops;
-
-	/* safe memory reclamation */
-	isc_qsbr_t qsbr;
-};
+	isc_loop_t *helpers;
+} isc_loopmgr_t;
 
 /*
  * Signal Handler

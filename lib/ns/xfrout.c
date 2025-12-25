@@ -15,6 +15,8 @@
 #include <stdbool.h>
 
 #include <isc/formatcheck.h>
+#include <isc/list.h>
+#include <isc/log.h>
 #include <isc/mem.h>
 #include <isc/netmgr.h>
 #include <isc/result.h>
@@ -41,7 +43,6 @@
 #include <dns/zt.h>
 
 #include <ns/client.h>
-#include <ns/log.h>
 #include <ns/server.h>
 #include <ns/stats.h>
 #include <ns/xfrout.h>
@@ -56,14 +57,14 @@
  *  - IXFR over UDP
  */
 
-#define XFROUT_COMMON_LOGARGS \
-	ns_lctx, DNS_LOGCATEGORY_XFER_OUT, NS_LOGMODULE_XFER_OUT
+#define XFROUT_PROTOCOL_LOGARGS \
+	DNS_LOGCATEGORY_XFER_OUT, NS_LOGMODULE_XFER_OUT, ISC_LOG_INFO
 
-#define XFROUT_PROTOCOL_LOGARGS XFROUT_COMMON_LOGARGS, ISC_LOG_INFO
+#define XFROUT_DEBUG_LOGARGS(n) \
+	DNS_LOGCATEGORY_XFER_OUT, NS_LOGMODULE_XFER_OUT, ISC_LOG_DEBUG(n)
 
-#define XFROUT_DEBUG_LOGARGS(n) XFROUT_COMMON_LOGARGS, ISC_LOG_DEBUG(n)
-
-#define XFROUT_RR_LOGARGS XFROUT_COMMON_LOGARGS, XFROUT_RR_LOGLEVEL
+#define XFROUT_RR_LOGARGS \
+	DNS_LOGCATEGORY_XFER_OUT, NS_LOGMODULE_XFER_OUT, XFROUT_RR_LOGLEVEL
 
 #define XFROUT_RR_LOGLEVEL ISC_LOG_DEBUG(8)
 
@@ -135,9 +136,7 @@ log_rr(dns_name_t *name, dns_rdata_t *rdata, uint32_t ttl) {
 	rdl.type = rdata->type;
 	rdl.rdclass = rdata->rdclass;
 	rdl.ttl = ttl;
-	if (rdata->type == dns_rdatatype_sig ||
-	    rdata->type == dns_rdatatype_rrsig)
-	{
+	if (dns_rdatatype_issig(rdata->type)) {
 		rdl.covers = dns_rdata_covers(rdata);
 	} else {
 		rdl.covers = dns_rdatatype_none;
@@ -247,23 +246,23 @@ ixfr_rrstream_create(isc_mem_t *mctx, const char *journal_filename,
 				    sizep));
 
 	*sp = (rrstream_t *)s;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 
 failure:
 	ixfr_rrstream_destroy((rrstream_t **)(void *)&s);
-	return (result);
+	return result;
 }
 
 static isc_result_t
 ixfr_rrstream_first(rrstream_t *rs) {
 	ixfr_rrstream_t *s = (ixfr_rrstream_t *)rs;
-	return (dns_journal_first_rr(s->journal));
+	return dns_journal_first_rr(s->journal);
 }
 
 static isc_result_t
 ixfr_rrstream_next(rrstream_t *rs) {
 	ixfr_rrstream_t *s = (ixfr_rrstream_t *)rs;
-	return (dns_journal_next_rr(s->journal));
+	return dns_journal_next_rr(s->journal);
 }
 
 static void
@@ -328,11 +327,11 @@ axfr_rrstream_create(isc_mem_t *mctx, dns_db_t *db, dns_dbversion_t *ver,
 	s->it_valid = true;
 
 	*sp = (rrstream_t *)s;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 
 failure:
 	axfr_rrstream_destroy((rrstream_t **)(void *)&s);
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -341,7 +340,7 @@ axfr_rrstream_first(rrstream_t *rs) {
 	isc_result_t result;
 	result = dns_rriterator_first(&s->it);
 	if (result != ISC_R_SUCCESS) {
-		return (result);
+		return result;
 	}
 	/* Skip SOA records. */
 	for (;;) {
@@ -358,7 +357,7 @@ axfr_rrstream_first(rrstream_t *rs) {
 			break;
 		}
 	}
-	return (result);
+	return result;
 }
 
 static isc_result_t
@@ -381,7 +380,7 @@ axfr_rrstream_next(rrstream_t *rs) {
 			break;
 		}
 	}
-	return (result);
+	return result;
 }
 
 static void
@@ -448,23 +447,23 @@ soa_rrstream_create(isc_mem_t *mctx, dns_db_t *db, dns_dbversion_t *ver,
 				    &s->soa_tuple));
 
 	*sp = (rrstream_t *)s;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 
 failure:
 	soa_rrstream_destroy((rrstream_t **)(void *)&s);
-	return (result);
+	return result;
 }
 
 static isc_result_t
 soa_rrstream_first(rrstream_t *rs) {
 	UNUSED(rs);
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
 soa_rrstream_next(rrstream_t *rs) {
 	UNUSED(rs);
-	return (ISC_R_NOMORE);
+	return ISC_R_NOMORE;
 }
 
 static void
@@ -552,7 +551,7 @@ compound_rrstream_create(isc_mem_t *mctx, rrstream_t **soa_stream,
 	*data_stream = NULL;
 	*soa_stream = NULL;
 	*sp = (rrstream_t *)s;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static isc_result_t
@@ -563,7 +562,7 @@ compound_rrstream_first(rrstream_t *rs) {
 		rrstream_t *curstream = s->components[s->state];
 		s->result = curstream->methods->first(curstream);
 	} while (s->result == ISC_R_NOMORE && s->state < 2);
-	return (s->result);
+	return s->result;
 }
 
 static isc_result_t
@@ -578,13 +577,13 @@ compound_rrstream_next(rrstream_t *rs) {
 		 */
 		curstream->methods->pause(curstream);
 		if (s->state == 2) {
-			return (ISC_R_NOMORE);
+			return ISC_R_NOMORE;
 		}
 		s->state++;
 		curstream = s->components[s->state];
 		s->result = curstream->methods->first(curstream);
 	}
-	return (s->result);
+	return s->result;
 }
 
 static void
@@ -674,6 +673,9 @@ typedef struct {
 	isc_nm_timer_t *maxtime_timer;
 
 	uint64_t idletime; /*%< XFR idle timeout (in ms) */
+
+	/* Delayed send */
+	isc_nm_timer_t *delayed_send_timer;
 } xfrout_ctx_t;
 
 static void
@@ -712,6 +714,9 @@ static void
 xfrout_log(xfrout_ctx_t *xfr, int level, const char *fmt, ...)
 	ISC_FORMAT_PRINTF(3, 4);
 
+static void
+xfrout_delayed_timeout(void *arg, isc_result_t result);
+
 /**************************************************************************/
 
 void
@@ -727,15 +732,13 @@ ns_xfr_start(ns_client_t *client, dns_rdatatype_t reqtype) {
 	rrstream_t *data_stream = NULL;
 	rrstream_t *stream = NULL;
 	dns_difftuple_t *current_soa_tuple = NULL;
-	dns_name_t *soa_name;
-	dns_rdataset_t *soa_rdataset;
 	dns_rdata_t soa_rdata = DNS_RDATA_INIT;
 	bool have_soa = false;
 	const char *mnemonic = NULL;
 	isc_mem_t *mctx = client->manager->mctx;
 	dns_message_t *request = client->message;
 	xfrout_ctx_t *xfr = NULL;
-	dns_transfer_format_t format = client->view->transfer_format;
+	dns_transfer_format_t format = client->inner.view->transfer_format;
 	isc_netaddr_t na;
 	dns_peer_t *peer = NULL;
 	isc_buffer_t *tsigbuf = NULL;
@@ -766,46 +769,45 @@ ns_xfr_start(ns_client_t *client, dns_rdatatype_t reqtype) {
 	 */
 	result = isc_quota_acquire(&client->manager->sctx->xfroutquota);
 	if (result != ISC_R_SUCCESS) {
-		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_WARNING,
-			      "%s request denied: %s", mnemonic,
-			      isc_result_totext(result));
+		isc_log_write(DNS_LOGCATEGORY_XFER_OUT, NS_LOGMODULE_XFER_OUT,
+			      ISC_LOG_WARNING, "%s request denied: %s",
+			      mnemonic, isc_result_totext(result));
 		goto max_quota;
 	}
 
 	/*
 	 * Interpret the question section.
 	 */
-	result = dns_message_firstname(request, DNS_SECTION_QUESTION);
-	INSIST(result == ISC_R_SUCCESS);
+	INSIST(!ISC_LIST_EMPTY(request->sections[DNS_SECTION_QUESTION]));
 
 	/*
 	 * The question section must contain exactly one question, and
 	 * it must be for AXFR/IXFR as appropriate.
 	 */
-	question_name = NULL;
-	dns_message_currentname(request, DNS_SECTION_QUESTION, &question_name);
+	question_name = ISC_LIST_HEAD(request->sections[DNS_SECTION_QUESTION]);
 	question_rdataset = ISC_LIST_HEAD(question_name->list);
 	question_class = question_rdataset->rdclass;
 	INSIST(question_rdataset->type == reqtype);
 	if (ISC_LIST_NEXT(question_rdataset, link) != NULL) {
 		FAILC(DNS_R_FORMERR, "multiple questions");
 	}
-	result = dns_message_nextname(request, DNS_SECTION_QUESTION);
-	if (result != ISC_R_NOMORE) {
+
+	if (ISC_LIST_NEXT(question_name, link) != NULL) {
 		FAILC(DNS_R_FORMERR, "multiple questions");
 	}
 
-	result = dns_view_findzone(client->view, question_name, &zone);
+	result = dns_view_findzone(client->inner.view, question_name,
+				   DNS_ZTFIND_EXACT, &zone);
 	if (result != ISC_R_SUCCESS || dns_zone_gettype(zone) == dns_zone_dlz) {
 		/*
 		 * The normal zone table does not have a match, or this is
 		 * marked in the zone table as a DLZ zone. Check the DLZ
 		 * databases for a match.
 		 */
-		if (!ISC_LIST_EMPTY(client->view->dlz_searched)) {
-			result = dns_dlzallowzonexfr(client->view,
-						     question_name,
-						     &client->peeraddr, &db);
+		if (!ISC_LIST_EMPTY(client->inner.view->dlz_searched)) {
+			result = dns_dlzallowzonexfr(
+				client->inner.view, question_name,
+				&client->inner.peeraddr, &db);
 			if (result == ISC_R_DEFAULT) {
 				useviewacl = true;
 				result = ISC_R_SUCCESS;
@@ -865,14 +867,7 @@ ns_xfr_start(ns_client_t *client, dns_rdatatype_t reqtype) {
 	 * Check the authority section.  Look for a SOA record with
 	 * the same name and class as the question.
 	 */
-	for (result = dns_message_firstname(request, DNS_SECTION_AUTHORITY);
-	     result == ISC_R_SUCCESS;
-	     result = dns_message_nextname(request, DNS_SECTION_AUTHORITY))
-	{
-		soa_name = NULL;
-		dns_message_currentname(request, DNS_SECTION_AUTHORITY,
-					&soa_name);
-
+	MSG_SECTION_FOREACH (request, DNS_SECTION_AUTHORITY, soa_name) {
 		/*
 		 * Ignore data whose owner name is not the zone apex.
 		 */
@@ -880,10 +875,7 @@ ns_xfr_start(ns_client_t *client, dns_rdatatype_t reqtype) {
 			continue;
 		}
 
-		for (soa_rdataset = ISC_LIST_HEAD(soa_name->list);
-		     soa_rdataset != NULL;
-		     soa_rdataset = ISC_LIST_NEXT(soa_rdataset, link))
-		{
+		ISC_LIST_FOREACH (soa_name->list, soa_rdataset, link) {
 			/*
 			 * Ignore non-SOA data.
 			 */
@@ -921,9 +913,9 @@ got_soa:
 		dns_acl_t *acl;
 
 		ns_client_aclmsg("zone transfer", question_name, reqtype,
-				 client->view->rdclass, msg, sizeof(msg));
+				 client->inner.view->rdclass, msg, sizeof(msg));
 		if (useviewacl) {
-			acl = client->view->transferacl;
+			acl = client->inner.view->transferacl;
 		} else {
 			acl = dns_zone_getxfracl(zone);
 		}
@@ -935,7 +927,7 @@ got_soa:
 	 * AXFR over UDP is not possible.
 	 */
 	if (reqtype == dns_rdatatype_axfr &&
-	    (client->attributes & NS_CLIENTATTR_TCP) == 0)
+	    (client->inner.attributes & NS_CLIENTATTR_TCP) == 0)
 	{
 		FAILC(DNS_R_FORMERR, "attempted AXFR over UDP");
 	}
@@ -943,8 +935,8 @@ got_soa:
 	/*
 	 * Look up the requesting server in the peer table.
 	 */
-	isc_netaddr_fromsockaddr(&na, &client->peeraddr);
-	(void)dns_peerlist_peerbyaddr(client->view->peers, &na, &peer);
+	isc_netaddr_fromsockaddr(&na, &client->inner.peeraddr);
+	(void)dns_peerlist_peerbyaddr(client->inner.view->peers, &na, &peer);
 
 	/*
 	 * Decide on the transfer format (one-answer or many-answers).
@@ -986,7 +978,7 @@ got_soa:
 		 * IXFR over UDP (currently, we always do).
 		 */
 		if (DNS_SERIAL_GE(begin_serial, current_serial) ||
-		    (client->attributes & NS_CLIENTATTR_TCP) == 0)
+		    (client->inner.attributes & NS_CLIENTATTR_TCP) == 0)
 		{
 			CHECK(soa_rrstream_create(mctx, db, ver, &stream));
 			is_poll = true;
@@ -997,10 +989,10 @@ got_soa:
 		 * Outgoing IXFR may have been disabled for this peer
 		 * or globally.
 		 */
-		if ((client->attributes & NS_CLIENTATTR_TCP) != 0) {
+		if ((client->inner.attributes & NS_CLIENTATTR_TCP) != 0) {
 			bool provide_ixfr;
 
-			provide_ixfr = client->view->provideixfr;
+			provide_ixfr = client->inner.view->provideixfr;
 			if (peer != NULL) {
 				(void)dns_peer_getprovideixfr(peer,
 							      &provide_ixfr);
@@ -1104,7 +1096,7 @@ have_stream:
 	CHECK(xfr->stream->methods->first(xfr->stream));
 
 	if (xfr->tsigkey != NULL) {
-		dns_name_format(&xfr->tsigkey->name, keyname, sizeof(keyname));
+		dns_name_format(xfr->tsigkey->name, keyname, sizeof(keyname));
 	} else {
 		keyname[0] = '\0';
 	}
@@ -1129,7 +1121,8 @@ have_stream:
 	if (zone != NULL) {
 		dns_zone_getraw(zone, &raw);
 		mayberaw = (raw != NULL) ? raw : zone;
-		if ((client->attributes & NS_CLIENTATTR_WANTEXPIRE) != 0 &&
+		if ((client->inner.attributes & NS_CLIENTATTR_WANTEXPIRE) !=
+			    0 &&
 		    (dns_zone_gettype(mayberaw) == dns_zone_secondary ||
 		     dns_zone_gettype(mayberaw) == dns_zone_mirror))
 		{
@@ -1137,9 +1130,12 @@ have_stream:
 			uint32_t secs;
 			dns_zone_getexpiretime(zone, &expiretime);
 			secs = isc_time_seconds(&expiretime);
-			if (secs >= client->now && result == ISC_R_SUCCESS) {
-				client->attributes |= NS_CLIENTATTR_HAVEEXPIRE;
-				client->expire = secs - client->now;
+			if (secs >= client->inner.now &&
+			    result == ISC_R_SUCCESS)
+			{
+				client->inner.attributes |=
+					NS_CLIENTATTR_HAVEEXPIRE;
+				client->inner.expire = secs - client->inner.now;
 			}
 		}
 		if (raw != NULL) {
@@ -1200,7 +1196,7 @@ failure:
 			      NS_LOGMODULE_XFER_OUT, ISC_LOG_DEBUG(3),
 			      "zone transfer setup failed");
 		ns_client_error(client, result);
-		isc_nmhandle_detach(&client->reqhandle);
+		isc_nmhandle_detach(&client->inner.reqhandle);
 	}
 }
 
@@ -1244,8 +1240,11 @@ xfrout_ctx_create(isc_mem_t *mctx, ns_client_t *client, unsigned int id,
 
 	xfr->stats.start = isc_time_now();
 
-	isc_nm_timer_create(xfr->client->handle, xfrout_client_timeout, xfr,
-			    &xfr->maxtime_timer);
+	isc_nm_timer_create(xfr->client->inner.handle, xfrout_client_timeout,
+			    xfr, &xfr->maxtime_timer);
+
+	isc_nm_timer_create(xfr->client->inner.handle, xfrout_delayed_timeout,
+			    xfr, &xfr->delayed_send_timer);
 
 	/*
 	 * Allocate a temporary buffer for the uncompressed response
@@ -1257,7 +1256,7 @@ xfrout_ctx_create(isc_mem_t *mctx, ns_client_t *client, unsigned int id,
 	 * Note that although 65535-byte RRs are allowed in principle, they
 	 * cannot be zone-transferred (at least not if uncompressible),
 	 * because the message and RR headers would push the size of the
-	 * TCP message over the 65536 byte limit.
+	 * TCP message over the 65535 byte limit.
 	 */
 	mem = isc_mem_get(mctx, len);
 	isc_buffer_init(&xfr->buf, mem, len);
@@ -1278,6 +1277,74 @@ xfrout_ctx_create(isc_mem_t *mctx, ns_client_t *client, unsigned int id,
 	xfr->stream = stream;
 
 	*xfrp = xfr;
+}
+
+static void
+xfrout_send(xfrout_ctx_t *xfr) {
+	const bool is_tcp =
+		((xfr->client->inner.attributes & NS_CLIENTATTR_TCP) != 0);
+
+	if (is_tcp) {
+		isc_region_t used;
+
+		isc_buffer_usedregion(&xfr->txbuf, &used);
+
+		isc_nmhandle_attach(xfr->client->inner.handle,
+				    &xfr->client->inner.sendhandle);
+		if (xfr->idletime > 0) {
+			isc_nmhandle_setwritetimeout(
+				xfr->client->inner.sendhandle, xfr->idletime);
+		}
+		isc_nm_send(xfr->client->inner.sendhandle, &used,
+			    xfrout_senddone, xfr);
+		xfr->sends++;
+		xfr->cbytes = used.length;
+	} else {
+		ns_client_send(xfr->client);
+		xfr->stream->methods->pause(xfr->stream);
+		isc_nmhandle_detach(&xfr->client->inner.reqhandle);
+		xfrout_ctx_destroy(&xfr);
+	}
+}
+
+static void
+xfrout_delayed_timeout(void *arg, isc_result_t result) {
+	xfrout_ctx_t *xfr = (xfrout_ctx_t *)arg;
+	UNUSED(result);
+
+	isc_nm_timer_stop(xfr->delayed_send_timer);
+	xfrout_send(xfr);
+}
+
+static void
+xfrout_enqueue_send(xfrout_ctx_t *xfr) {
+	uint64_t timeout = 0;
+
+	/*
+	 * System test helper options to simulate network issues.
+	 *
+	 * Both "transferslowly" and "transferstuck" are not meant to be
+	 * used together (and are not actually used this way).
+	 */
+	if (ns_server_getoption(xfr->client->manager->sctx,
+				NS_SERVER_TRANSFERSLOWLY))
+	{
+		/* Sleep for a bit over a second. */
+		timeout = 1000;
+	} else if (ns_server_getoption(xfr->client->manager->sctx,
+				       NS_SERVER_TRANSFERSTUCK))
+	{
+		/* Sleep for a bit over a minute. */
+		timeout = 60 * 1000;
+	}
+
+	if (timeout == 0) {
+		xfrout_send(xfr);
+		return;
+	}
+
+	/* delay */
+	isc_nm_timer_start(xfr->delayed_send_timer, timeout);
 }
 
 /*
@@ -1306,7 +1373,7 @@ sendstream(xfrout_ctx_t *xfr) {
 	isc_buffer_clear(&xfr->buf);
 	isc_buffer_clear(&xfr->txbuf);
 
-	is_tcp = ((xfr->client->attributes & NS_CLIENTATTR_TCP) != 0);
+	is_tcp = ((xfr->client->inner.attributes & NS_CLIENTATTR_TCP) != 0);
 	if (!is_tcp) {
 		/*
 		 * In the UDP case, we put the response data directly into
@@ -1323,14 +1390,14 @@ sendstream(xfrout_ctx_t *xfr) {
 		 * message.
 		 */
 
-		dns_message_create(xfr->mctx, DNS_MESSAGE_INTENTRENDER,
-				   &tcpmsg);
+		dns_message_create(xfr->mctx, NULL, NULL,
+				   DNS_MESSAGE_INTENTRENDER, &tcpmsg);
 		msg = tcpmsg;
 
 		msg->id = xfr->id;
 		msg->rcode = dns_rcode_noerror;
 		msg->flags = DNS_MESSAGEFLAG_QR | DNS_MESSAGEFLAG_AA;
-		if ((xfr->client->attributes & NS_CLIENTATTR_RA) != 0) {
+		if ((xfr->client->inner.attributes & NS_CLIENTATTR_RA) != 0) {
 			msg->flags |= DNS_MESSAGEFLAG_RA;
 		}
 		CHECK(dns_message_settsigkey(msg, xfr->tsigkey));
@@ -1343,7 +1410,9 @@ sendstream(xfrout_ctx_t *xfr) {
 		/*
 		 * Add a EDNS option to the message?
 		 */
-		if ((xfr->client->attributes & NS_CLIENTATTR_WANTOPT) != 0) {
+		if ((xfr->client->inner.attributes & NS_CLIENTATTR_WANTOPT) !=
+		    0)
+		{
 			dns_rdataset_t *opt = NULL;
 
 			CHECK(ns_client_addopt(xfr->client, msg, &opt));
@@ -1351,8 +1420,10 @@ sendstream(xfrout_ctx_t *xfr) {
 			/*
 			 * Add to first message only.
 			 */
-			xfr->client->attributes &= ~NS_CLIENTATTR_WANTNSID;
-			xfr->client->attributes &= ~NS_CLIENTATTR_HAVEEXPIRE;
+			xfr->client->inner.attributes &=
+				~NS_CLIENTATTR_WANTNSID;
+			xfr->client->inner.attributes &=
+				~NS_CLIENTATTR_HAVEEXPIRE;
 		}
 
 		/*
@@ -1450,7 +1521,7 @@ sendstream(xfrout_ctx_t *xfr) {
 			break;
 		}
 
-		if (isc_log_wouldlog(ns_lctx, XFROUT_RR_LOGLEVEL)) {
+		if (isc_log_wouldlog(XFROUT_RR_LOGLEVEL)) {
 			log_rr(name, rdata, ttl); /* XXX */
 		}
 
@@ -1468,16 +1539,13 @@ sendstream(xfrout_ctx_t *xfr) {
 		isc_buffer_availableregion(&xfr->buf, &r);
 		r.length = rdata->length;
 		isc_buffer_putmem(&xfr->buf, rdata->data, rdata->length);
-		dns_rdata_init(msgrdata);
 		dns_rdata_fromregion(msgrdata, rdata->rdclass, rdata->type, &r);
 
 		dns_message_gettemprdatalist(msg, &msgrdl);
 		msgrdl->type = rdata->type;
 		msgrdl->rdclass = rdata->rdclass;
 		msgrdl->ttl = ttl;
-		if (rdata->type == dns_rdatatype_sig ||
-		    rdata->type == dns_rdatatype_rrsig)
-		{
+		if (dns_rdatatype_issig(rdata->type)) {
 			msgrdl->covers = dns_rdata_covers(rdata);
 		} else {
 			msgrdl->covers = dns_rdatatype_none;
@@ -1518,7 +1586,6 @@ sendstream(xfrout_ctx_t *xfr) {
 	}
 
 	if (is_tcp) {
-		isc_region_t used;
 		dns_compress_init(&cctx, xfr->mctx,
 				  DNS_COMPRESS_CASE | DNS_COMPRESS_LARGE);
 		cleanup_cctx = true;
@@ -1529,60 +1596,15 @@ sendstream(xfrout_ctx_t *xfr) {
 		dns_compress_invalidate(&cctx);
 		cleanup_cctx = false;
 
-		isc_buffer_usedregion(&xfr->txbuf, &used);
-
 		xfrout_log(xfr, ISC_LOG_DEBUG(8),
-			   "sending TCP message of %d bytes", used.length);
+			   "sending TCP message of %d bytes",
+			   isc_buffer_usedlength(&xfr->txbuf));
 
-		/* System test helper options to simulate network issues. */
-		if (ns_server_getoption(xfr->client->manager->sctx,
-					NS_SERVER_TRANSFERSLOWLY))
-		{
-			/* Sleep for a bit over a second. */
-			select(0, NULL, NULL, NULL,
-			       &(struct timeval){ 1, 1000 });
-		}
-		if (ns_server_getoption(xfr->client->manager->sctx,
-					NS_SERVER_TRANSFERSTUCK))
-		{
-			/* Sleep for a bit over a minute. */
-			select(0, NULL, NULL, NULL,
-			       &(struct timeval){ 60, 1000 });
-		}
-
-		isc_nmhandle_attach(xfr->client->handle,
-				    &xfr->client->sendhandle);
-		if (xfr->idletime > 0) {
-			isc_nmhandle_setwritetimeout(xfr->client->sendhandle,
-						     xfr->idletime);
-		}
-		isc_nm_send(xfr->client->sendhandle, &used, xfrout_senddone,
-			    xfr);
-		xfr->sends++;
-		xfr->cbytes = used.length;
+		xfrout_enqueue_send(xfr);
 	} else {
 		xfrout_log(xfr, ISC_LOG_DEBUG(8), "sending IXFR UDP response");
 
-		/* System test helper options to simulate network issues. */
-		if (ns_server_getoption(xfr->client->manager->sctx,
-					NS_SERVER_TRANSFERSLOWLY))
-		{
-			/* Sleep for a bit over a second. */
-			select(0, NULL, NULL, NULL,
-			       &(struct timeval){ 1, 1000 });
-		}
-		if (ns_server_getoption(xfr->client->manager->sctx,
-					NS_SERVER_TRANSFERSTUCK))
-		{
-			/* Sleep for a bit over a minute. */
-			select(0, NULL, NULL, NULL,
-			       &(struct timeval){ 60, 1000 });
-		}
-
-		ns_client_send(xfr->client);
-		xfr->stream->methods->pause(xfr->stream);
-		isc_nmhandle_detach(&xfr->client->reqhandle);
-		xfrout_ctx_destroy(&xfr);
+		xfrout_enqueue_send(xfr);
 		return;
 	}
 
@@ -1607,10 +1629,6 @@ failure:
 		return;
 	}
 
-	if (xfr->client->sendhandle != NULL) {
-		isc_nmhandle_detach(&xfr->client->sendhandle);
-	}
-
 	xfrout_fail(xfr, result, "sending zone data");
 }
 
@@ -1620,6 +1638,9 @@ xfrout_ctx_destroy(xfrout_ctx_t **xfrp) {
 	*xfrp = NULL;
 
 	INSIST(xfr->sends == 0);
+
+	isc_nm_timer_stop(xfr->delayed_send_timer);
+	isc_nm_timer_detach(&xfr->delayed_send_timer);
 
 	isc_nm_timer_stop(xfr->maxtime_timer);
 	isc_nm_timer_detach(&xfr->maxtime_timer);
@@ -1656,14 +1677,14 @@ static void
 xfrout_senddone(isc_nmhandle_t *handle, isc_result_t result, void *arg) {
 	xfrout_ctx_t *xfr = (xfrout_ctx_t *)arg;
 
-	REQUIRE((xfr->client->attributes & NS_CLIENTATTR_TCP) != 0);
+	REQUIRE((xfr->client->inner.attributes & NS_CLIENTATTR_TCP) != 0);
 
-	INSIST(handle == xfr->client->handle);
+	INSIST(handle == xfr->client->inner.handle);
 
 	xfr->sends--;
 	INSIST(xfr->sends == 0);
 
-	isc_nmhandle_detach(&xfr->client->sendhandle);
+	isc_nmhandle_detach(&xfr->client->inner.sendhandle);
 
 	/*
 	 * Update transfer statistics if sending succeeded, accounting for the
@@ -1706,7 +1727,7 @@ xfrout_senddone(isc_nmhandle_t *handle, isc_result_t result, void *arg) {
 		 * We're done, unreference the handle and destroy the xfr
 		 * context.
 		 */
-		isc_nmhandle_detach(&xfr->client->reqhandle);
+		isc_nmhandle_detach(&xfr->client->inner.reqhandle);
 		xfrout_ctx_destroy(&xfr);
 	}
 }
@@ -1724,7 +1745,7 @@ xfrout_maybe_destroy(xfrout_ctx_t *xfr) {
 	REQUIRE(xfr->shuttingdown);
 
 	ns_client_drop(xfr->client, ISC_R_CANCELED);
-	isc_nmhandle_detach(&xfr->client->reqhandle);
+	isc_nmhandle_detach(&xfr->client->inner.reqhandle);
 	xfrout_ctx_destroy(&xfr);
 }
 

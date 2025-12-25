@@ -15,6 +15,7 @@
 
 #include <stdbool.h>
 
+#include <isc/log.h>
 #include <isc/mem.h>
 #include <isc/netmgr.h>
 #include <isc/util.h>
@@ -22,7 +23,6 @@
 #include <dns/acl.h>
 
 #include <ns/listenlist.h>
-#include <ns/log.h>
 
 static void
 destroy(ns_listenlist_t *list);
@@ -31,7 +31,8 @@ static isc_result_t
 listenelt_create(isc_mem_t *mctx, in_port_t port, dns_acl_t *acl,
 		 const uint16_t family, const bool is_http, bool tls,
 		 const ns_listen_tls_params_t *tls_params,
-		 isc_tlsctx_cache_t *tlsctx_cache, ns_listenelt_t **target) {
+		 isc_tlsctx_cache_t *tlsctx_cache, isc_nm_proxy_type_t proxy,
+		 ns_listenelt_t **target) {
 	ns_listenelt_t *elt = NULL;
 	isc_result_t result = ISC_R_SUCCESS;
 	isc_tlsctx_t *sslctx = NULL;
@@ -117,8 +118,7 @@ listenelt_create(isc_mem_t *mctx, in_port_t port, dns_acl_t *acl,
 				if (!isc_tlsctx_load_dhparams(
 					    sslctx, tls_params->dhparam_file))
 				{
-					isc_log_write(ns_lctx,
-						      NS_LOGCATEGORY_GENERAL,
+					isc_log_write(NS_LOGCATEGORY_GENERAL,
 						      NS_LOGMODULE_INTERFACEMGR,
 						      ISC_LOG_ERROR,
 						      "loading of dhparam-file "
@@ -132,6 +132,11 @@ listenelt_create(isc_mem_t *mctx, in_port_t port, dns_acl_t *acl,
 			if (tls_params->ciphers != NULL) {
 				isc_tlsctx_set_cipherlist(sslctx,
 							  tls_params->ciphers);
+			}
+
+			if (tls_params->cipher_suites != NULL) {
+				isc_tlsctx_set_cipher_suites(
+					sslctx, tls_params->cipher_suites);
 			}
 
 			if (tls_params->prefer_server_ciphers_set) {
@@ -192,9 +197,10 @@ listenelt_create(isc_mem_t *mctx, in_port_t port, dns_acl_t *acl,
 	elt->http_endpoints_number = 0;
 	elt->http_max_clients = 0;
 	elt->max_concurrent_streams = 0;
+	elt->proxy = proxy;
 
 	*target = elt;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 tls_error:
 	if (sslctx != NULL) {
 		isc_tlsctx_free(&sslctx);
@@ -203,23 +209,25 @@ tls_error:
 	if (store != NULL && store != found_store) {
 		isc_tls_cert_store_free(&store);
 	}
-	return (result);
+	return result;
 }
 
 isc_result_t
 ns_listenelt_create(isc_mem_t *mctx, in_port_t port, dns_acl_t *acl,
 		    const uint16_t family, bool tls,
 		    const ns_listen_tls_params_t *tls_params,
-		    isc_tlsctx_cache_t *tlsctx_cache, ns_listenelt_t **target) {
+		    isc_tlsctx_cache_t *tlsctx_cache, isc_nm_proxy_type_t proxy,
+		    ns_listenelt_t **target) {
 	return listenelt_create(mctx, port, acl, family, false, tls, tls_params,
-				tlsctx_cache, target);
+				tlsctx_cache, proxy, target);
 }
 
 isc_result_t
 ns_listenelt_create_http(isc_mem_t *mctx, in_port_t http_port, dns_acl_t *acl,
 			 const uint16_t family, bool tls,
 			 const ns_listen_tls_params_t *tls_params,
-			 isc_tlsctx_cache_t *tlsctx_cache, char **endpoints,
+			 isc_tlsctx_cache_t *tlsctx_cache,
+			 isc_nm_proxy_type_t proxy, char **endpoints,
 			 size_t nendpoints, const uint32_t max_clients,
 			 const uint32_t max_streams, ns_listenelt_t **target) {
 	isc_result_t result;
@@ -229,7 +237,7 @@ ns_listenelt_create_http(isc_mem_t *mctx, in_port_t http_port, dns_acl_t *acl,
 	REQUIRE(nendpoints > 0);
 
 	result = listenelt_create(mctx, http_port, acl, family, true, tls,
-				  tls_params, tlsctx_cache, target);
+				  tls_params, tlsctx_cache, proxy, target);
 	if (result == ISC_R_SUCCESS) {
 		(*target)->is_http = true;
 		(*target)->http_endpoints = endpoints;
@@ -250,7 +258,7 @@ ns_listenelt_create_http(isc_mem_t *mctx, in_port_t http_port, dns_acl_t *acl,
 		}
 		isc_mem_free(mctx, endpoints);
 	}
-	return (result);
+	return result;
 }
 
 void
@@ -284,14 +292,12 @@ ns_listenlist_create(isc_mem_t *mctx, ns_listenlist_t **target) {
 	list->refcount = 1;
 	ISC_LIST_INIT(list->elts);
 	*target = list;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static void
 destroy(ns_listenlist_t *list) {
-	ns_listenelt_t *elt, *next;
-	for (elt = ISC_LIST_HEAD(list->elts); elt != NULL; elt = next) {
-		next = ISC_LIST_NEXT(elt, link);
+	ISC_LIST_FOREACH (list->elts, elt, link) {
 		ns_listenelt_destroy(elt);
 	}
 	isc_mem_put(list->mctx, list, sizeof(*list));
@@ -313,46 +319,4 @@ ns_listenlist_detach(ns_listenlist_t **listp) {
 	if (list->refcount == 0) {
 		destroy(list);
 	}
-}
-
-isc_result_t
-ns_listenlist_default(isc_mem_t *mctx, in_port_t port, bool enabled,
-		      const uint16_t family, ns_listenlist_t **target) {
-	isc_result_t result;
-	dns_acl_t *acl = NULL;
-	ns_listenelt_t *elt = NULL;
-	ns_listenlist_t *list = NULL;
-
-	REQUIRE(target != NULL && *target == NULL);
-	if (enabled) {
-		result = dns_acl_any(mctx, &acl);
-	} else {
-		result = dns_acl_none(mctx, &acl);
-	}
-	if (result != ISC_R_SUCCESS) {
-		goto cleanup;
-	}
-
-	result = ns_listenelt_create(mctx, port, acl, family, false, NULL, NULL,
-				     &elt);
-	if (result != ISC_R_SUCCESS) {
-		goto cleanup_acl;
-	}
-
-	result = ns_listenlist_create(mctx, &list);
-	if (result != ISC_R_SUCCESS) {
-		goto cleanup_listenelt;
-	}
-
-	ISC_LIST_APPEND(list->elts, elt, link);
-
-	*target = list;
-	return (ISC_R_SUCCESS);
-
-cleanup_listenelt:
-	ns_listenelt_destroy(elt);
-cleanup_acl:
-	dns_acl_detach(&acl);
-cleanup:
-	return (result);
 }

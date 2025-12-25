@@ -32,7 +32,6 @@
 #include <dns/acl.h>
 #include <dns/db.h>
 #include <dns/enumtype.h>
-#include <dns/log.h>
 #include <dns/message.h>
 #include <dns/rdataset.h>
 #include <dns/types.h>
@@ -44,7 +43,6 @@
 
 #include <ns/client.h>
 #include <ns/hooks.h>
-#include <ns/log.h>
 #include <ns/query.h>
 #include <ns/types.h>
 
@@ -100,7 +98,7 @@ typedef struct filter_instance {
 /*
  * Client attribute tests.
  */
-#define WANTDNSSEC(c)  (((c)->attributes & NS_CLIENTATTR_WANTDNSSEC) != 0)
+#define WANTDNSSEC(c)  (((c)->inner.attributes & NS_CLIENTATTR_WANTDNSSEC) != 0)
 #define RECURSIONOK(c) (((c)->query.attributes & NS_QUERYATTR_RECURSIONOK) != 0)
 
 /*
@@ -179,7 +177,7 @@ static const char *filter_aaaa_enums[] = { "break-dnssec", NULL };
 
 static isc_result_t
 parse_filter_aaaa(cfg_parser_t *pctx, const cfg_type_t *type, cfg_obj_t **ret) {
-	return (cfg_parse_enum_or_other(pctx, type, &cfg_type_boolean, ret));
+	return cfg_parse_enum_or_other(pctx, type, &cfg_type_boolean, ret);
 }
 
 static void
@@ -213,7 +211,7 @@ parse_filter_aaaa_on(const cfg_obj_t *param_obj, const char *param_name,
 
 	result = cfg_map_get(param_obj, param_name, &obj);
 	if (result != ISC_R_SUCCESS) {
-		return (ISC_R_SUCCESS);
+		return ISC_R_SUCCESS;
 	}
 
 	if (cfg_obj_isboolean(obj)) {
@@ -228,12 +226,11 @@ parse_filter_aaaa_on(const cfg_obj_t *param_obj, const char *param_name,
 		result = ISC_R_UNEXPECTED;
 	}
 
-	return (result);
+	return result;
 }
 
 static isc_result_t
-check_syntax(cfg_obj_t *fmap, const void *cfg, isc_mem_t *mctx, isc_log_t *lctx,
-	     void *actx) {
+check_syntax(cfg_obj_t *fmap, const void *cfg, isc_mem_t *mctx, void *actx) {
 	isc_result_t result = ISC_R_SUCCESS;
 	const cfg_obj_t *aclobj = NULL;
 	dns_acl_t *acl = NULL;
@@ -241,23 +238,23 @@ check_syntax(cfg_obj_t *fmap, const void *cfg, isc_mem_t *mctx, isc_log_t *lctx,
 
 	cfg_map_get(fmap, "filter-aaaa", &aclobj);
 	if (aclobj == NULL) {
-		return (result);
+		return result;
 	}
 
-	CHECK(cfg_acl_fromconfig(aclobj, (const cfg_obj_t *)cfg, lctx,
+	CHECK(cfg_acl_fromconfig(aclobj, (const cfg_obj_t *)cfg,
 				 (cfg_aclconfctx_t *)actx, mctx, 0, &acl));
 
 	CHECK(parse_filter_aaaa_on(fmap, "filter-aaaa-on-v4", &f4));
 	CHECK(parse_filter_aaaa_on(fmap, "filter-aaaa-on-v6", &f6));
 
 	if ((f4 != NONE || f6 != NONE) && dns_acl_isnone(acl)) {
-		cfg_obj_log(aclobj, lctx, ISC_LOG_WARNING,
+		cfg_obj_log(aclobj, ISC_LOG_WARNING,
 			    "\"filter-aaaa\" is 'none;' but "
 			    "either filter-aaaa-on-v4 or filter-aaaa-on-v6 "
 			    "is enabled");
 		result = ISC_R_FAILURE;
 	} else if (f4 == NONE && f6 == NONE && !dns_acl_isnone(acl)) {
-		cfg_obj_log(aclobj, lctx, ISC_LOG_WARNING,
+		cfg_obj_log(aclobj, ISC_LOG_WARNING,
 			    "\"filter-aaaa\" is set but "
 			    "neither filter-aaaa-on-v4 or filter-aaaa-on-v6 "
 			    "is enabled");
@@ -269,27 +266,27 @@ cleanup:
 		dns_acl_detach(&acl);
 	}
 
-	return (result);
+	return result;
 }
 
 static isc_result_t
 parse_parameters(filter_instance_t *inst, const char *parameters,
 		 const void *cfg, const char *cfg_file, unsigned long cfg_line,
-		 isc_mem_t *mctx, isc_log_t *lctx, void *actx) {
+		 isc_mem_t *mctx, void *actx) {
 	isc_result_t result = ISC_R_SUCCESS;
 	cfg_parser_t *parser = NULL;
 	cfg_obj_t *param_obj = NULL;
 	const cfg_obj_t *obj = NULL;
 	isc_buffer_t b;
 
-	CHECK(cfg_parser_create(mctx, lctx, &parser));
+	CHECK(cfg_parser_create(mctx, &parser));
 
 	isc_buffer_constinit(&b, parameters, strlen(parameters));
 	isc_buffer_add(&b, strlen(parameters));
 	CHECK(cfg_parse_buffer(parser, &b, cfg_file, cfg_line,
 			       &cfg_type_parameters, 0, &param_obj));
 
-	CHECK(check_syntax(param_obj, cfg, mctx, lctx, actx));
+	CHECK(check_syntax(param_obj, cfg, mctx, actx));
 
 	CHECK(parse_filter_aaaa_on(param_obj, "filter-aaaa-on-v4",
 				   &inst->v4_aaaa));
@@ -298,7 +295,7 @@ parse_parameters(filter_instance_t *inst, const char *parameters,
 
 	result = cfg_map_get(param_obj, "filter-aaaa", &obj);
 	if (result == ISC_R_SUCCESS) {
-		CHECK(cfg_acl_fromconfig(obj, (const cfg_obj_t *)cfg, lctx,
+		CHECK(cfg_acl_fromconfig(obj, (const cfg_obj_t *)cfg,
 					 (cfg_aclconfctx_t *)actx, mctx, 0,
 					 &inst->aaaa_acl));
 	} else {
@@ -312,7 +309,7 @@ cleanup:
 	if (parser != NULL) {
 		cfg_parser_destroy(&parser);
 	}
-	return (result);
+	return result;
 }
 
 /**
@@ -330,13 +327,12 @@ cleanup:
  */
 isc_result_t
 plugin_register(const char *parameters, const void *cfg, const char *cfg_file,
-		unsigned long cfg_line, isc_mem_t *mctx, isc_log_t *lctx,
-		void *actx, ns_hooktable_t *hooktable, void **instp) {
+		unsigned long cfg_line, isc_mem_t *mctx, void *actx,
+		ns_hooktable_t *hooktable, void **instp) {
 	filter_instance_t *inst = NULL;
 	isc_result_t result = ISC_R_SUCCESS;
 
-	isc_log_write(lctx, NS_LOGCATEGORY_GENERAL, NS_LOGMODULE_HOOKS,
-		      ISC_LOG_INFO,
+	isc_log_write(NS_LOGCATEGORY_GENERAL, NS_LOGMODULE_HOOKS, ISC_LOG_INFO,
 		      "registering 'filter-aaaa' "
 		      "module from %s:%lu, %s parameters",
 		      cfg_file, cfg_line, parameters != NULL ? "with" : "no");
@@ -348,7 +344,7 @@ plugin_register(const char *parameters, const void *cfg, const char *cfg_file,
 
 	if (parameters != NULL) {
 		CHECK(parse_parameters(inst, parameters, cfg, cfg_file,
-				       cfg_line, mctx, lctx, actx));
+				       cfg_line, mctx, actx));
 	}
 
 	isc_ht_init(&inst->ht, mctx, 1, ISC_HT_CASE_SENSITIVE);
@@ -366,26 +362,25 @@ cleanup:
 		plugin_destroy((void **)&inst);
 	}
 
-	return (result);
+	return result;
 }
 
 isc_result_t
 plugin_check(const char *parameters, const void *cfg, const char *cfg_file,
-	     unsigned long cfg_line, isc_mem_t *mctx, isc_log_t *lctx,
-	     void *actx) {
+	     unsigned long cfg_line, isc_mem_t *mctx, void *actx) {
 	isc_result_t result = ISC_R_SUCCESS;
 	cfg_parser_t *parser = NULL;
 	cfg_obj_t *param_obj = NULL;
 	isc_buffer_t b;
 
-	CHECK(cfg_parser_create(mctx, lctx, &parser));
+	CHECK(cfg_parser_create(mctx, &parser));
 
 	isc_buffer_constinit(&b, parameters, strlen(parameters));
 	isc_buffer_add(&b, strlen(parameters));
 	CHECK(cfg_parse_buffer(parser, &b, cfg_file, cfg_line,
 			       &cfg_type_parameters, 0, &param_obj));
 
-	CHECK(check_syntax(param_obj, cfg, mctx, lctx, actx));
+	CHECK(check_syntax(param_obj, cfg, mctx, actx));
 
 cleanup:
 	if (param_obj != NULL) {
@@ -394,7 +389,7 @@ cleanup:
 	if (parser != NULL) {
 		cfg_parser_destroy(&parser);
 	}
-	return (result);
+	return result;
 }
 
 /*
@@ -424,7 +419,7 @@ plugin_destroy(void **instp) {
  */
 int
 plugin_version(void) {
-	return (NS_PLUGIN_VERSION);
+	return NS_PLUGIN_VERSION;
 }
 
 /**
@@ -448,15 +443,15 @@ typedef struct section_filter {
  */
 static bool
 is_v4_client(ns_client_t *client) {
-	if (isc_sockaddr_pf(&client->peeraddr) == AF_INET) {
-		return (true);
+	if (isc_sockaddr_pf(&client->inner.peeraddr) == AF_INET) {
+		return true;
 	}
-	if (isc_sockaddr_pf(&client->peeraddr) == AF_INET6 &&
-	    IN6_IS_ADDR_V4MAPPED(&client->peeraddr.type.sin6.sin6_addr))
+	if (isc_sockaddr_pf(&client->inner.peeraddr) == AF_INET6 &&
+	    IN6_IS_ADDR_V4MAPPED(&client->inner.peeraddr.type.sin6.sin6_addr))
 	{
-		return (true);
+		return true;
 	}
-	return (false);
+	return false;
 }
 
 /*
@@ -464,12 +459,12 @@ is_v4_client(ns_client_t *client) {
  */
 static bool
 is_v6_client(ns_client_t *client) {
-	if (isc_sockaddr_pf(&client->peeraddr) == AF_INET6 &&
-	    !IN6_IS_ADDR_V4MAPPED(&client->peeraddr.type.sin6.sin6_addr))
+	if (isc_sockaddr_pf(&client->inner.peeraddr) == AF_INET6 &&
+	    !IN6_IS_ADDR_V4MAPPED(&client->inner.peeraddr.type.sin6.sin6_addr))
 	{
-		return (true);
+		return true;
 	}
-	return (false);
+	return false;
 }
 
 static filter_data_t *
@@ -482,7 +477,7 @@ client_state_get(const query_ctx_t *qctx, filter_instance_t *inst) {
 			     sizeof(qctx->client), (void **)&client_state);
 	UNLOCK(&inst->hlock);
 
-	return (result == ISC_R_SUCCESS ? client_state : NULL);
+	return result == ISC_R_SUCCESS ? client_state : NULL;
 }
 
 static void
@@ -527,10 +522,10 @@ client_state_destroy(const query_ctx_t *qctx, filter_instance_t *inst) {
 static void
 mark_as_rendered(dns_rdataset_t *rdataset, dns_rdataset_t *sigrdataset) {
 	if (rdataset != NULL && dns_rdataset_isassociated(rdataset)) {
-		rdataset->attributes |= DNS_RDATASETATTR_RENDERED;
+		rdataset->attributes.rendered = true;
 	}
 	if (sigrdataset != NULL && dns_rdataset_isassociated(sigrdataset)) {
-		sigrdataset->attributes |= DNS_RDATASETATTR_RENDERED;
+		sigrdataset->attributes.rendered = true;
 	}
 }
 
@@ -549,14 +544,14 @@ process_name(query_ctx_t *qctx, filter_aaaa_t mode, const dns_name_t *name,
 	dns_rdataset_t *rdataset = NULL, *sigrdataset = NULL;
 	isc_result_t result;
 	bool modified = false;
+	dns_name_t *n = UNCONST(name);
 
 	if (only_if_a_exists) {
-		CHECK(dns_message_findtype(name, dns_rdatatype_a, 0, NULL));
+		CHECK(dns_message_findtype(n, dns_rdatatype_a, 0, NULL));
 	}
 
-	(void)dns_message_findtype(name, type, 0, &rdataset);
-	(void)dns_message_findtype(name, dns_rdatatype_rrsig, type,
-				   &sigrdataset);
+	(void)dns_message_findtype(n, type, 0, &rdataset);
+	(void)dns_message_findtype(n, dns_rdatatype_rrsig, type, &sigrdataset);
 
 	if (rdataset != NULL &&
 	    (sigrdataset == NULL || !WANTDNSSEC(qctx->client) ||
@@ -578,7 +573,7 @@ process_name(query_ctx_t *qctx, filter_aaaa_t mode, const dns_name_t *name,
 	}
 
 cleanup:
-	return (modified);
+	return modified;
 }
 
 /*%
@@ -600,14 +595,8 @@ process_section(const section_filter_t *filter) {
 	bool only_if_a_exists = filter->only_if_a_exists;
 
 	dns_message_t *message = qctx->client->message;
-	isc_result_t result;
 
-	for (result = dns_message_firstname(message, section);
-	     result == ISC_R_SUCCESS;
-	     result = dns_message_nextname(message, section))
-	{
-		dns_name_t *cur = NULL;
-		dns_message_currentname(message, section, &cur);
+	MSG_SECTION_FOREACH (message, section, cur) {
 		if (name != NULL && !dns_name_equal(name, cur)) {
 			/*
 			 * We only want to process 'name' and this is not it.
@@ -649,7 +638,7 @@ filter_qctx_initialize(void *arg, void *cbdata, isc_result_t *resp) {
 		client_state_create(qctx, inst);
 	}
 
-	return (NS_HOOK_CONTINUE);
+	return NS_HOOK_CONTINUE;
 }
 
 /*
@@ -667,7 +656,7 @@ filter_prep_response_begin(void *arg, void *cbdata, isc_result_t *resp) {
 	*resp = ISC_R_UNSET;
 
 	if (client_state == NULL) {
-		return (NS_HOOK_CONTINUE);
+		return NS_HOOK_CONTINUE;
 	}
 
 	if (inst->v4_aaaa != NONE || inst->v6_aaaa != NONE) {
@@ -684,7 +673,7 @@ filter_prep_response_begin(void *arg, void *cbdata, isc_result_t *resp) {
 		}
 	}
 
-	return (NS_HOOK_CONTINUE);
+	return NS_HOOK_CONTINUE;
 }
 
 /*
@@ -704,7 +693,7 @@ filter_respond_begin(void *arg, void *cbdata, isc_result_t *resp) {
 	*resp = ISC_R_UNSET;
 
 	if (client_state == NULL) {
-		return (NS_HOOK_CONTINUE);
+		return NS_HOOK_CONTINUE;
 	}
 
 	if (client_state->mode != BREAK_DNSSEC &&
@@ -712,7 +701,7 @@ filter_respond_begin(void *arg, void *cbdata, isc_result_t *resp) {
 	     (WANTDNSSEC(qctx->client) && qctx->sigrdataset != NULL &&
 	      dns_rdataset_isassociated(qctx->sigrdataset))))
 	{
-		return (NS_HOOK_CONTINUE);
+		return NS_HOOK_CONTINUE;
 	}
 
 	if (qctx->qtype == dns_rdatatype_aaaa) {
@@ -720,7 +709,7 @@ filter_respond_begin(void *arg, void *cbdata, isc_result_t *resp) {
 		trdataset = ns_client_newrdataset(qctx->client);
 		result = dns_db_findrdataset(
 			qctx->db, qctx->node, qctx->version, dns_rdatatype_a, 0,
-			qctx->client->now, trdataset, NULL);
+			qctx->client->inner.now, trdataset, NULL);
 		if (dns_rdataset_isassociated(trdataset)) {
 			dns_rdataset_disassociate(trdataset);
 		}
@@ -784,11 +773,11 @@ filter_respond_begin(void *arg, void *cbdata, isc_result_t *resp) {
 
 		*resp = result;
 
-		return (NS_HOOK_RETURN);
+		return NS_HOOK_RETURN;
 	}
 
 	*resp = result;
-	return (NS_HOOK_CONTINUE);
+	return NS_HOOK_CONTINUE;
 }
 
 /*
@@ -821,7 +810,7 @@ filter_respond_any_found(void *arg, void *cbdata, isc_result_t *resp) {
 		process_section(&filter_answer);
 	}
 
-	return (NS_HOOK_CONTINUE);
+	return NS_HOOK_CONTINUE;
 }
 
 /*
@@ -858,7 +847,7 @@ filter_query_done_send(void *arg, void *cbdata, isc_result_t *resp) {
 		}
 	}
 
-	return (NS_HOOK_CONTINUE);
+	return NS_HOOK_CONTINUE;
 }
 
 /*
@@ -873,10 +862,10 @@ filter_qctx_destroy(void *arg, void *cbdata, isc_result_t *resp) {
 	*resp = ISC_R_UNSET;
 
 	if (!qctx->detach_client) {
-		return (NS_HOOK_CONTINUE);
+		return NS_HOOK_CONTINUE;
 	}
 
 	client_state_destroy(qctx, inst);
 
-	return (NS_HOOK_CONTINUE);
+	return NS_HOOK_CONTINUE;
 }

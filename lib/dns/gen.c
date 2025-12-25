@@ -188,7 +188,7 @@ HASH(char *string) {
 	a = tolower((unsigned char)string[0]);
 	b = tolower((unsigned char)string[n - 1]);
 
-	return (((a + n) * b) % 256);
+	return ((a + n) * b) % 256;
 }
 
 static bool
@@ -196,9 +196,9 @@ start_directory(const char *path, isc_dir_t *dir) {
 	dir->handle = opendir(path);
 
 	if (dir->handle != NULL) {
-		return (true);
+		return true;
 	} else {
-		return (false);
+		return false;
 	}
 }
 
@@ -218,15 +218,15 @@ next_file(isc_dir_t *dir) {
 				fprintf(stderr,
 					"Error: reading directory: %s\n",
 					strerror(errno));
-				exit(1);
+				exit(EXIT_FAILURE);
 			}
 		}
 	}
 
 	if (dir->filename != NULL) {
-		return (true);
+		return true;
 	} else {
-		return (false);
+		return false;
 	}
 }
 
@@ -261,7 +261,7 @@ upper(char *s) {
 		*b++ = islower(c) ? toupper(c) : c;
 	}
 	*b = '\0';
-	return (buf[buf_to_use]);
+	return buf[buf_to_use];
 }
 
 static char *
@@ -274,7 +274,7 @@ funname(const char *s, char *buf) {
 		*b++ = (c == '-') ? '_' : c;
 	}
 	*b = '\0';
-	return (buf);
+	return buf;
 }
 
 static void
@@ -353,7 +353,6 @@ doswitch(const char *name, const char *function, const char *args,
 static void
 insert_into_typenames(int type, const char *typebuf, const char *attr) {
 	struct ttnam *ttn = NULL;
-	size_t c;
 	int i, n;
 	char tmp[256];
 
@@ -366,38 +365,38 @@ insert_into_typenames(int type, const char *typebuf, const char *attr) {
 			fprintf(stderr,
 				"Error: type %d has two names: %s, %s\n", type,
 				typenames[i].typebuf, typebuf);
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 		ttn = &typenames[i];
 	}
 	/* Subtract one to leave an empty sentinel entry at the end */
 	if (i >= TYPENAMES - 1) {
 		fprintf(stderr, "Error: typenames array too small\n");
-		exit(1);
+		exit(EXIT_FAILURE);
 	} else if (ttn == NULL) {
 		ttn = &typenames[i];
 		ttnam_count = i + 1;
 	}
 
-	/* XXXMUKS: This is redundant due to the INSIST above. */
-	if (strlen(typebuf) > sizeof(ttn->typebuf) - 1) {
+	char *end = memccpy(ttn->typebuf, typebuf, '\0', sizeof(ttn->typebuf));
+
+	if (end == NULL) {
 		fprintf(stderr, "Error:  type name %s is too long\n", typebuf);
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 
-	strncpy(ttn->typebuf, typebuf, sizeof(ttn->typebuf));
-	ttn->typebuf[sizeof(ttn->typebuf) - 1] = '\0';
-
-	strncpy(ttn->macroname, ttn->typebuf, sizeof(ttn->macroname));
-	ttn->macroname[sizeof(ttn->macroname) - 1] = '\0';
+	end = memccpy(ttn->macroname, typebuf, '\0', sizeof(ttn->macroname));
+	if (end == NULL) {
+		fprintf(stderr, "Error:  type name %s is too long\n", typebuf);
+		exit(EXIT_FAILURE);
+	}
 
 	ttn->type = type;
-	c = strlen(ttn->macroname);
-	while (c > 0) {
-		if (ttn->macroname[c - 1] == '-') {
-			ttn->macroname[c - 1] = '_';
+	while (end > ttn->macroname) {
+		if (*end == '-') {
+			*end = '_';
 		}
-		c--;
+		end--;
 	}
 
 	if (attr == NULL) {
@@ -412,13 +411,13 @@ insert_into_typenames(int type, const char *typebuf, const char *attr) {
 			"Error:  type %d has different attributes: "
 			"%s, %s\n",
 			type, ttn->attr, attr);
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 
 	if (strlen(attr) > sizeof(ttn->attr) - 1) {
 		fprintf(stderr, "Error:  attr (%s) [name %s] is too long\n",
 			attr, typebuf);
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 
 	strncpy(ttn->attr, attr, sizeof(ttn->attr));
@@ -435,6 +434,7 @@ add(unsigned int rdclass, const char *classbuf, int type, const char *typebuf,
 	struct tt *tt, *oldtt;
 	struct cc *newcc;
 	struct cc *cc, *oldcc;
+	char *end = NULL;
 
 	INSIST(strlen(typebuf) < TYPECLASSBUF);
 	INSIST(strlen(classbuf) < TYPECLASSBUF);
@@ -444,24 +444,24 @@ add(unsigned int rdclass, const char *classbuf, int type, const char *typebuf,
 
 	if (newtt == NULL) {
 		fprintf(stderr, "malloc() failed\n");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 
 	newtt->next = NULL;
 	newtt->rdclass = rdclass;
 	newtt->type = type;
 
-	strncpy(newtt->classbuf, classbuf, sizeof(newtt->classbuf));
-	newtt->classbuf[sizeof(newtt->classbuf) - 1] = '\0';
+	end = memccpy(newtt->classbuf, classbuf, '\0', sizeof(newtt->classbuf));
+	INSIST(end != NULL);
 
-	strncpy(newtt->typebuf, typebuf, sizeof(newtt->typebuf));
-	newtt->typebuf[sizeof(newtt->typebuf) - 1] = '\0';
+	end = memccpy(newtt->typebuf, typebuf, '\0', sizeof(newtt->typebuf));
+	INSIST(end != NULL);
 
 	if (strncmp(dirbuf, "./", 2) == 0) {
 		dirbuf += 2;
 	}
-	strncpy(newtt->dirbuf, dirbuf, sizeof(newtt->dirbuf));
-	newtt->dirbuf[sizeof(newtt->dirbuf) - 1] = '\0';
+	end = memccpy(newtt->dirbuf, dirbuf, '\0', sizeof(newtt->dirbuf));
+	INSIST(end != NULL);
 
 	tt = types;
 	oldtt = NULL;
@@ -496,7 +496,7 @@ add(unsigned int rdclass, const char *classbuf, int type, const char *typebuf,
 	newcc = (struct cc *)malloc(sizeof(*newcc));
 	if (newcc == NULL) {
 		fprintf(stderr, "malloc() failed\n");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	newcc->rdclass = rdclass;
 	strncpy(newcc->classbuf, classbuf, sizeof(newcc->classbuf));
@@ -554,7 +554,7 @@ sd(unsigned int rdclass, const char *classbuf, const char *dirbuf,
 		if (type > 65535) {
 			fprintf(stderr, "Error: type value > 65535 (%s)\n",
 				dir.filename);
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 		add(rdclass, classbuf, type, typebuf, dirbuf);
 	}
@@ -565,7 +565,7 @@ sd(unsigned int rdclass, const char *classbuf, const char *dirbuf,
 static int
 ttnam_cmp(const void *va, const void *vb) {
 	const struct ttnam *ttna = va, *ttnb = vb;
-	return (ttna->type - ttnb->type);
+	return ttna->type - ttnb->type;
 }
 
 int
@@ -638,7 +638,7 @@ main(int argc, char **argv) {
 				    sizeof("/rdata/_65535_65535"))
 			{
 				fprintf(stderr, "\"%s\" too long\n", optarg);
-				exit(1);
+				exit(EXIT_FAILURE);
 			}
 			n = snprintf(srcdir, sizeof(srcdir), "%s/", optarg);
 			INSIST(n > 0 && (unsigned int)n < sizeof(srcdir));
@@ -653,7 +653,7 @@ main(int argc, char **argv) {
 			suffix = optarg;
 			break;
 		case '?':
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 	}
 
@@ -682,7 +682,7 @@ main(int argc, char **argv) {
 		if (rdclass > 65535) {
 			fprintf(stderr, "Error: class value > 65535 (%s)\n",
 				dir.filename);
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 		sd(rdclass, classbuf, buf, filetype);
 	}
@@ -1023,8 +1023,8 @@ main(int argc, char **argv) {
 	}
 
 	if (ferror(stdout) != 0) {
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 
-	return (0);
+	return 0;
 }

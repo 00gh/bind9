@@ -17,12 +17,9 @@
 
 #include <stdbool.h>
 
-#include <isc/lang.h>
 #include <isc/rwlock.h>
 
 #include <dns/types.h>
-
-ISC_LANG_BEGINDECLS
 
 typedef enum dns_ztfind {
 	DNS_ZTFIND_EXACT = 1 << 0,
@@ -34,8 +31,7 @@ typedef isc_result_t
 dns_zt_callback_t(void *arg);
 
 void
-dns_zt_create(isc_mem_t *mctx, isc_loopmgr_t *loopmgr, dns_view_t *view,
-	      dns_zt_t **ztp);
+dns_zt_create(isc_mem_t *mctx, dns_view_t *view, dns_zt_t **ztp);
 /*%<
  * Creates a new zone table for a view.
  *
@@ -216,5 +212,3 @@ dns_zt_setviewrevert(dns_zt_t *zt);
  * Requires:
  *\li	'zt' to be valid.
  */
-
-ISC_LANG_ENDDECLS

@@ -13,17 +13,12 @@
 
 #pragma once
 
-#include <isc/loop.h>
-#include <isc/netmgr.h>
-#include <isc/result.h>
-#include <isc/timer.h>
+#include <inttypes.h>
 
 typedef struct isc_managers isc_managers_t;
 
 void
-isc_managers_create(isc_mem_t **mctx, uint32_t workers,
-		    isc_loopmgr_t **loopmgrp, isc_nm_t **netmgrp);
+isc_managers_create(uint32_t workers);
 
 void
-isc_managers_destroy(isc_mem_t **mctx, isc_loopmgr_t **loopmgrp,
-		     isc_nm_t **netmgrp);
+isc_managers_destroy(void);

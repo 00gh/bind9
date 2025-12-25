@@ -17,39 +17,65 @@
 set -e
 
 # Sign child zones (served by ns3).
-( cd ../ns3 && $SHELL sign.sh )
+(cd ../ns3 && $SHELL sign.sh)
 
 echo_i "ns2/sign.sh"
 
 # Get the DS records for the "trusted." and "managed." zones.
-for subdomain in secure unsupported disabled enabled
-do
-	cp "../ns3/dsset-$subdomain.managed." .
-	cp "../ns3/dsset-$subdomain.trusted." .
+for subdomain in secure unsupported disabled enabled; do
+  cp "../ns3/dsset-$subdomain.managed." .
+  cp "../ns3/dsset-$subdomain.trusted." .
 done
+
+cp "../ns3/dsset-target.peer-ns-spoof." .
+
+# Set up some unsigned zones:
+# insecure
+zone=insecure.secure.
+infile=template.db.in
+zonefile=insecure.secure.example.db
+cp $infile $zonefile
+
+# delegated child of an nsec3 zone
+zone=child.nsec3.secure.
+infile=template.db.in
+zonefile=child.nsec3.secure.example.db
+cp $infile $zonefile
+
+# delegated child of an optout zone
+zone=child.nsec3.secure.
+infile=template.db.in
+zonefile=child.nsec3.secure.example.db
+cp $infile $zonefile
+
+# zone pre-signed with RFC2335 signatures
+zone=rfc2335.example.
+infile=rfc2335.example.db.in
+zonefile=rfc2335.example.db
+cp $infile $zonefile
 
 # Sign the "trusted." and "managed." zones.
 zone=managed.
 infile=key.db.in
 zonefile=managed.db
 
-keyname1=$("$KEYGEN" -q -a "$ALTERNATIVE_ALGORITHM" -b "$ALTERNATIVE_BITS" -n zone -f KSK "$zone")
-keyname2=$("$KEYGEN" -q -a "$ALTERNATIVE_ALGORITHM" -b "$ALTERNATIVE_BITS" -n zone "$zone")
+keyname1=$("$KEYGEN" -q -a "$ALTERNATIVE_ALGORITHM" -b "$ALTERNATIVE_BITS" -f KSK "$zone")
+keyname2=$("$KEYGEN" -q -a "$ALTERNATIVE_ALGORITHM" -b "$ALTERNATIVE_BITS" "$zone")
 
-cat "$infile" "$keyname1.key" "$keyname2.key" > "$zonefile"
+cat "$infile" "$keyname1.key" "$keyname2.key" >"$zonefile"
 
-"$SIGNER" -g -o "$zone" -k "$keyname1" "$zonefile" "$keyname2" > /dev/null 2>&1
+"$SIGNER" -g -o "$zone" -k "$keyname1" "$zonefile" "$keyname2" >/dev/null 2>&1
 
 zone=trusted.
 infile=key.db.in
 zonefile=trusted.db
 
-keyname1=$("$KEYGEN" -q -a "$ALTERNATIVE_ALGORITHM" -b "$ALTERNATIVE_BITS" -n zone -f KSK "$zone")
-keyname2=$("$KEYGEN" -q -a "$ALTERNATIVE_ALGORITHM" -b "$ALTERNATIVE_BITS" -n zone "$zone")
+keyname1=$("$KEYGEN" -q -a "$ALTERNATIVE_ALGORITHM" -b "$ALTERNATIVE_BITS" -f KSK "$zone")
+keyname2=$("$KEYGEN" -q -a "$ALTERNATIVE_ALGORITHM" -b "$ALTERNATIVE_BITS" "$zone")
 
-cat "$infile" "$keyname1.key" "$keyname2.key" > "$zonefile"
+cat "$infile" "$keyname1.key" "$keyname2.key" >"$zonefile"
 
-"$SIGNER" -g -o "$zone" -k "$keyname1" "$zonefile" "$keyname2" > /dev/null 2>&1
+"$SIGNER" -g -o "$zone" -k "$keyname1" "$zonefile" "$keyname2" >/dev/null 2>&1
 
 # The "example." zone.
 zone=example.
@@ -57,24 +83,26 @@ infile=example.db.in
 zonefile=example.db
 
 # Get the DS records for the "example." zone.
-for subdomain in secure badds bogus dynamic keyless nsec3 optout \
-	nsec3-unknown optout-unknown multiple rsasha256 rsasha512 \
-	kskonly update-nsec3 auto-nsec auto-nsec3 secure.below-cname \
-	ttlpatch split-dnssec split-smart expired expiring upper lower \
-	dnskey-unknown dnskey-unsupported dnskey-unsupported-2 \
-	dnskey-nsec3-unknown managed-future revkey \
-	dname-at-apex-nsec3 occluded rsasha1 rsasha1-1024
-do
-	cp "../ns3/dsset-$subdomain.example." .
+for subdomain in digest-alg-unsupported ds-unsupported secure badds \
+  bogus localkey dynamic keyless nsec3 optout \
+  nsec3-unknown optout-unknown multiple rsasha256 rsasha512 \
+  kskonly update-nsec3 auto-nsec auto-nsec3 secure.below-cname \
+  ttlpatch split-dnssec split-smart expired expiring upper lower \
+  dnskey-unknown dnskey-unsupported dnskey-unsupported-2 \
+  dnskey-nsec3-unknown managed-future future revkey \
+  dname-at-apex-nsec3 occluded rsasha1 rsasha1-1024 \
+  rsasha256oid rsasha512oid unknownoid extradsoid extradsunknownoid \
+  extended-ds-unknown-oid; do
+  cp "../ns3/dsset-$subdomain.example." .
 done
 
 # Sign the "example." zone.
-keyname1=$("$KEYGEN" -q -a "$ALTERNATIVE_ALGORITHM" -b "$ALTERNATIVE_BITS" -n zone -f KSK "$zone")
-keyname2=$("$KEYGEN" -q -a "$ALTERNATIVE_ALGORITHM" -b "$ALTERNATIVE_BITS" -n zone "$zone")
+keyname1=$("$KEYGEN" -q -a "$ALTERNATIVE_ALGORITHM" -b "$ALTERNATIVE_BITS" -f KSK "$zone")
+keyname2=$("$KEYGEN" -q -a "$ALTERNATIVE_ALGORITHM" -b "$ALTERNATIVE_BITS" "$zone")
 
-cat "$infile" "$keyname1.key" "$keyname2.key" > "$zonefile"
+cat "$infile" "$keyname1.key" "$keyname2.key" >"$zonefile"
 
-"$SIGNER" -g -o "$zone" -k "$keyname1" "$zonefile" "$keyname2" > /dev/null 2>&1
+"$SIGNER" -g -o "$zone" -k "$keyname1" "$zonefile" "$keyname2" >/dev/null 2>&1
 
 #
 # lower/uppercase the signature bits with the exception of the last characters
@@ -82,11 +110,11 @@ cat "$infile" "$keyname1.key" "$keyname2.key" > "$zonefile"
 #
 
 zonefiletmp=$(mktemp "$zonefile.XXXXXX") || exit 1
-"$CHECKZONE" -D -q -i local "$zone" "$zonefile.signed" |
-awk '
+"$CHECKZONE" -D -q -i local "$zone" "$zonefile.signed" \
+  | awk '
 tolower($1) == "bad-cname.example." && $4 == "RRSIG" && $5 == "CNAME" {
 	for (i = 1; i <= NF; i++ ) {
-		if (i <= 12) {
+		if (i <= 13) {
 			printf("%s ", $i);
 			continue;
 		}
@@ -105,7 +133,7 @@ tolower($1) == "bad-cname.example." && $4 == "RRSIG" && $5 == "CNAME" {
 
 tolower($1) == "bad-dname.example." && $4 == "RRSIG" && $5 == "DNAME" {
 	for (i = 1; i <= NF; i++ ) {
-		if (i <= 12) {
+		if (i <= 13) {
 			printf("%s ", $i);
 			continue;
 		}
@@ -122,7 +150,7 @@ tolower($1) == "bad-dname.example." && $4 == "RRSIG" && $5 == "DNAME" {
 	next;
 }
 
-{ print; }' > "$zonefiletmp" && mv "$zonefiletmp" "$zonefile.signed"
+{ print; }' >"$zonefiletmp" && mv "$zonefiletmp" "$zonefile.signed"
 
 #
 # signed in-addr.arpa w/ a delegation for 10.in-addr.arpa which is unsigned.
@@ -131,26 +159,26 @@ zone=in-addr.arpa.
 infile=in-addr.arpa.db.in
 zonefile=in-addr.arpa.db
 
-keyname1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-keyname2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
+keyname1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+keyname2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
 
-cat "$infile" "$keyname1.key" "$keyname2.key" > "$zonefile"
-"$SIGNER" -g -o "$zone" -k "$keyname1" "$zonefile" "$keyname2" > /dev/null 2>&1
+cat "$infile" "$keyname1.key" "$keyname2.key" >"$zonefile"
+"$SIGNER" -g -o "$zone" -k "$keyname1" "$zonefile" "$keyname2" >/dev/null 2>&1
 
 # Sign the badparam secure file
 
 zone=badparam.
-infile=badparam.db.in
+infile=template.db.in
 zonefile=badparam.db
 
-keyname1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-keyname2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
+keyname1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+keyname2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
 
-cat "$infile" "$keyname1.key" "$keyname2.key" > "$zonefile"
+cat "$infile" "$keyname1.key" "$keyname2.key" >"$zonefile"
 
-"$SIGNER" -3 - -H 1 -g -o "$zone" -k "$keyname1" "$zonefile" "$keyname2" > /dev/null 2>&1
+"$SIGNER" -3 - -H 1 -g -o "$zone" -k "$keyname1" "$zonefile" "$keyname2" >/dev/null 2>&1
 
-sed -e 's/IN NSEC3 1 0 1 /IN NSEC3 1 0 10 /' "$zonefile.signed" > "$zonefile.bad"
+sed -e 's/IN NSEC3 1 0 1 /IN NSEC3 1 0 10 /' "$zonefile.signed" >"$zonefile.bad"
 
 # Sign the single-nsec3 secure zone with optout
 
@@ -158,12 +186,12 @@ zone=single-nsec3.
 infile=single-nsec3.db.in
 zonefile=single-nsec3.db
 
-keyname1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-keyname2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
+keyname1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+keyname2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
 
-cat "$infile" "$keyname1.key" "$keyname2.key" > "$zonefile"
+cat "$infile" "$keyname1.key" "$keyname2.key" >"$zonefile"
 
-"$SIGNER" -3 - -A -H 1 -g -o "$zone" -k "$keyname1" "$zonefile" "$keyname2" > /dev/null 2>&1
+"$SIGNER" -3 - -A -H 1 -g -o "$zone" -k "$keyname1" "$zonefile" "$keyname2" >/dev/null 2>&1
 
 #
 # algroll has just has the old DNSKEY records removed and is waiting
@@ -174,14 +202,14 @@ zone=algroll.
 infile=algroll.db.in
 zonefile=algroll.db
 
-keyold1=$("$KEYGEN" -q -a "$ALTERNATIVE_ALGORITHM" -b "$ALTERNATIVE_BITS" -n zone -f KSK "$zone")
-keyold2=$("$KEYGEN" -q -a "$ALTERNATIVE_ALGORITHM" -b "$ALTERNATIVE_BITS" -n zone "$zone")
-keynew1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-keynew2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
+keyold1=$("$KEYGEN" -q -a "$ALTERNATIVE_ALGORITHM" -b "$ALTERNATIVE_BITS" -f KSK "$zone")
+keyold2=$("$KEYGEN" -q -a "$ALTERNATIVE_ALGORITHM" -b "$ALTERNATIVE_BITS" "$zone")
+keynew1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+keynew2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
 
-cat "$infile" "$keynew1.key" "$keynew2.key" > "$zonefile"
+cat "$infile" "$keynew1.key" "$keynew2.key" >"$zonefile"
 
-"$SIGNER" -o "$zone" -k "$keyold1" -k "$keynew1" "$zonefile" "$keyold1" "$keyold2" "$keynew1" "$keynew2" > /dev/null 2>&1
+"$SIGNER" -o "$zone" -k "$keyold1" -k "$keynew1" "$zonefile" "$keyold1" "$keyold2" "$keynew1" "$keynew2" >/dev/null 2>&1
 
 #
 # Make a zone big enough that it takes several seconds to generate a new
@@ -189,7 +217,7 @@ cat "$infile" "$keynew1.key" "$keynew2.key" > "$zonefile"
 #
 zone=nsec3chain-test
 zonefile=nsec3chain-test.db
-cat > "$zonefile" << EOF
+cat >"$zonefile" <<EOF
 \$TTL 10
 @	10	SOA	ns2 hostmaster 0 3600 1200 864000 1200
 @	10	NS	ns2
@@ -199,126 +227,109 @@ ns3	10	A	10.53.0.3
 EOF
 i=1
 while [ $i -le 300 ]; do
-    echo "host$i 10 IN NS ns.elsewhere"
-    i=$((i+1))
-done >> "$zonefile"
-key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
-cat "$key1.key" "$key2.key" >> "$zonefile"
-"$SIGNER" -3 - -A -H 1 -g -o "$zone" -k "$key1" "$zonefile" "$key2" > /dev/null 2>&1
+  echo "host$i 10 IN NS ns.elsewhere"
+  i=$((i + 1))
+done >>"$zonefile"
+key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+cat "$key1.key" "$key2.key" >>"$zonefile"
+"$SIGNER" -3 - -A -H 1 -g -o "$zone" -k "$key1" "$zonefile" "$key2" >/dev/null 2>&1
 
 zone=cds.secure
-infile=cds.secure.db.in
+infile=template.db.in
 zonefile=cds.secure.db
-key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
-"$DSFROMKEY" -C "$key1.key" > "$key1.cds"
+key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+"$DSFROMKEY" -C "$key1.key" >"$key1.cds"
 cat "$infile" "$key1.key" "$key2.key" "$key1.cds" >$zonefile
-"$SIGNER" -g -o "$zone" "$zonefile" > /dev/null 2>&1
+"$SIGNER" -g -o "$zone" "$zonefile" >/dev/null 2>&1
 
 zone=cds-x.secure
-infile=cds.secure.db.in
+infile=template.db.in
 zonefile=cds-x.secure.db
-key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-key3=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
-"$DSFROMKEY" -C "$key2.key" > "$key2.cds"
-cat "$infile" "$key1.key" "$key2.key" "$key3.key" "$key2.cds" > "$zonefile"
-"$SIGNER" -g -x -o "$zone" "$zonefile" > /dev/null 2>&1
+key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+key3=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+"$DSFROMKEY" -C "$key2.key" >"$key2.cds"
+cat "$infile" "$key1.key" "$key2.key" "$key3.key" "$key2.cds" >"$zonefile"
+"$SIGNER" -g -x -o "$zone" "$zonefile" >/dev/null 2>&1
 
 zone=cds-update.secure
-infile=cds-update.secure.db.in
+infile=template.db.in
 zonefile=cds-update.secure.db
-key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
-cat "$infile" "$key1.key" "$key2.key" > "$zonefile"
-"$SIGNER" -g -o "$zone" "$zonefile" > /dev/null 2>&1
-
-zone=cds-kskonly.secure
-infile=cds-kskonly.secure.db.in
-zonefile=cds-kskonly.secure.db
-key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
-cat "$infile" "$key1.key" "$key2.key" > "$zonefile"
-"$SIGNER" -g -o "$zone" "$zonefile" > /dev/null 2>&1
-keyfile_to_key_id "$key1" > cds-kskonly.secure.id
+key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+cat "$infile" "$key1.key" "$key2.key" >"$zonefile"
+"$SIGNER" -g -o "$zone" "$zonefile" >/dev/null 2>&1
+keyfile_to_key_id "$key1" >cds-update.secure.id
 
 zone=cds-auto.secure
-infile=cds-auto.secure.db.in
+infile=template.db.in
 zonefile=cds-auto.secure.db
-key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
-$SETTIME -P sync now "$key1" > /dev/null
-cat "$infile" > "$zonefile.signed"
+key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+$SETTIME -P sync now "$key1" >/dev/null
+cat "$infile" >"$zonefile.signed"
 
 zone=cdnskey.secure
-infile=cdnskey.secure.db.in
+infile=template.db.in
 zonefile=cdnskey.secure.db
-key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
-sed 's/DNSKEY/CDNSKEY/' "$key1.key" > "$key1.cds"
-cat "$infile" "$key1.key" "$key2.key" "$key1.cds" > "$zonefile"
-"$SIGNER" -g -o "$zone" "$zonefile" > /dev/null 2>&1
+key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+sed 's/DNSKEY/CDNSKEY/' "$key1.key" >"$key1.cds"
+cat "$infile" "$key1.key" "$key2.key" "$key1.cds" >"$zonefile"
+"$SIGNER" -g -o "$zone" "$zonefile" >/dev/null 2>&1
 
 zone=cdnskey-x.secure
-infile=cdnskey.secure.db.in
+infile=template.db.in
 zonefile=cdnskey-x.secure.db
-key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-key3=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
-sed 's/DNSKEY/CDNSKEY/' "$key1.key" > "$key1.cds"
-cat "$infile" "$key1.key" "$key2.key" "$key3.key" "$key1.cds" > "$zonefile"
-"$SIGNER" -g -x -o "$zone" "$zonefile" > /dev/null 2>&1
+key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+key3=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+sed 's/DNSKEY/CDNSKEY/' "$key1.key" >"$key1.cds"
+cat "$infile" "$key1.key" "$key2.key" "$key3.key" "$key1.cds" >"$zonefile"
+"$SIGNER" -g -x -o "$zone" "$zonefile" >/dev/null 2>&1
 
 zone=cdnskey-update.secure
-infile=cdnskey-update.secure.db.in
+infile=template.db.in
 zonefile=cdnskey-update.secure.db
-key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
-cat "$infile" "$key1.key" "$key2.key" > "$zonefile"
-"$SIGNER" -g -o "$zone" "$zonefile" > /dev/null 2>&1
-
-zone=cdnskey-kskonly.secure
-infile=cdnskey-kskonly.secure.db.in
-zonefile=cdnskey-kskonly.secure.db
-key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
-cat "$infile" "$key1.key" "$key2.key" > "$zonefile"
-"$SIGNER" -g -o "$zone" "$zonefile" > /dev/null 2>&1
-keyfile_to_key_id "$key1" > cdnskey-kskonly.secure.id
+key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+cat "$infile" "$key1.key" "$key2.key" >"$zonefile"
+"$SIGNER" -g -o "$zone" "$zonefile" >/dev/null 2>&1
+keyfile_to_key_id "$key1" >cdnskey-update.secure.id
 
 zone=cdnskey-auto.secure
-infile=cdnskey-auto.secure.db.in
+infile=template.db.in
 zonefile=cdnskey-auto.secure.db
-key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
-$SETTIME -P sync now "$key1" > /dev/null
-cat "$infile" > "$zonefile.signed"
+key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+$SETTIME -P sync now "$key1" >/dev/null
+cat "$infile" >"$zonefile.signed"
 
 zone=updatecheck-kskonly.secure
-infile=template.secure.db.in
+infile=template.db.in
 zonefile=${zone}.db
-key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
+key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
 # Save key id's for checking active key usage
-keyfile_to_key_id "$key1" > $zone.ksk.id
-keyfile_to_key_id "$key2" > $zone.zsk.id
-echo "${key1}" > $zone.ksk.key
-echo "${key2}" > $zone.zsk.key
-# Add CDS and CDNSKEY records
-sed 's/DNSKEY/CDNSKEY/' "$key1.key" > "$key1.cdnskey"
-"$DSFROMKEY" -C "$key1.key" > "$key1.cds"
-cat "$infile" "$key1.key" "$key2.key" "$key1.cdnskey" "$key1.cds" > "$zonefile"
-# Don't sign, let auto-dnssec maintain do it.
-mv $zonefile "$zonefile.signed"
+keyfile_to_key_id "$key1" >$zone.ksk.id
+keyfile_to_key_id "$key2" >$zone.zsk.id
+echo "${key1}" >$zone.ksk.key
+echo "${key2}" >$zone.zsk.key
+# Make sure dnssec-policy adds CDS and CDNSKEY records
+$SETTIME -s -g OMNIPRESENT -k OMNIPRESENT now -r OMNIPRESENT now -d RUMOURED now $key1 >settime.out.$zone.ksk 2>&1
+$SETTIME -s -g OMNIPRESENT -k OMNIPRESENT now -z OMNIPRESENT now $key2 >settime.out.$zone.zsk 2>&1
+# Don't sign, let dnssec-policy maintain do it.
+cat "$infile" "$key1.key" "$key2.key" >"$zonefile"
 
 zone=hours-vs-days
 infile=hours-vs-days.db.in
 zonefile=hours-vs-days.db
-key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
-$SETTIME -P sync now "$key1" > /dev/null
-cat "$infile" > "$zonefile.signed"
+key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+$SETTIME -P sync now "$key1" >/dev/null
+cat "$infile" >"$zonefile.signed"
 
 #
 # Negative result from this zone should come back as insecure.
@@ -326,7 +337,135 @@ cat "$infile" > "$zonefile.signed"
 zone=too-many-iterations
 infile=too-many-iterations.db.in
 zonefile=too-many-iterations.db
-key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone -f KSK "$zone")
-key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -n zone "$zone")
-cat "$infile" "$key1.key" "$key2.key" > "$zonefile"
-"$SIGNER" -P -3 - -H too-many -g -o "$zone" "$zonefile" > /dev/null 2>&1
+key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+cat "$infile" "$key1.key" "$key2.key" >"$zonefile"
+"$SIGNER" -P -3 - -H too-many -g -o "$zone" "$zonefile" >/dev/null 2>&1
+
+#
+# A zone with a secure chain of trust of two KSKs, only one KSK is not signing.
+#
+zone=lazy-ksk
+infile=template.db.in
+zonefile=lazy-ksk.db
+ksk1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+ksk2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+ksk3=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+zsk=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+cat "$infile" "$ksk1.key" "$ksk2.key" "$ksk3.key" "$zsk.key" >"$zonefile"
+$DSFROMKEY "$ksk1.key" >"dsset-$zone."
+$DSFROMKEY "$ksk2.key" >>"dsset-$zone."
+$DSFROMKEY "$ksk3.key" >>"dsset-$zone."
+# Keep the KSK with the highest key tag
+id1=$(keyfile_to_key_id "$ksk1")
+id2=$(keyfile_to_key_id "$ksk2")
+id3=$(keyfile_to_key_id "$ksk3")
+if [ $id1 -gt $id2 ]; then
+  if [ $id1 -gt $id3 ]; then
+    rm1="$ksk2"
+    rm2="$ksk3"
+  else # id3 -gt $id1
+    rm1="$ksk2"
+    rm2="$ksk1"
+  fi
+else # $id2 -gt $id1
+  if [ $id2 -gt $id3 ]; then
+    rm1="$ksk1"
+    rm2="$ksk3"
+  else #id3 -gt $id2
+    rm1="$ksk2"
+    rm2="$ksk1"
+  fi
+fi
+
+rm "$rm1.key"
+rm "$rm1.private"
+rm "$rm2.key"
+rm "$rm2.private"
+
+#
+# A zone with where the address for peer zone server is modified and signatures
+# stripped.
+#
+zone=peer.peer-ns-spoof
+infile=peer.peer-ns-spoof.db.in
+zonefile=peer.peer-ns-spoof.db
+ksk=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+zsk=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+cat "$infile" "$ksk.key" "$zsk.key" >"$zonefile"
+"$SIGNER" -g -o "$zone" "$zonefile" >/dev/null 2>&1
+"$CHECKZONE" -D -q -i local "$zone" "$zonefile.signed" \
+  | awk '$1 == "ns3.peer.peer-ns-spoof." && $4 == "RRSIG" && $5 == "A" { next }
+	 $1 == "ns3.peer.peer-ns-spoof." && $4 == "A" { $5 = "10.53.0.100" }
+	 { print }' >"$zonefile.stripped"
+"$CHECKZONE" -D -q -i local "$zone" "$zonefile.signed" \
+  | awk '$4 == "SOA" { $7 = $7 + 1; print; next } { print }' >"$zonefile.next"
+"$SIGNER" -g -o "$zone" -f "$zonefile.next" "$zonefile.next" >/dev/null 2>&1
+cp "$zonefile.stripped" "$zonefile.signed"
+
+#
+# parent zone for peer.peer-ns-spoof
+#
+zone=peer-ns-spoof
+infile=peer-ns-spoof.db.in
+zonefile=peer-ns-spoof.db
+ksk=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+zsk=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+cat "$infile" "$ksk.key" "$zsk.key" >"$zonefile"
+"$SIGNER" -g -o "$zone" "$zonefile" >/dev/null 2>&1
+
+#
+# A zone with the DNSKEY RRSIGS stripped
+#
+zone=dnskey-rrsigs-stripped
+infile=dnskey-rrsigs-stripped.db.in
+zonefile=dnskey-rrsigs-stripped.db
+ksk=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+zsk=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+cat "$infile" "$ksk.key" "$zsk.key" >"$zonefile"
+"$SIGNER" -g -o "$zone" "$zonefile" >/dev/null 2>&1
+"$CHECKZONE" -D -q -i local "$zone" "$zonefile.signed" \
+  | awk '$4 == "RRSIG" && $5 == "DNSKEY" { next } { print }' >"$zonefile.stripped"
+"$CHECKZONE" -D -q -i local "$zone" "$zonefile.signed" \
+  | awk '$4 == "SOA" { $7 = $7 + 1; print; next } { print }' >"$zonefile.next"
+"$SIGNER" -g -o "$zone" -f "$zonefile.next" "$zonefile.next" >/dev/null 2>&1
+cp "$zonefile.stripped" "$zonefile.signed"
+
+#
+# A child zone for the stripped DS RRSIGs test
+#
+zone=child.ds-rrsigs-stripped
+infile=child.ds-rrsigs-stripped.db.in
+zonefile=child.ds-rrsigs-stripped.db
+ksk=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+zsk=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+cat "$infile" "$ksk.key" "$zsk.key" >"$zonefile"
+"$SIGNER" -g -o "$zone" "$zonefile" >/dev/null 2>&1
+
+#
+# A zone with the DNSKEY RRSIGS stripped
+#
+zone=ds-rrsigs-stripped
+infile=ds-rrsigs-stripped.db.in
+zonefile=ds-rrsigs-stripped.db
+ksk=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+zsk=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+cat "$infile" "$ksk.key" "$zsk.key" >"$zonefile"
+"$SIGNER" -g -o "$zone" "$zonefile" >/dev/null 2>&1
+"$CHECKZONE" -D -q -i local "$zone" "$zonefile.signed" \
+  | awk '$4 == "RRSIG" && $5 == "DS" { next } { print }' >"$zonefile.stripped"
+"$CHECKZONE" -D -q -i local "$zone" "$zonefile.signed" \
+  | awk '$4 == "SOA" { $7 = $7 + 1; print; next } { print }' >"$zonefile.next"
+"$SIGNER" -g -o "$zone" -f "$zonefile.next" "$zonefile.next" >/dev/null 2>&1
+cp "$zonefile.stripped" "$zonefile.signed"
+
+#
+# Inconsistent NS RRset between parent and child
+#
+zone=inconsistent
+infile=inconsistent.db.in
+zonefile=inconsistent.db
+key1=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" -f KSK "$zone")
+key2=$("$KEYGEN" -q -a "$DEFAULT_ALGORITHM" -b "$DEFAULT_BITS" "$zone")
+cat "$infile" "$key1.key" "$key2.key" >"$zonefile"
+"$SIGNER" -3 - -g -o "$zone" "$zonefile" >/dev/null 2>&1

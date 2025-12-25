@@ -20,6 +20,8 @@
 #include <isc/buffer.h>
 #include <isc/commandline.h>
 #include <isc/hash.h>
+#include <isc/lib.h>
+#include <isc/log.h>
 #include <isc/mem.h>
 #include <isc/result.h>
 #include <isc/string.h>
@@ -31,7 +33,7 @@
 #include <dns/ds.h>
 #include <dns/fixedname.h>
 #include <dns/keyvalues.h>
-#include <dns/log.h>
+#include <dns/lib.h>
 #include <dns/master.h>
 #include <dns/name.h>
 #include <dns/rdata.h>
@@ -44,12 +46,9 @@
 
 #include "dnssectool.h"
 
-const char *program = "dnssec-importkey";
-
 static dns_rdataclass_t rdclass;
 static dns_fixedname_t fixed;
 static dns_name_t *name = NULL;
-static isc_mem_t *mctx = NULL;
 static bool setpub = false, setdel = false;
 static bool setttl = false;
 static isc_stdtime_t pub = 0, del = 0;
@@ -67,8 +66,8 @@ initname(char *setname) {
 
 	isc_buffer_init(&buf, setname, strlen(setname));
 	isc_buffer_add(&buf, strlen(setname));
-	result = dns_name_fromtext(name, &buf, dns_rootname, 0, NULL);
-	return (result);
+	result = dns_name_fromtext(name, &buf, dns_rootname, 0);
+	return result;
 }
 
 static void
@@ -83,7 +82,7 @@ db_load_from_stream(dns_db_t *db, FILE *fp) {
 	}
 
 	result = dns_master_loadstream(fp, name, name, rdclass, 0, &callbacks,
-				       mctx);
+				       isc_g_mctx);
 	if (result != ISC_R_SUCCESS) {
 		fatal("can't load from input: %s", isc_result_totext(result));
 	}
@@ -103,8 +102,8 @@ loadset(const char *filename, dns_rdataset_t *rdataset) {
 
 	dns_name_format(name, setname, sizeof(setname));
 
-	result = dns_db_create(mctx, "rbt", name, dns_dbtype_zone, rdclass, 0,
-			       NULL, &db);
+	result = dns_db_create(isc_g_mctx, ZONEDB_DEFAULT, name,
+			       dns_dbtype_zone, rdclass, 0, NULL, &db);
 	if (result != ISC_R_SUCCESS) {
 		fatal("can't create database");
 	}
@@ -141,7 +140,7 @@ loadset(const char *filename, dns_rdataset_t *rdataset) {
 	if (db != NULL) {
 		dns_db_detach(&db);
 	}
-	return (result);
+	return result;
 }
 
 static void
@@ -156,8 +155,8 @@ loadkey(char *filename, unsigned char *key_buf, unsigned int key_buf_size,
 
 	isc_buffer_init(&keyb, key_buf, key_buf_size);
 
-	result = dst_key_fromnamedfile(filename, NULL, DST_TYPE_PUBLIC, mctx,
-				       &key);
+	result = dst_key_fromnamedfile(filename, NULL, DST_TYPE_PUBLIC,
+				       isc_g_mctx, &key);
 	if (result != ISC_R_SUCCESS) {
 		fatal("invalid keyfile name %s: %s", filename,
 		      isc_result_totext(result));
@@ -167,7 +166,7 @@ loadkey(char *filename, unsigned char *key_buf, unsigned int key_buf_size,
 		char keystr[DST_KEY_FORMATSIZE];
 
 		dst_key_format(key, keystr, sizeof(keystr));
-		fprintf(stderr, "%s: %s\n", program, keystr);
+		fprintf(stderr, "%s: %s\n", isc_commandline_progname, keystr);
 	}
 
 	result = dst_key_todns(key, &keyb);
@@ -198,7 +197,7 @@ emit(const char *dir, dns_rdata_t *rdata) {
 
 	isc_buffer_init(&buf, rdata->data, rdata->length);
 	isc_buffer_add(&buf, rdata->length);
-	result = dst_key_fromdns(name, rdclass, &buf, mctx, &key);
+	result = dst_key_fromdns(name, rdclass, &buf, isc_g_mctx, &key);
 	if (result != ISC_R_SUCCESS) {
 		fatal("dst_key_fromdns: %s", isc_result_totext(result));
 	}
@@ -218,7 +217,7 @@ emit(const char *dir, dns_rdata_t *rdata) {
 
 	result = dst_key_fromfile(
 		dst_key_name(key), dst_key_id(key), dst_key_alg(key),
-		DST_TYPE_PUBLIC | DST_TYPE_PRIVATE, dir, mctx, &tmp);
+		DST_TYPE_PUBLIC | DST_TYPE_PRIVATE, dir, isc_g_mctx, &tmp);
 	if (result == ISC_R_SUCCESS) {
 		if (dst_key_isprivate(tmp) && !dst_key_isexternal(tmp)) {
 			fatal("Private key already exists in %s", priname);
@@ -262,14 +261,16 @@ emit(const char *dir, dns_rdata_t *rdata) {
 	dst_key_free(&key);
 }
 
-noreturn static void
+ISC_NORETURN static void
 usage(void);
 
 static void
 usage(void) {
 	fprintf(stderr, "Usage:\n");
-	fprintf(stderr, "    %s options [-K dir] keyfile\n\n", program);
-	fprintf(stderr, "    %s options -f file [keyname]\n\n", program);
+	fprintf(stderr, "    %s options [-K dir] keyfile\n\n",
+		isc_commandline_progname);
+	fprintf(stderr, "    %s options -f file [keyname]\n\n",
+		isc_commandline_progname);
 	fprintf(stderr, "Version: %s\n", PACKAGE_VERSION);
 	fprintf(stderr, "Options:\n");
 	fprintf(stderr, "    -f file: read key from zone file\n");
@@ -289,28 +290,24 @@ usage(void) {
 	fprintf(stderr, "    -D sync date/[+-]offset/none: set/unset "
 			"CDS and CDNSKEY deletion date\n");
 
-	exit(-1);
+	exit(EXIT_FAILURE);
 }
 
 int
 main(int argc, char **argv) {
 	char *classname = NULL;
 	char *filename = NULL, *dir = NULL, *namestr;
-	char *endp;
+	char *endp = NULL;
 	int ch;
 	isc_result_t result;
-	isc_log_t *log = NULL;
 	dns_rdataset_t rdataset;
-	dns_rdata_t rdata;
 	isc_stdtime_t now = isc_stdtime_now();
-
-	dns_rdata_init(&rdata);
 
 	if (argc == 1) {
 		usage();
 	}
 
-	isc_mem_create(&mctx);
+	isc_commandline_init(argc, argv);
 
 	isc_commandline_errprint = false;
 
@@ -381,7 +378,8 @@ main(int argc, char **argv) {
 		case '?':
 			if (isc_commandline_option != '?') {
 				fprintf(stderr, "%s: invalid argument -%c\n",
-					program, isc_commandline_option);
+					isc_commandline_progname,
+					isc_commandline_option);
 			}
 			FALLTHROUGH;
 		case 'h':
@@ -390,12 +388,13 @@ main(int argc, char **argv) {
 
 		case 'V':
 			/* Does not return. */
-			version(program);
+			version(isc_commandline_progname);
 
 		default:
-			fprintf(stderr, "%s: unhandled option -%c\n", program,
+			fprintf(stderr, "%s: unhandled option -%c\n",
+				isc_commandline_progname,
 				isc_commandline_option);
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 	}
 
@@ -408,13 +407,7 @@ main(int argc, char **argv) {
 		fatal("extraneous arguments");
 	}
 
-	result = dst_lib_init(mctx, NULL);
-	if (result != ISC_R_SUCCESS) {
-		fatal("could not initialize dst: %s",
-		      isc_result_totext(result));
-	}
-
-	setup_logging(mctx, &log);
+	setup_logging();
 
 	dns_rdataset_init(&rdataset);
 
@@ -438,16 +431,14 @@ main(int argc, char **argv) {
 			      isc_result_totext(result));
 		}
 
-		for (result = dns_rdataset_first(&rdataset);
-		     result == ISC_R_SUCCESS;
-		     result = dns_rdataset_next(&rdataset))
-		{
-			dns_rdata_init(&rdata);
+		DNS_RDATASET_FOREACH (&rdataset) {
+			dns_rdata_t rdata = DNS_RDATA_INIT;
 			dns_rdataset_current(&rdataset, &rdata);
 			emit(dir, &rdata);
 		}
 	} else {
 		unsigned char key_buf[DST_KEY_MAXSIZE];
+		dns_rdata_t rdata = DNS_RDATA_INIT;
 
 		loadkey(argv[isc_commandline_index], key_buf, DST_KEY_MAXSIZE,
 			&rdata);
@@ -458,18 +449,15 @@ main(int argc, char **argv) {
 	if (dns_rdataset_isassociated(&rdataset)) {
 		dns_rdataset_disassociate(&rdataset);
 	}
-	cleanup_logging(&log);
-	dst_lib_destroy();
 	if (verbose > 10) {
-		isc_mem_stats(mctx, stdout);
+		isc_mem_stats(isc_g_mctx, stdout);
 	}
-	isc_mem_destroy(&mctx);
 
 	fflush(stdout);
 	if (ferror(stdout)) {
 		fprintf(stderr, "write error\n");
-		return (1);
+		return 1;
 	} else {
-		return (0);
+		return 0;
 	}
 }

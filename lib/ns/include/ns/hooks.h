@@ -462,8 +462,8 @@ typedef struct ns_hook_resume {
 
 typedef isc_result_t
 ns_plugin_register_t(const char *parameters, const void *cfg, const char *file,
-		     unsigned long line, isc_mem_t *mctx, isc_log_t *lctx,
-		     void *actx, ns_hooktable_t *hooktable, void **instp);
+		     unsigned long line, isc_mem_t *mctx, void *actx,
+		     ns_hooktable_t *hooktable, void **instp);
 /*%<
  * Called when registering a new plugin.
  *
@@ -474,7 +474,6 @@ ns_plugin_register_t(const char *parameters, const void *cfg, const char *file,
  *
  * Returns:
  *\li	#ISC_R_SUCCESS
- *\li	#ISC_R_NOMEMORY
  *\li	Other errors are possible
  */
 
@@ -488,8 +487,7 @@ ns_plugin_destroy_t(void **instp);
 
 typedef isc_result_t
 ns_plugin_check_t(const char *parameters, const void *cfg, const char *file,
-		  unsigned long line, isc_mem_t *mctx, isc_log_t *lctx,
-		  void *actx);
+		  unsigned long line, isc_mem_t *mctx, void *actx);
 /*%<
  * Check the validity of 'parameters'.
  */
@@ -537,8 +535,7 @@ ns_plugin_expandpath(const char *src, char *dst, size_t dstsize);
 isc_result_t
 ns_plugin_register(const char *modpath, const char *parameters, const void *cfg,
 		   const char *cfg_file, unsigned long cfg_line,
-		   isc_mem_t *mctx, isc_log_t *lctx, void *actx,
-		   dns_view_t *view);
+		   isc_mem_t *mctx, void *actx, dns_view_t *view);
 /*%<
  * Load the plugin module specified from the file 'modpath', and
  * register an instance using 'parameters'.
@@ -557,7 +554,7 @@ ns_plugin_register(const char *modpath, const char *parameters, const void *cfg,
 isc_result_t
 ns_plugin_check(const char *modpath, const char *parameters, const void *cfg,
 		const char *cfg_file, unsigned long cfg_line, isc_mem_t *mctx,
-		isc_log_t *lctx, void *actx);
+		void *actx);
 /*%<
  * Open the plugin module at 'modpath' and check the validity of
  * 'parameters', logging any errors or warnings found, then

@@ -21,8 +21,6 @@
 
 #include <stdio.h>
 
-#include <isc/lang.h>
-
 #include <dns/types.h>
 
 /***
@@ -119,8 +117,6 @@ typedef struct dns_master_style dns_master_style_t;
  * be included when printing a new name.
  */
 #define DNS_STYLEFLAG_CLASS_PERNAME 0x400000000ULL
-
-ISC_LANG_BEGINDECLS
 
 /***
  ***	Constants
@@ -275,7 +271,6 @@ dns_master_dumptostream(isc_mem_t *mctx, dns_db_t *db, dns_dbversion_t *version,
  *
  * Returns:
  *\li	ISC_R_SUCCESS
- *\li	ISC_R_NOMEMORY
  *\li	Any database or rrset iterator error.
  *\li	Any dns_rdata_totext() error code.
  */
@@ -307,7 +302,6 @@ dns_master_dump(isc_mem_t *mctx, dns_db_t *db, dns_dbversion_t *version,
  *
  * Returns:
  *\li	ISC_R_SUCCESS
- *\li	ISC_R_NOMEMORY
  *\li	Any database or rrset iterator error.
  *\li	Any dns_rdata_totext() error code.
  */
@@ -336,17 +330,6 @@ dns_master_questiontotext(const dns_name_t	   *owner_name,
 			  const dns_master_style_t *style,
 			  isc_buffer_t		   *target);
 
-isc_result_t
-dns_master_dumpnodetostream(isc_mem_t *mctx, dns_db_t *db,
-			    dns_dbversion_t *version, dns_dbnode_t *node,
-			    const dns_name_t	     *name,
-			    const dns_master_style_t *style, FILE *f);
-
-isc_result_t
-dns_master_dumpnode(isc_mem_t *mctx, dns_db_t *db, dns_dbversion_t *version,
-		    dns_dbnode_t *node, const dns_name_t *name,
-		    const dns_master_style_t *style, const char *filename);
-
 dns_masterstyle_flags_t
 dns_master_styleflags(const dns_master_style_t *style);
 
@@ -360,5 +343,3 @@ dns_master_stylecreate(dns_master_style_t    **style,
 
 void
 dns_master_styledestroy(dns_master_style_t **style, isc_mem_t *mctx);
-
-ISC_LANG_ENDDECLS

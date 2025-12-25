@@ -23,10 +23,12 @@
 #define UNIT_TESTING
 #include <cmocka.h>
 
+#include <isc/lib.h>
 #include <isc/quota.h>
 #include <isc/util.h>
 
 #include <dns/badcache.h>
+#include <dns/lib.h>
 #include <dns/view.h>
 #include <dns/zone.h>
 
@@ -89,8 +91,8 @@ run_sfcache_test(const ns__query_sfcache_test_params_t *test) {
 	 * Interrupt execution if ns_query_done() is called.
 	 */
 
-	ns_hooktable_create(mctx, &query_hooks);
-	ns_hook_add(query_hooks, mctx, NS_QUERY_DONE_BEGIN, &hook);
+	ns_hooktable_create(isc_g_mctx, &query_hooks);
+	ns_hook_add(query_hooks, isc_g_mctx, NS_QUERY_DONE_BEGIN, &hook);
 	ns__hook_table = query_hooks;
 
 	/*
@@ -120,9 +122,10 @@ run_sfcache_test(const ns__query_sfcache_test_params_t *test) {
 		result = isc_time_nowplusinterval(&expire, &hour);
 		assert_int_equal(result, ISC_R_SUCCESS);
 
-		dns_badcache_add(qctx->client->view->failcache, dns_rootname,
-				 dns_rdatatype_ns, true,
-				 test->cache_entry_flags, &expire);
+		dns_badcache_add(qctx->client->inner.view->failcache,
+				 dns_rootname, dns_rdatatype_ns,
+				 test->cache_entry_flags,
+				 isc_time_seconds(&expire));
 	}
 
 	/*
@@ -150,7 +153,7 @@ run_sfcache_test(const ns__query_sfcache_test_params_t *test) {
 	 * Clean up.
 	 */
 	ns_test_qctx_destroy(&qctx);
-	ns_hooktable_free(mctx, (void **)&query_hooks);
+	ns_hooktable_free(isc_g_mctx, (void **)&query_hooks);
 }
 
 /* test ns__query_sfcache() */
@@ -229,8 +232,8 @@ ISC_LOOP_TEST_IMPL(ns__query_sfcache) {
 		run_sfcache_test(&tests[i]);
 	}
 
-	isc_loop_teardown(mainloop, shutdown_interfacemgr, NULL);
-	isc_loopmgr_shutdown(loopmgr);
+	isc_loop_teardown(isc_loop_main(), shutdown_interfacemgr, NULL);
+	isc_loopmgr_shutdown();
 }
 
 /*****
@@ -291,9 +294,9 @@ run_start_test(const ns__query_start_test_params_t *test) {
 	/*
 	 * Interrupt execution if query_lookup() or ns_query_done() is called.
 	 */
-	ns_hooktable_create(mctx, &query_hooks);
-	ns_hook_add(query_hooks, mctx, NS_QUERY_LOOKUP_BEGIN, &hook);
-	ns_hook_add(query_hooks, mctx, NS_QUERY_DONE_BEGIN, &hook);
+	ns_hooktable_create(isc_g_mctx, &query_hooks);
+	ns_hook_add(query_hooks, isc_g_mctx, NS_QUERY_LOOKUP_BEGIN, &hook);
+	ns_hook_add(query_hooks, isc_g_mctx, NS_QUERY_DONE_BEGIN, &hook);
 	ns__hook_table = query_hooks;
 
 	/*
@@ -313,7 +316,7 @@ run_start_test(const ns__query_start_test_params_t *test) {
 	/*
 	 * Enable view->checknames by default, disable if requested.
 	 */
-	qctx->client->view->checknames = !test->disable_name_checks;
+	qctx->client->inner.view->checknames = !test->disable_name_checks;
 
 	/*
 	 * Load zone from file and attach it to the client's view, if
@@ -322,7 +325,7 @@ run_start_test(const ns__query_start_test_params_t *test) {
 	if (test->auth_zone_path != NULL) {
 		result = ns_test_serve_zone(test->auth_zone_origin,
 					    test->auth_zone_path,
-					    qctx->client->view);
+					    qctx->client->inner.view);
 		assert_int_equal(result, ISC_R_SUCCESS);
 	}
 
@@ -365,7 +368,8 @@ run_start_test(const ns__query_start_test_params_t *test) {
 				 "query context, but some was",
 				 test->id.description, test->id.lineno);
 		}
-		if (qctx->db == NULL || qctx->db != qctx->client->view->cachedb)
+		if (qctx->db == NULL ||
+		    qctx->db != qctx->client->inner.view->cachedb)
 		{
 			fail_msg("# test \"%s\" on line %d: "
 				 "cache database was expected to be "
@@ -386,7 +390,7 @@ run_start_test(const ns__query_start_test_params_t *test) {
 				 "context, but it was not",
 				 test->id.description, test->id.lineno);
 		}
-		if (qctx->db == qctx->client->view->cachedb) {
+		if (qctx->db == qctx->client->inner.view->cachedb) {
 			fail_msg("# test \"%s\" on line %d: "
 				 "cache database was not expected to be "
 				 "attached to query context, but it is",
@@ -408,7 +412,7 @@ run_start_test(const ns__query_start_test_params_t *test) {
 		ns_test_cleanup_zone();
 	}
 	ns_test_qctx_destroy(&qctx);
-	ns_hooktable_free(mctx, (void **)&query_hooks);
+	ns_hooktable_free(isc_g_mctx, (void **)&query_hooks);
 }
 
 /* test ns__query_start() */
@@ -577,8 +581,8 @@ ISC_LOOP_TEST_IMPL(ns__query_start) {
 		run_start_test(&tests[i]);
 	}
 
-	isc_loop_teardown(mainloop, shutdown_interfacemgr, NULL);
-	isc_loopmgr_shutdown(loopmgr);
+	isc_loop_teardown(isc_loop_main(), shutdown_interfacemgr, NULL);
+	isc_loopmgr_shutdown();
 }
 
 /*****
@@ -633,19 +637,18 @@ cancel_hookactx(ns_hookasync_t *ctx) {
 
 /* 'runasync' callback passed to ns_query_hookasync */
 static isc_result_t
-test_hookasync(query_ctx_t *qctx, isc_mem_t *memctx, void *arg,
-	       isc_loop_t *loop, isc_job_cb cb, void *evarg,
-	       ns_hookasync_t **ctxp) {
+test_hookasync(query_ctx_t *qctx, isc_mem_t *mctx, void *arg, isc_loop_t *loop,
+	       isc_job_cb cb, void *evarg, ns_hookasync_t **ctxp) {
 	hookasync_data_t *asdata = arg;
 	ns_hookasync_t *ctx = NULL;
 	ns_hook_resume_t *rev = NULL;
 
 	if (asdata->start_result != ISC_R_SUCCESS) {
-		return (asdata->start_result);
+		return asdata->start_result;
 	}
 
-	ctx = isc_mem_get(memctx, sizeof(*ctx));
-	rev = isc_mem_get(memctx, sizeof(*rev));
+	ctx = isc_mem_get(mctx, sizeof(*ctx));
+	rev = isc_mem_get(mctx, sizeof(*rev));
 	*rev = (ns_hook_resume_t){
 		.hookpoint = asdata->hookpoint,
 		.origresult = DNS_R_NXDOMAIN,
@@ -663,10 +666,10 @@ test_hookasync(query_ctx_t *qctx, isc_mem_t *memctx, void *arg,
 		.cancel = cancel_hookactx,
 		.private = asdata,
 	};
-	isc_mem_attach(memctx, &ctx->mctx);
+	isc_mem_attach(mctx, &ctx->mctx);
 
 	*ctxp = ctx;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 /*
@@ -711,121 +714,118 @@ hook_async_common(void *arg, void *data, isc_result_t *resultp,
 	}
 
 	*resultp = ISC_R_UNSET;
-	return (NS_HOOK_RETURN);
+	return NS_HOOK_RETURN;
 }
 
 static ns_hookresult_t
 hook_async_query_setup(void *arg, void *data, isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp, NS_QUERY_SETUP));
+	return hook_async_common(arg, data, resultp, NS_QUERY_SETUP);
 }
 
 static ns_hookresult_t
 hook_async_query_start_begin(void *arg, void *data, isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp, NS_QUERY_START_BEGIN));
+	return hook_async_common(arg, data, resultp, NS_QUERY_START_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_lookup_begin(void *arg, void *data, isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp, NS_QUERY_LOOKUP_BEGIN));
+	return hook_async_common(arg, data, resultp, NS_QUERY_LOOKUP_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_resume_begin(void *arg, void *data, isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp, NS_QUERY_RESUME_BEGIN));
+	return hook_async_common(arg, data, resultp, NS_QUERY_RESUME_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_got_answer_begin(void *arg, void *data,
 				  isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp,
-				  NS_QUERY_GOT_ANSWER_BEGIN));
+	return hook_async_common(arg, data, resultp, NS_QUERY_GOT_ANSWER_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_respond_any_begin(void *arg, void *data,
 				   isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp,
-				  NS_QUERY_RESPOND_ANY_BEGIN));
+	return hook_async_common(arg, data, resultp,
+				 NS_QUERY_RESPOND_ANY_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_addanswer_begin(void *arg, void *data, isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp,
-				  NS_QUERY_ADDANSWER_BEGIN));
+	return hook_async_common(arg, data, resultp, NS_QUERY_ADDANSWER_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_notfound_begin(void *arg, void *data, isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp, NS_QUERY_NOTFOUND_BEGIN));
+	return hook_async_common(arg, data, resultp, NS_QUERY_NOTFOUND_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_prep_delegation_begin(void *arg, void *data,
 				       isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp,
-				  NS_QUERY_PREP_DELEGATION_BEGIN));
+	return hook_async_common(arg, data, resultp,
+				 NS_QUERY_PREP_DELEGATION_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_zone_delegation_begin(void *arg, void *data,
 				       isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp,
-				  NS_QUERY_ZONE_DELEGATION_BEGIN));
+	return hook_async_common(arg, data, resultp,
+				 NS_QUERY_ZONE_DELEGATION_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_delegation_begin(void *arg, void *data,
 				  isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp,
-				  NS_QUERY_DELEGATION_BEGIN));
+	return hook_async_common(arg, data, resultp, NS_QUERY_DELEGATION_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_delegation_recurse_begin(void *arg, void *data,
 					  isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp,
-				  NS_QUERY_DELEGATION_RECURSE_BEGIN));
+	return hook_async_common(arg, data, resultp,
+				 NS_QUERY_DELEGATION_RECURSE_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_nodata_begin(void *arg, void *data, isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp, NS_QUERY_NODATA_BEGIN));
+	return hook_async_common(arg, data, resultp, NS_QUERY_NODATA_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_nxdomain_begin(void *arg, void *data, isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp, NS_QUERY_NXDOMAIN_BEGIN));
+	return hook_async_common(arg, data, resultp, NS_QUERY_NXDOMAIN_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_ncache_begin(void *arg, void *data, isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp, NS_QUERY_NCACHE_BEGIN));
+	return hook_async_common(arg, data, resultp, NS_QUERY_NCACHE_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_cname_begin(void *arg, void *data, isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp, NS_QUERY_CNAME_BEGIN));
+	return hook_async_common(arg, data, resultp, NS_QUERY_CNAME_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_dname_begin(void *arg, void *data, isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp, NS_QUERY_DNAME_BEGIN));
+	return hook_async_common(arg, data, resultp, NS_QUERY_DNAME_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_respond_begin(void *arg, void *data, isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp, NS_QUERY_RESPOND_BEGIN));
+	return hook_async_common(arg, data, resultp, NS_QUERY_RESPOND_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_response_begin(void *arg, void *data, isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp,
-				  NS_QUERY_PREP_RESPONSE_BEGIN));
+	return hook_async_common(arg, data, resultp,
+				 NS_QUERY_PREP_RESPONSE_BEGIN);
 }
 
 static ns_hookresult_t
 hook_async_query_done_begin(void *arg, void *data, isc_result_t *resultp) {
-	return (hook_async_common(arg, data, resultp, NS_QUERY_DONE_BEGIN));
+	return hook_async_common(arg, data, resultp, NS_QUERY_DONE_BEGIN);
 }
 
 /*
@@ -839,7 +839,7 @@ ns_test_qctx_destroy_hook(void *arg, void *data, isc_result_t *resultp) {
 
 	asdata->qctx = *qctx; /* remember passed ctx for inspection */
 	*resultp = ISC_R_UNSET;
-	return (NS_HOOK_CONTINUE);
+	return NS_HOOK_CONTINUE;
 }
 
 static void
@@ -869,16 +869,18 @@ run_hookasync_test(const ns__query_hookasync_test_params_t *test) {
 	 * in practice, but that's fine for the testing purpose).
 	 */
 	ns__hook_table = NULL;
-	ns_hooktable_create(mctx, &ns__hook_table);
-	ns_hook_add(ns__hook_table, mctx, NS_QUERY_START_BEGIN, &testhook);
+	ns_hooktable_create(isc_g_mctx, &ns__hook_table);
+	ns_hook_add(ns__hook_table, isc_g_mctx, NS_QUERY_START_BEGIN,
+		    &testhook);
 	if (test->hookpoint2 != NS_QUERY_START_BEGIN) {
 		/*
 		 * unless testing START_BEGIN itself, specify the hook for the
 		 * expected resume point, too.
 		 */
-		ns_hook_add(ns__hook_table, mctx, test->hookpoint2, &testhook);
+		ns_hook_add(ns__hook_table, isc_g_mctx, test->hookpoint2,
+			    &testhook);
 	}
-	ns_hook_add(ns__hook_table, mctx, NS_QUERY_QCTX_DESTROYED,
+	ns_hook_add(ns__hook_table, isc_g_mctx, NS_QUERY_QCTX_DESTROYED,
 		    &destroyhook);
 
 	{
@@ -888,7 +890,7 @@ run_hookasync_test(const ns__query_hookasync_test_params_t *test) {
 		};
 		result = ns_test_qctx_create(&qctx_params, &qctx);
 		INSIST(result == ISC_R_SUCCESS);
-		qctx->client->sendcb = send_noop;
+		qctx->client->inner.sendcb = send_noop;
 	}
 
 	/*
@@ -915,15 +917,15 @@ run_hookasync_test(const ns__query_hookasync_test_params_t *test) {
 	    test->do_cancel)
 	{
 		expect_servfail = true;
-		isc_nmhandle_attach(qctx->client->handle,
-				    &qctx->client->reqhandle);
+		isc_nmhandle_attach(qctx->client->inner.handle,
+				    &qctx->client->inner.reqhandle);
 	}
 
 	/*
 	 * Emulate query handling from query_start.
 	 * Specified hook should be called.
 	 */
-	qctx->client->state = NS_CLIENTSTATE_WORKING;
+	qctx->client->inner.state = NS_CLIENTSTATE_WORKING;
 	result = ns__query_start(qctx);
 	INSIST(result == ISC_R_UNSET);
 
@@ -945,23 +947,23 @@ run_hookasync_test(const ns__query_hookasync_test_params_t *test) {
 
 	/* If async event has started, manually invoke the 'done' event. */
 	if (asdata.async) {
-		qctx->client->now = 0; /* set to sentinel before resume */
+		qctx->client->inner.now = 0; /* set to sentinel before resume */
 		asdata.rev->cb(asdata.rev);
 
 		/* Confirm necessary cleanup has been performed. */
 		INSIST(qctx->client->query.hookactx == NULL);
-		INSIST(qctx->client->state == NS_CLIENTSTATE_WORKING);
+		INSIST(qctx->client->inner.state == NS_CLIENTSTATE_WORKING);
 		INSIST(ns_stats_get_counter(
 			       qctx->client->manager->sctx->nsstats,
 			       ns_statscounter_recursclients) == 0);
-		INSIST(!ISC_LINK_LINKED(qctx->client, rlink));
+		INSIST(!ISC_LINK_LINKED(qctx->client, inner.rlink));
 		if (!test->do_cancel) {
 			/*
 			 * In the normal case the client's timestamp is updated
 			 * and the query handling has been resumed from the
 			 * expected point.
 			 */
-			INSIST(qctx->client->now != 0);
+			INSIST(qctx->client->inner.now != 0);
 			INSIST(asdata.lasthookpoint == test->hookpoint2);
 		}
 	} else {
@@ -989,7 +991,7 @@ run_hookasync_test(const ns__query_hookasync_test_params_t *test) {
 	 * qctx->client may have been invalidated while we still need it.
 	 */
 	ns_test_qctx_destroy(&qctx);
-	ns_hooktable_free(mctx, (void **)&ns__hook_table);
+	ns_hooktable_free(isc_g_mctx, (void **)&ns__hook_table);
 	if (!test->quota_ok) {
 		isc_quota_release(&sctx->recursionquota);
 	}
@@ -1234,8 +1236,8 @@ ISC_LOOP_TEST_IMPL(ns__query_hookasync) {
 		run_hookasync_test(&tests[i]);
 	}
 
-	isc_loop_teardown(mainloop, shutdown_interfacemgr, NULL);
-	isc_loopmgr_shutdown(loopmgr);
+	isc_loop_teardown(isc_loop_main(), shutdown_interfacemgr, NULL);
+	isc_loopmgr_shutdown();
 }
 
 /*****
@@ -1277,7 +1279,7 @@ cancel_e2ehookactx(ns_hookasync_t *ctx) {
 
 /* 'runasync' callback passed to ns_query_hookasync */
 static isc_result_t
-test_hookasync_e2e(query_ctx_t *qctx, isc_mem_t *memctx, void *arg,
+test_hookasync_e2e(query_ctx_t *qctx, isc_mem_t *mctx, void *arg,
 		   isc_loop_t *loop, isc_job_cb cb, void *evarg,
 		   ns_hookasync_t **ctxp) {
 	ns_hookasync_t *ctx = NULL;
@@ -1285,11 +1287,11 @@ test_hookasync_e2e(query_ctx_t *qctx, isc_mem_t *memctx, void *arg,
 	hookasync_e2e_data_t *asdata = arg;
 
 	if (asdata->start_result != ISC_R_SUCCESS) {
-		return (asdata->start_result);
+		return asdata->start_result;
 	}
 
-	ctx = isc_mem_get(memctx, sizeof(*ctx));
-	rev = isc_mem_get(memctx, sizeof(*rev));
+	ctx = isc_mem_get(mctx, sizeof(*ctx));
+	rev = isc_mem_get(mctx, sizeof(*rev));
 	*rev = (ns_hook_resume_t){
 		.hookpoint = asdata->hookpoint,
 		.saved_qctx = qctx,
@@ -1306,10 +1308,10 @@ test_hookasync_e2e(query_ctx_t *qctx, isc_mem_t *memctx, void *arg,
 		.cancel = cancel_e2ehookactx,
 		.private = asdata,
 	};
-	isc_mem_attach(memctx, &ctx->mctx);
+	isc_mem_attach(mctx, &ctx->mctx);
 
 	*ctxp = ctx;
-	return (ISC_R_SUCCESS);
+	return ISC_R_SUCCESS;
 }
 
 static ns_hookresult_t
@@ -1323,18 +1325,18 @@ hook_async_e2e(void *arg, void *data, isc_result_t *resultp) {
 		result = ns_query_hookasync(qctx, test_hookasync_e2e, asdata);
 		if (result != ISC_R_SUCCESS) {
 			*resultp = result;
-			return (NS_HOOK_RETURN);
+			return NS_HOOK_RETURN;
 		}
 
 		asdata->async = true;
 		asdata->rev->origresult = *resultp; /* save it for resume */
 		*resultp = ISC_R_UNSET;
-		return (NS_HOOK_RETURN);
+		return NS_HOOK_RETURN;
 	} else {
 		/* Resume from the completion of async event */
 		asdata->async = false;
 		/* Don't touch 'resultp' */
-		return (NS_HOOK_CONTINUE);
+		return NS_HOOK_CONTINUE;
 	}
 }
 
@@ -1350,7 +1352,7 @@ hook_donesend(void *arg, void *data, isc_result_t *resultp) {
 	INSIST(qctx->client->message->rcode == asdata->expected_rcode);
 	asdata->done = true; /* Let the test know this hook is called */
 	*resultp = ISC_R_UNSET;
-	return (NS_HOOK_CONTINUE);
+	return NS_HOOK_CONTINUE;
 }
 
 static void
@@ -1379,29 +1381,30 @@ run_hookasync_e2e_test(const ns__query_hookasync_e2e_test_params_t *test) {
 	};
 
 	ns__hook_table = NULL;
-	ns_hooktable_create(mctx, &ns__hook_table);
-	ns_hook_add(ns__hook_table, mctx, test->hookpoint, &hook);
-	ns_hook_add(ns__hook_table, mctx, NS_QUERY_DONE_SEND, &donesend_hook);
+	ns_hooktable_create(isc_g_mctx, &ns__hook_table);
+	ns_hook_add(ns__hook_table, isc_g_mctx, test->hookpoint, &hook);
+	ns_hook_add(ns__hook_table, isc_g_mctx, NS_QUERY_DONE_SEND,
+		    &donesend_hook);
 
 	result = ns_test_qctx_create(&qctx_params, &qctx);
 	INSIST(result == ISC_R_SUCCESS);
 
-	isc_sockaddr_any(&qctx->client->peeraddr); /* for sortlist */
-	qctx->client->sendcb = send_noop;
+	qctx->client->inner.sendcb = send_noop;
 
 	/* Load a zone.  it should have ns.foo/A */
 	result = ns_test_serve_zone("foo", TESTS_DIR "/testdata/query/foo.db",
-				    qctx->client->view);
+				    qctx->client->inner.view);
 	INSIST(result == ISC_R_SUCCESS);
 
 	/*
 	 * We expect to have a response sent all cases, so we need to
 	 * setup reqhandle (which will be detached on the send).
 	 */
-	isc_nmhandle_attach(qctx->client->handle, &qctx->client->reqhandle);
+	isc_nmhandle_attach(qctx->client->inner.handle,
+			    &qctx->client->inner.reqhandle);
 
 	/* Handle the query.  hook-based async event will be triggered. */
-	qctx->client->state = NS_CLIENTSTATE_WORKING;
+	qctx->client->inner.state = NS_CLIENTSTATE_WORKING;
 	ns__query_start(qctx);
 
 	/* If specified cancel the query at this point. */
@@ -1430,7 +1433,7 @@ run_hookasync_e2e_test(const ns__query_hookasync_e2e_test_params_t *test) {
 	/* Cleanup */
 	ns_test_qctx_destroy(&qctx);
 	ns_test_cleanup_zone();
-	ns_hooktable_free(mctx, (void **)&ns__hook_table);
+	ns_hooktable_free(isc_g_mctx, (void **)&ns__hook_table);
 }
 
 ISC_LOOP_TEST_IMPL(ns__query_hookasync_e2e) {
@@ -1473,8 +1476,8 @@ ISC_LOOP_TEST_IMPL(ns__query_hookasync_e2e) {
 		run_hookasync_e2e_test(&tests[i]);
 	}
 
-	isc_loop_teardown(mainloop, shutdown_interfacemgr, NULL);
-	isc_loopmgr_shutdown(loopmgr);
+	isc_loop_teardown(isc_loop_main(), shutdown_interfacemgr, NULL);
+	isc_loopmgr_shutdown();
 }
 
 ISC_TEST_LIST_START

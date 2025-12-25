@@ -57,7 +57,6 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-#include <isc/lang.h>
 #include <isc/magic.h>
 #include <isc/mutex.h>
 #include <isc/net.h>
@@ -77,8 +76,6 @@
 #include <dns/transport.h>
 #include <dns/types.h>
 #include <dns/zt.h>
-
-ISC_LANG_BEGINDECLS
 
 struct dns_view {
 	/* Unlocked. */
@@ -108,8 +105,8 @@ struct dns_view {
 
 	/* Configurable data. */
 	dns_transport_list_t *transports;
-	dns_tsig_keyring_t   *statickeys;
-	dns_tsig_keyring_t   *dynamickeys;
+	dns_tsigkeyring_t    *statickeys;
+	dns_tsigkeyring_t    *dynamickeys;
 	dns_peerlist_t	     *peers;
 	dns_order_t	     *order;
 	dns_fwdtable_t	     *fwdtable;
@@ -132,22 +129,23 @@ struct dns_view {
 	dns_acl_t	     *queryonacl;
 	dns_acl_t	     *recursionacl;
 	dns_acl_t	     *recursiononacl;
-	dns_acl_t	     *sortlist;
 	dns_acl_t	     *notifyacl;
 	dns_acl_t	     *transferacl;
 	dns_acl_t	     *updateacl;
 	dns_acl_t	     *upfwdacl;
 	dns_acl_t	     *denyansweracl;
 	dns_acl_t	     *nocasecompress;
+	dns_acl_t	     *proxyacl;
+	dns_acl_t	     *proxyonacl;
 	bool		      msgcompression;
-	dns_rbt_t	     *answeracl_exclude;
-	dns_rbt_t	     *denyanswernames;
-	dns_rbt_t	     *answernames_exclude;
+	dns_nametree_t	     *answeracl_exclude;
+	dns_nametree_t	     *denyanswernames;
+	dns_nametree_t	     *answernames_exclude;
+	dns_nametree_t	     *sfd;
 	dns_rrl_t	     *rrl;
-	dns_rbt_t	     *sfd;
-	isc_rwlock_t	      sfd_lock;
 	bool		      provideixfr;
 	bool		      requestnsid;
+	bool		      requestzoneversion;
 	bool		      sendcookie;
 	dns_ttl_t	      maxcachettl;
 	dns_ttl_t	      maxncachettl;
@@ -166,22 +164,28 @@ struct dns_view {
 	uint16_t	      maxudp;
 	dns_ttl_t	      staleanswerttl;
 	dns_stale_answer_t    staleanswersok;	  /* rndc setting */
-	bool		      staleanswersenable; /* named.conf setting
-						   * */
-	uint32_t	  staleanswerclienttimeout;
-	uint16_t	  nocookieudp;
-	uint16_t	  padding;
-	dns_acl_t	 *pad_acl;
-	unsigned int	  maxbits;
-	dns_dns64list_t	  dns64;
-	unsigned int	  dns64cnt;
-	dns_rpz_zones_t	 *rpzs;
-	dns_catz_zones_t *catzs;
-	dns_dlzdblist_t	  dlz_searched;
-	dns_dlzdblist_t	  dlz_unsearched;
-	uint32_t	  fail_ttl;
-	dns_badcache_t	 *failcache;
-	unsigned int	  udpsize;
+	bool		      staleanswersenable; /* named.conf setting */
+	uint32_t	      staleanswerclienttimeout;
+	uint16_t	      nocookieudp;
+	uint16_t	      padding;
+	dns_acl_t	     *pad_acl;
+	dns_dns64list_t	      dns64;
+	unsigned int	      dns64cnt;
+	bool		      usedns64;
+	dns_rpz_zones_t	     *rpzs;
+	dns_catz_zones_t     *catzs;
+	dns_dlzdblist_t	      dlz_searched;
+	dns_dlzdblist_t	      dlz_unsearched;
+	uint32_t	      fail_ttl;
+	dns_badcache_t	     *failcache;
+	dns_unreachcache_t   *unreachcache;
+	unsigned int	      udpsize;
+	uint32_t	      sig0key_checks_limit;
+	uint32_t	      sig0message_checks_limit;
+	uint32_t	      maxrrperset;
+	uint32_t	      maxtypepername;
+	uint16_t	      max_queries;
+	uint8_t		      max_restarts;
 
 	/*
 	 * Configurable data for server use only,
@@ -258,8 +262,8 @@ struct dns_view {
 #endif /* __OpenBSD__ */
 #endif /* HAVE_LMDB */
 
-isc_result_t
-dns_view_create(isc_mem_t *mctx, isc_loopmgr_t *loopmgr,
+void
+dns_view_create(isc_mem_t *mctx, dns_dispatchmgr_t *dispmgr,
 		dns_rdataclass_t rdclass, const char *name, dns_view_t **viewp);
 /*%<
  * Create a view.
@@ -278,13 +282,6 @@ dns_view_create(isc_mem_t *mctx, isc_loopmgr_t *loopmgr,
  *\li	'name' is a valid C string.
  *
  *\li	viewp != NULL && *viewp == NULL
- *
- * Returns:
- *
- *\li	#ISC_R_SUCCESS
- *\li	#ISC_R_NOMEMORY
- *
- *\li	Other errors are possible.
  */
 
 void
@@ -365,9 +362,8 @@ dns_view_weakdetach(dns_view_t **targetp);
  */
 
 isc_result_t
-dns_view_createresolver(dns_view_t *view, isc_loopmgr_t *loopmgr,
-			unsigned int ndisp, isc_nm_t *netmgr,
-			unsigned int options, isc_tlsctx_cache_t *tlsctx_cache,
+dns_view_createresolver(dns_view_t *view, unsigned int options,
+			isc_tlsctx_cache_t *tlsctx_cache,
 			dns_dispatch_t *dispatchv4, dns_dispatch_t *dispatchv6);
 /*%<
  * Create a resolver and address database for the view.
@@ -377,9 +373,6 @@ dns_view_createresolver(dns_view_t *view, isc_loopmgr_t *loopmgr,
  *\li	'view' is a valid, unfrozen view.
  *
  *\li	'view' does not have a resolver already.
- *
- *\li	A dispatch manager has been associated with the view by calling
- *	dns_view_setdispatchmgr().
  *
  *\li	The requirements of dns_resolver_create() apply to 'ndisp',
  *	'netmgr', 'options', 'tlsctx_cache', 'dispatchv4', and 'dispatchv6'.
@@ -433,9 +426,9 @@ void
 dns_view_settransports(dns_view_t *view, dns_transport_list_t *list);
 
 void
-dns_view_setkeyring(dns_view_t *view, dns_tsig_keyring_t *ring);
+dns_view_setkeyring(dns_view_t *view, dns_tsigkeyring_t *ring);
 void
-dns_view_setdynamickeyring(dns_view_t *view, dns_tsig_keyring_t *ring);
+dns_view_setdynamickeyring(dns_view_t *view, dns_tsigkeyring_t *ring);
 /*%<
  * Set the view's static TSIG keys
  *
@@ -452,7 +445,7 @@ dns_view_setdynamickeyring(dns_view_t *view, dns_tsig_keyring_t *ring);
  */
 
 void
-dns_view_getdynamickeyring(dns_view_t *view, dns_tsig_keyring_t **ringp);
+dns_view_getdynamickeyring(dns_view_t *view, dns_tsigkeyring_t **ringp);
 /*%<
  * Return the views dynamic keys.
  *
@@ -489,6 +482,16 @@ dns_view_addzone(dns_view_t *view, dns_zone_t *zone);
  * Requires:
  *
  *\li	'view' is a valid, unfrozen view.
+ *
+ *\li	'zone' is a valid zone.
+ */
+
+isc_result_t
+dns_view_delzone(dns_view_t *view, dns_zone_t *zone);
+/*%<
+ * Removes zone 'zone' from 'view'.
+ *
+ * Requires:
  *
  *\li	'zone' is a valid zone.
  */
@@ -542,8 +545,11 @@ dns_view_find(dns_view_t *view, const dns_name_t *name, dns_rdatatype_t type,
  * Notes:
  *
  *\li	See the description of dns_db_find() for information about 'options'.
- *	If the caller sets #DNS_DBFIND_GLUEOK, it must ensure that 'name'
- *	and 'type' are appropriate for glue retrieval.
+
+ *\li	If the caller sets #DNS_DBFIND_GLUEOK, it must ensure that 'name'
+ *	and 'type' are appropriate for glue retrieval. Glue found in a
+ *	zone database will be returned without checking the cache for a
+ *	better answer.
  *
  *\li	If 'now' is zero, then the current time will be used.
  *
@@ -751,11 +757,11 @@ dns_viewlist_findzone(dns_viewlist_t *list, const dns_name_t *name,
  */
 
 isc_result_t
-dns_view_findzone(dns_view_t *view, const dns_name_t *name, dns_zone_t **zonep);
+dns_view_findzone(dns_view_t *view, const dns_name_t *name,
+		  unsigned int options, dns_zone_t **zonep);
 /*%<
  * Search for the zone 'name' in the zone table of 'view'.
- * If found, 'zonep' is (strongly) attached to it.  There
- * are no partial matches.
+ * If found, 'zonep' is (strongly) attached to it.
  *
  * Requires:
  *
@@ -842,12 +848,6 @@ dns_view_checksig(dns_view_t *view, isc_buffer_t *source, dns_message_t *msg);
  *\li	see dns_tsig_verify()
  */
 
-void
-dns_view_dialup(dns_view_t *view);
-/*%<
- * Perform dialup-time maintenance on the zones of 'view'.
- */
-
 isc_result_t
 dns_view_flushcache(dns_view_t *view, bool fixuponly);
 /*%<
@@ -864,7 +864,7 @@ dns_view_flushcache(dns_view_t *view, bool fixuponly);
  *
  * Returns:
  *\li	#ISC_R_SUCCESS
- *\li	#ISC_R_NOMEMORY
+ *	other returns are failures.
  */
 
 isc_result_t
@@ -922,17 +922,13 @@ dns_view_iscacheshared(dns_view_t *view);
  *\li	#false otherwise.
  */
 
-isc_result_t
-dns_view_initntatable(dns_view_t *view, isc_loopmgr_t *loopmgr);
+void
+dns_view_initntatable(dns_view_t *view);
 /*%<
  * Initialize the negative trust anchor table for the view.
  *
  * Requires:
  * \li	'view' is valid.
- *
- * Returns:
- *\li	ISC_R_SUCCESS
- *\li	Any other result indicates failure
  */
 
 isc_result_t
@@ -953,8 +949,8 @@ dns_view_getntatable(dns_view_t *view, dns_ntatable_t **ntp);
  *\li	ISC_R_NOTFOUND
  */
 
-isc_result_t
-dns_view_initsecroots(dns_view_t *view, isc_mem_t *mctx);
+void
+dns_view_initsecroots(dns_view_t *view);
 /*%<
  * Initialize security roots for the view, detaching any previously
  * existing security roots first.  (Note that secroots_priv is
@@ -989,13 +985,12 @@ dns_view_getsecroots(dns_view_t *view, dns_keytable_t **ktp);
  *\li	ISC_R_NOTFOUND
  */
 
-isc_result_t
+bool
 dns_view_issecuredomain(dns_view_t *view, const dns_name_t *name,
-			isc_stdtime_t now, bool checknta, bool *ntap,
-			bool *secure_domain);
+			isc_stdtime_t now, bool checknta, bool *ntap);
 /*%<
  * Is 'name' at or beneath a trusted key, and not covered by a valid
- * negative trust anchor?  Put answer in '*secure_domain'.
+ * negative trust anchor, and DNSSEC validation is enabled?
  *
  * If 'checknta' is false, ignore the NTA table in determining
  * whether this is a secure domain. If 'checknta' is not false, and if
@@ -1004,10 +999,6 @@ dns_view_issecuredomain(dns_view_t *view, const dns_name_t *name,
  *
  * Requires:
  * \li	'view' is valid.
- *
- * Returns:
- *\li	ISC_R_SUCCESS
- *\li	Any other value indicates failure
  */
 
 bool
@@ -1236,6 +1227,18 @@ dns_view_getresolver(dns_view_t *view, dns_resolver_t **resolverp);
  */
 
 void
+dns_view_setmaxrrperset(dns_view_t *view, uint32_t value);
+/*%<
+ * Set the maximum resource records per RRSet that can be cached.
+ */
+
+void
+dns_view_setmaxtypepername(dns_view_t *view, uint32_t value);
+/*%<
+ * Set the maximum resource record types per owner name that can be cached.
+ */
+
+void
 dns_view_setudpsize(dns_view_t *view, uint16_t udpsize);
 /*%<
  * Set the EDNS UDP buffer size advertised by the server.
@@ -1247,12 +1250,10 @@ dns_view_getudpsize(dns_view_t *view);
  * Get the current EDNS UDP buffer size.
  */
 
-void
-dns_view_setdispatchmgr(dns_view_t *view, dns_dispatchmgr_t *dispatchmgr);
 dns_dispatchmgr_t *
 dns_view_getdispatchmgr(dns_view_t *view);
 /*%<
- * Set/get the dispatch manager for the view; this wil be used
+ * Get the attached dispatch manager for the view; this will be used
  * by the resolver and request managers to send and receive DNS
  * messages.
  */
@@ -1264,11 +1265,11 @@ dns_view_addtrustedkey(dns_view_t *view, dns_rdatatype_t rdtype,
  * Add a DNSSEC trusted key to a view of class 'IN'.  'rdtype' is the type
  * of the RR data for the key, either DNSKEY or DS.  'keyname' is the DNS
  * name of the key, and 'databuf' stores the RR data.
-
+ *
  * Requires:
  *
  *\li	'view' is a valid view.
-
+ *
  *\li	'view' is class 'IN'.
  *
  *\li	'keyname' is a valid name.
@@ -1281,4 +1282,53 @@ dns_view_addtrustedkey(dns_view_t *view, dns_rdatatype_t rdtype,
  *
  *\li	Anything else				Failure.
  */
-ISC_LANG_ENDDECLS
+
+isc_result_t
+dns_view_apply(dns_view_t *view, bool stop, isc_result_t *sub,
+	       isc_result_t (*action)(dns_zone_t *, void *), void *uap);
+/*%<
+ * Call dns_zt_apply on the view's zonetable.
+ *
+ * Returns:
+ * \li  ISC_R_SUCCESS if action was applied to all nodes.  If 'stop' is
+ *	false and 'sub' is non NULL then the first error (if any)
+ *	reported by 'action' is returned in '*sub'. If 'stop' is true,
+ *	the first error code from 'action' is returned.
+ *
+ * \li ISC_R_SHUTTINGDOWN if the view is in the process of shutting down.
+ */
+
+void
+dns_view_getadb(dns_view_t *view, dns_adb_t **adbp);
+/*%<
+ * Get the view's adb if it exist.
+ *
+ * Requires:
+ *
+ *\li	'view' is a valid view.
+ *\li	'adbp' is non-NULL and '*adbp' is NULL.
+ */
+
+void
+dns_view_setmaxrestarts(dns_view_t *view, uint8_t max_restarts);
+/*%<
+ * Set the number of permissible chained queries before we give up,
+ * to prevent CNAME loops. This defaults to 11.
+ *
+ * Requires:
+ *
+ *\li	'view' is valid;
+ *\li	'max_restarts' is greater than 0.
+ */
+
+void
+dns_view_setmaxqueries(dns_view_t *view, uint16_t max_queries);
+/*%
+ * Set the number of permissible outgoing queries before we give up.
+ * This defaults to 200.
+ *
+ * Requires:
+ *
+ *\li	'view' is valid;
+ *\li	'max_queries' is greater than 0.
+ */

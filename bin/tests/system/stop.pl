@@ -58,7 +58,7 @@ if (!$test) {
 # Global variables
 my $builddir = $ENV{'builddir'};
 my $srcdir = $ENV{'srcdir'};
-my $testdir = "$builddir/$test";
+my $testdir = "$srcdir/$test";
 
 if (! -d $testdir) {
 	die "No test directory: \"$testdir\"\n";
@@ -130,16 +130,6 @@ exit($errors);
 
 # Subroutines
 
-# Return the full path to a given server's lock file.
-sub server_lock_file {
-	my ( $server ) = @_;
-
-	return $testdir . "/" . $server . "/named.lock" if ($server =~ /^ns/);
-	return if ($server =~ /^ans/);
-
-	die "Unknown server type $server\n";
-}
-
 # Return the full path to a given server's PID file.
 sub server_pid_file {
 	my ( $server ) = @_;
@@ -189,13 +179,13 @@ sub stop_rndc {
 	my $how = $halt ? "halt" : "stop";
 
 	# Ugly, but should work.
-	system("$RNDC -c ../common/rndc.conf -s $ip -p $port $how | sed 's/^/I:$test:$server /'");
+	system("$RNDC -c ../_common/rndc.conf -s $ip -p $port $how | sed 's/^/I:$test:$server /'");
 	return;
 }
 
 sub server_died {
 	my ( $server, $signal ) = @_;
-	
+
 	print "I:$test:$server died before a SIG$signal was sent\n";
 	$errors = 1;
 
@@ -214,13 +204,7 @@ sub send_signal {
 
 	my $result = 0;
 
-	if (!$ans && ($^O eq 'cygwin' || $^O eq 'msys')) {
-		my $killout = `/bin/kill -f -$signal $pid 2>&1`;
-		chomp($killout);
-		$result = 1 if ($killout eq '');
-	} else {
-		$result = kill $signal, $pid;
-	}
+	$result = kill $signal, $pid;
 	return $result;
 }
 
@@ -263,15 +247,6 @@ sub pid_file_exists {
 	return $server;
 }
 
-sub lock_file_exists {
-	my ( $server ) = @_;
-	my $lock_file = server_lock_file($server);
-
-	return unless defined($lock_file) && -f $lock_file;
-
-	return $server;
-}
-
 sub wait_for_servers {
 	my ( $timeout, @servers ) = @_;
 
@@ -279,7 +254,7 @@ sub wait_for_servers {
 		sleep 1 if (@servers > 0);
 		@servers =
 			grep { defined($_) }
-			map  { pid_file_exists($_) || lock_file_exists($_) } @servers;
+			map  { pid_file_exists($_) } @servers;
 		$timeout--;
 	}
 

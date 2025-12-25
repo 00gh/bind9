@@ -31,11 +31,12 @@ options {
 	recursion yes;
 	send-cookie yes;
 	response-padding { !10.53.0.8; any; } block-size 64;
+	dnssec-validation no;
 };
 
 zone "." {
 	type hint;
-	file "../../common/root.hint";
+	file "../../_common/root.hint";
 };
 
 zone "example" {

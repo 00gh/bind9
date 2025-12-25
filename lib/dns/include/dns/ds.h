@@ -13,27 +13,37 @@
 
 #pragma once
 
-#include <isc/lang.h>
-
 #include <dns/rdatastruct.h>
 #include <dns/types.h>
 
-#define DNS_DSDIGEST_SHA1   (1)
-#define DNS_DSDIGEST_SHA256 (2)
-#define DNS_DSDIGEST_GOST   (3)
-#define DNS_DSDIGEST_SHA384 (4)
+#define DNS_DSDIGEST_SHA1     (1)
+#define DNS_DSDIGEST_SHA256   (2)
+#define DNS_DSDIGEST_GOST     (3)
+#define DNS_DSDIGEST_SHA384   (4)
+#define DNS_DSDIGEST_GOST2012 (5)
+#define DNS_DSDIGEST_SM3      (6)
+
+#if TEST_PRIVATE_DSDIGEST
+/*
+ * Possible future digest types that encode the PRIVATEDNS and
+ * PRIVATEOID identifiers before the cryptographic digest value.
+ */
+#define DNS_DSDIGEST_SHA256PRIVATE (7)
+#define DNS_DSDIGEST_SHA384PRIVATE (8)
+#define DNS_DSDIGEST_SM3PRIVATE	   (9)
+#endif
+
+#define DNS_DSDIGEST_MAX (255)
 
 /*
- * Assuming SHA-384 digest type.
+ * Assuming SHA-384 digest type + maximal PRIVATEDNS name.
  */
-#define DNS_DS_BUFFERSIZE (52)
-
-ISC_LANG_BEGINDECLS
+#define DNS_DS_BUFFERSIZE (52 + 255)
 
 isc_result_t
 dns_ds_fromkeyrdata(const dns_name_t *owner, dns_rdata_t *key,
 		    dns_dsdigest_t digest_type, unsigned char *digest,
-		    dns_rdata_ds_t *dsrdata);
+		    size_t len, dns_rdata_ds_t *dsrdata);
 /*%<
  * Build a DS rdata structure from a key.
  *
@@ -45,7 +55,7 @@ dns_ds_fromkeyrdata(const dns_name_t *owner, dns_rdata_t *key,
 
 isc_result_t
 dns_ds_buildrdata(dns_name_t *owner, dns_rdata_t *key,
-		  dns_dsdigest_t digest_type, unsigned char *buffer,
+		  dns_dsdigest_t digest_type, unsigned char *buffer, size_t len,
 		  dns_rdata_t *rdata);
 /*%<
  * Similar to dns_ds_fromkeyrdata(), but copies the DS into a
@@ -61,5 +71,3 @@ dns_ds_buildrdata(dns_name_t *owner, dns_rdata_t *key,
  *  \li    *rdata	Contains a valid DS rdata.  The 'data' member refers
  *		to 'buffer'.
  */
-
-ISC_LANG_ENDDECLS

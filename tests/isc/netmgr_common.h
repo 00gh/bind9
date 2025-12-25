@@ -23,23 +23,25 @@
  * Pick unused port outside the ephemeral port range, so we don't clash with
  * connected sockets.
  */
-#define UDP_TEST_PORT	 9153
-#define TCP_TEST_PORT	 9154
-#define TLS_TEST_PORT	 9155
-#define TCPDNS_TEST_PORT 9156
-#define TLSDNS_TEST_PORT 9157
+#define UDP_TEST_PORT	      9153
+#define TCP_TEST_PORT	      9154
+#define TLS_TEST_PORT	      9155
+#define TCPDNS_TEST_PORT      9156
+#define TLSDNS_TEST_PORT      9157
+#define PROXYSTREAM_TEST_PORT 9158
+#define PROXYUDP_TEST_PORT    9159
 
-typedef void (*stream_connect_function)(isc_nm_t *nm);
-typedef void (*connect_func)(isc_nm_t *);
-
-extern isc_nm_t *listen_nm;
-extern isc_nm_t *connect_nm;
+typedef void (*stream_connect_function)(void);
+typedef void (*connect_func)(void);
 
 extern isc_sockaddr_t tcp_listen_addr;
 extern isc_sockaddr_t tcp_connect_addr;
 extern isc_tlsctx_t *tcp_listen_tlsctx;
 extern isc_tlsctx_t *tcp_connect_tlsctx;
 extern isc_tlsctx_client_session_cache_t *tcp_tlsctx_client_sess_cache;
+
+extern isc_sockaddr_t udp_listen_addr;
+extern isc_sockaddr_t udp_connect_addr;
 
 extern uint64_t send_magic;
 extern uint64_t stop_magic;
@@ -129,8 +131,12 @@ extern atomic_bool check_listener_quota;
 extern bool allow_send_back;
 extern bool noanswer;
 extern bool stream_use_TLS;
+extern bool stream_use_PROXY;
+extern bool stream_PROXY_over_TLS;
 extern bool stream;
 extern in_port_t stream_port;
+
+extern bool udp_use_PROXY;
 
 extern isc_nm_recv_cb_t connect_readcb;
 
@@ -144,6 +150,7 @@ extern isc_nm_recv_cb_t connect_readcb;
 #define T_IDLE	     120 * 1000
 #define T_KEEPALIVE  120 * 1000
 #define T_ADVERTISED 120 * 1000
+#define T_PRIMARIES  120 * 1000
 #define T_CONNECT    30 * 1000
 
 /* Wait for 1 second (1000 milliseconds) */
@@ -201,13 +208,14 @@ extern isc_nm_recv_cb_t connect_readcb;
 	fprintf(stderr, "%s:%s:%d:%s = %" PRId64 "\n", __func__, __FILE__, \
 		__LINE__, #v, atomic_load(&v))
 #define P(v) fprintf(stderr, #v " = %" PRId64 "\n", v)
-#define F()                                                                 \
-	fprintf(stderr, "%u:%s(%p, %s, %p)\n", isc_tid(), __func__, handle, \
-		isc_result_totext(eresult), cbarg)
+#define F()                                                                  \
+	fprintf(stderr, "%" PRItid ":%s(%p, %s, %p)\n", isc_tid(), __func__, \
+		handle, isc_result_totext(eresult), cbarg)
 
 #define isc_loopmgr_shutdown(loopmgr)                                      \
 	{                                                                  \
-		fprintf(stderr, "%u:%s:%s:%d:isc_loopmgr_shutdown(%p)\n",  \
+		fprintf(stderr,                                            \
+			"%" PRItid ":%s:%s:%d:isc_loopmgr_shutdown(%p)\n", \
 			isc_tid(), __func__, __FILE__, __LINE__, loopmgr); \
 		isc_loopmgr_shutdown(loopmgr);                             \
 	}
@@ -235,7 +243,7 @@ noop_recv_cb(isc_nmhandle_t *handle, isc_result_t eresult, isc_region_t *region,
 	     void *cbarg);
 
 isc_result_t
-noop_accept_cb(isc_nmhandle_t *handle ISC_ATTR_UNUSED, unsigned int result,
+noop_accept_cb(isc_nmhandle_t *handle ISC_ATTR_UNUSED, isc_result_t result,
 	       void *cbarg ISC_ATTR_UNUSED);
 
 void
@@ -283,12 +291,34 @@ stream_listen(isc_nm_accept_cb_t accept_cb, void *accept_cbarg, int backlog,
 void
 stream_connect(isc_nm_cb_t cb, void *cbarg, unsigned int timeout);
 
+void
+set_proxyheader_info(isc_nm_proxyheader_info_t *pi);
+
+isc_nm_proxyheader_info_t *
+get_proxyheader_info(void);
+
+isc_nm_proxy_type_t
+get_proxy_type(void);
+
+void
+proxy_verify_endpoints(isc_nmhandle_t *handle);
+
 int
 stream_noop_setup(void **state ISC_ATTR_UNUSED);
 void
 stream_noop(void **state ISC_ATTR_UNUSED);
 int
 stream_noop_teardown(void **state ISC_ATTR_UNUSED);
+
+int
+proxystream_noop_setup(void **state);
+int
+proxystream_noop_teardown(void **state);
+
+int
+proxystreamtls_noop_setup(void **state);
+int
+proxystreamtls_noop_teardown(void **state);
 
 int
 stream_noresponse_setup(void **state ISC_ATTR_UNUSED);
@@ -298,11 +328,31 @@ int
 stream_noresponse_teardown(void **state ISC_ATTR_UNUSED);
 
 int
+proxystream_noresponse_setup(void **state);
+int
+proxystream_noresponse_teardown(void **state);
+
+int
+proxystreamtls_noresponse_setup(void **state);
+int
+proxystreamtls_noresponse_teardown(void **state);
+
+int
 stream_timeout_recovery_setup(void **state ISC_ATTR_UNUSED);
 void
 stream_timeout_recovery(void **state ISC_ATTR_UNUSED);
 int
 stream_timeout_recovery_teardown(void **state ISC_ATTR_UNUSED);
+
+int
+proxystream_timeout_recovery_setup(void **state);
+int
+proxystream_timeout_recovery_teardown(void **state);
+
+int
+proxystreamtls_timeout_recovery_setup(void **state);
+int
+proxystreamtls_timeout_recovery_teardown(void **state);
 
 int
 stream_recv_one_setup(void **state ISC_ATTR_UNUSED);
@@ -312,11 +362,31 @@ int
 stream_recv_one_teardown(void **state ISC_ATTR_UNUSED);
 
 int
+proxystream_recv_one_setup(void **state);
+int
+proxystream_recv_one_teardown(void **state);
+
+int
+proxystreamtls_recv_one_setup(void **state);
+int
+proxystreamtls_recv_one_teardown(void **state);
+
+int
 stream_recv_two_setup(void **state ISC_ATTR_UNUSED);
 void
 stream_recv_two(void **state ISC_ATTR_UNUSED);
 int
 stream_recv_two_teardown(void **state ISC_ATTR_UNUSED);
+
+int
+proxystream_recv_two_setup(void **state);
+int
+proxystream_recv_two_teardown(void **state);
+
+int
+proxystreamtls_recv_two_setup(void **state);
+int
+proxystreamtls_recv_two_teardown(void **state);
 
 int
 stream_recv_send_setup(void **state ISC_ATTR_UNUSED);
@@ -328,11 +398,31 @@ void
 stream_recv_send_connect(void *arg);
 
 int
+proxystream_recv_send_setup(void **state);
+int
+proxystream_recv_send_teardown(void **state);
+
+int
+proxystreamtls_recv_send_setup(void **state);
+int
+proxystreamtls_recv_send_teardown(void **state);
+
+int
 stream_shutdownconnect_setup(void **state ISC_ATTR_UNUSED);
 void
 stream_shutdownconnect(void **state ISC_ATTR_UNUSED);
 int
 stream_shutdownconnect_teardown(void **state ISC_ATTR_UNUSED);
+
+int
+proxystream_shutdownconnect_setup(void **state);
+int
+proxystream_shutdownconnect_teardown(void **state);
+
+int
+proxystreamtls_shutdownconnect_setup(void **state);
+int
+proxystreamtls_shutdownconnect_teardown(void **state);
 
 int
 stream_shutdownread_setup(void **state ISC_ATTR_UNUSED);
@@ -341,5 +431,179 @@ stream_shutdownread(void **state ISC_ATTR_UNUSED);
 int
 stream_shutdownread_teardown(void **state ISC_ATTR_UNUSED);
 
+int
+proxystream_shutdownread_setup(void **state);
+int
+proxystream_shutdownread_teardown(void **state);
+
+int
+proxystreamtls_shutdownread_setup(void **state);
+int
+proxystreamtls_shutdownread_teardown(void **state);
+
 void
 stop_listening(void *arg ISC_ATTR_UNUSED);
+
+/* UDP */
+
+/* Timeout for soft-timeout tests (0.05 seconds) */
+#define UDP_T_SOFT 50
+
+/* Timeout in miliseconds */
+#define UDP_T_CONNECT 30 * 1000
+
+int
+setup_udp_test(void **state);
+
+int
+teardown_udp_test(void **state);
+
+int
+udp_noop_setup(void **state);
+
+int
+udp_noop_teardown(void **state);
+
+void
+udp_noop(void **arg ISC_ATTR_UNUSED);
+
+int
+proxyudp_noop_setup(void **state);
+
+int
+proxyudp_noop_teardown(void **state);
+
+int
+udp_noresponse_setup(void **state);
+
+int
+udp_noresponse_teardown(void **state);
+
+void
+udp_noresponse(void **arg ISC_ATTR_UNUSED);
+
+int
+proxyudp_noresponse_setup(void **state);
+
+int
+proxyudp_noresponse_teardown(void **state);
+
+int
+udp_timeout_recovery_setup(void **state);
+
+int
+udp_timeout_recovery_teardown(void **state);
+
+void
+udp_timeout_recovery(void **arg ISC_ATTR_UNUSED);
+
+int
+proxyudp_timeout_recovery_setup(void **state);
+
+int
+proxyudp_timeout_recovery_teardown(void **state);
+
+int
+udp_shutdown_connect_setup(void **state);
+
+int
+udp_shutdown_connect_teardown(void **state);
+
+void
+udp_shutdown_connect(void **arg ISC_ATTR_UNUSED);
+
+int
+proxyudp_shutdown_connect_setup(void **state);
+
+int
+proxyudp_shutdown_connect_teardown(void **state);
+
+int
+udp_shutdown_read_setup(void **state);
+
+int
+udp_shutdown_read_teardown(void **state);
+
+void
+udp_shutdown_read(void **arg ISC_ATTR_UNUSED);
+
+int
+proxyudp_shutdown_read_setup(void **state);
+
+int
+proxyudp_shutdown_read_teardown(void **state);
+
+int
+udp_cancel_read_setup(void **state);
+
+int
+udp_cancel_read_teardown(void **state);
+
+void
+udp_cancel_read(void **arg ISC_ATTR_UNUSED);
+
+int
+proxyudp_cancel_read_setup(void **state);
+
+int
+proxyudp_cancel_read_teardown(void **state);
+
+int
+udp_recv_one_setup(void **state);
+
+int
+udp_recv_one_teardown(void **state);
+
+void
+udp_recv_one(void **arg ISC_ATTR_UNUSED);
+
+int
+proxyudp_recv_one_setup(void **state);
+
+int
+proxyudp_recv_one_teardown(void **state);
+
+int
+udp_recv_two_setup(void **state);
+
+int
+udp_recv_two_teardown(void **state);
+
+void
+udp_recv_two(void **arg ISC_ATTR_UNUSED);
+
+int
+proxyudp_recv_two_setup(void **state);
+
+int
+proxyudp_recv_two_teardown(void **state);
+
+int
+udp_recv_send_setup(void **state);
+
+int
+udp_recv_send_teardown(void **state);
+
+void
+udp_recv_send(void **arg ISC_ATTR_UNUSED);
+
+int
+proxyudp_recv_send_setup(void **state);
+
+int
+proxyudp_recv_send_teardown(void **state);
+
+int
+udp_double_read_setup(void **state);
+
+int
+udp_double_read_teardown(void **state);
+
+void
+udp_double_read(void **arg ISC_ATTR_UNUSED);
+
+int
+proxyudp_double_read_setup(void **state);
+
+int
+proxyudp_double_read_teardown(void **state);

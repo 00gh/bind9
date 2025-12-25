@@ -13,6 +13,7 @@
 
 #include <stdio.h>
 
+#include <isc/lib.h>
 #include <isc/net.h>
 
 #define UNUSED(x) (void)(x)
@@ -40,8 +41,8 @@ main(int argc, char *argv[]) {
 			argv++;
 			continue;
 		}
-		return (1);
+		return 1;
 	}
 	fflush(stdout);
-	return (ferror(stdout));
+	return ferror(stdout);
 }

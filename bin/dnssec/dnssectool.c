@@ -20,14 +20,15 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include <isc/base32.h>
 #include <isc/buffer.h>
 #include <isc/commandline.h>
 #include <isc/dir.h>
-#include <isc/file.h>
 #include <isc/heap.h>
 #include <isc/list.h>
+#include <isc/log.h>
 #include <isc/mem.h>
 #include <isc/result.h>
 #include <isc/string.h>
@@ -42,7 +43,6 @@
 #include <dns/fixedname.h>
 #include <dns/journal.h>
 #include <dns/keyvalues.h>
-#include <dns/log.h>
 #include <dns/name.h>
 #include <dns/nsec.h>
 #include <dns/nsec3.h>
@@ -75,7 +75,7 @@ void
 fatal(const char *format, ...) {
 	va_list args;
 
-	fprintf(stderr, "%s: fatal: ", program);
+	fprintf(stderr, "%s: fatal: ", isc_commandline_progname);
 	va_start(args, format);
 	vfprintf(stderr, format, args);
 	va_end(args);
@@ -83,8 +83,7 @@ fatal(const char *format, ...) {
 	if (fatalcallback != NULL) {
 		(*fatalcallback)();
 	}
-	isc__tls_setfatalmode();
-	exit(1);
+	_exit(EXIT_FAILURE);
 }
 
 void
@@ -106,7 +105,7 @@ vbprintf(int level, const char *fmt, ...) {
 		return;
 	}
 	va_start(ap, fmt);
-	fprintf(stderr, "%s: ", program);
+	fprintf(stderr, "%s: ", isc_commandline_progname);
 	vfprintf(stderr, fmt, ap);
 	va_end(ap);
 }
@@ -114,24 +113,24 @@ vbprintf(int level, const char *fmt, ...) {
 void
 version(const char *name) {
 	printf("%s %s\n", name, PACKAGE_VERSION);
-	exit(0);
+	exit(EXIT_SUCCESS);
 }
 
 void
 sig_format(dns_rdata_rrsig_t *sig, char *cp, unsigned int size) {
 	char namestr[DNS_NAME_FORMATSIZE];
 	char algstr[DNS_NAME_FORMATSIZE];
+	dst_algorithm_t algorithm = dst_algorithm_fromdata(
+		sig->algorithm, sig->signature, sig->siglen);
 
 	dns_name_format(&sig->signer, namestr, sizeof(namestr));
-	dns_secalg_format(sig->algorithm, algstr, sizeof(algstr));
+	dst_algorithm_format(algorithm, algstr, sizeof(algstr));
 	snprintf(cp, size, "%s/%s/%d", namestr, algstr, sig->keyid);
 }
 
 void
-setup_logging(isc_mem_t *mctx, isc_log_t **logp) {
-	isc_logdestination_t destination;
+setup_logging(void) {
 	isc_logconfig_t *logconfig = NULL;
-	isc_log_t *log = NULL;
 	int level;
 
 	if (verbose < 0) {
@@ -153,11 +152,9 @@ setup_logging(isc_mem_t *mctx, isc_log_t **logp) {
 		break;
 	}
 
-	isc_log_create(mctx, &log, &logconfig);
-	isc_log_setcontext(log);
-	dns_log_init(log);
-	dns_log_setcontext(log);
-	isc_log_settag(logconfig, program);
+	logconfig = isc_logconfig_get();
+
+	isc_log_settag(logconfig, isc_commandline_progname);
 
 	/*
 	 * Set up a channel similar to default_stderr except:
@@ -165,36 +162,11 @@ setup_logging(isc_mem_t *mctx, isc_log_t **logp) {
 	 *  - the program name and logging level are printed
 	 *  - no time stamp is printed
 	 */
-	destination.file.stream = stderr;
-	destination.file.name = NULL;
-	destination.file.versions = ISC_LOG_ROLLNEVER;
-	destination.file.maximum_size = 0;
-	isc_log_createchannel(logconfig, "stderr", ISC_LOG_TOFILEDESC, level,
-			      &destination,
-			      ISC_LOG_PRINTTAG | ISC_LOG_PRINTLEVEL);
-
-	RUNTIME_CHECK(isc_log_usechannel(logconfig, "stderr", NULL, NULL) ==
-		      ISC_R_SUCCESS);
-
-	*logp = log;
-}
-
-void
-cleanup_logging(isc_log_t **logp) {
-	isc_log_t *log;
-
-	REQUIRE(logp != NULL);
-
-	log = *logp;
-	*logp = NULL;
-
-	if (log == NULL) {
-		return;
-	}
-
-	isc_log_destroy(&log);
-	isc_log_setcontext(NULL);
-	dns_log_setcontext(NULL);
+	isc_log_createandusechannel(
+		logconfig, "default_stderr", ISC_LOG_TOFILEDESC, level,
+		ISC_LOGDESTINATION_STDERR,
+		ISC_LOG_PRINTTAG | ISC_LOG_PRINTLEVEL, ISC_LOGCATEGORY_DEFAULT,
+		ISC_LOGMODULE_DEFAULT);
 }
 
 static isc_stdtime_t
@@ -202,16 +174,16 @@ time_units(isc_stdtime_t offset, char *suffix, const char *str) {
 	switch (suffix[0]) {
 	case 'Y':
 	case 'y':
-		return (offset * (365 * 24 * 3600));
+		return offset * (365 * 24 * 3600);
 	case 'M':
 	case 'm':
 		switch (suffix[1]) {
 		case 'O':
 		case 'o':
-			return (offset * (30 * 24 * 3600));
+			return offset * (30 * 24 * 3600);
 		case 'I':
 		case 'i':
-			return (offset * 60);
+			return offset * 60;
 		case '\0':
 			fatal("'%s' ambiguous: use 'mi' for minutes "
 			      "or 'mo' for months",
@@ -223,29 +195,29 @@ time_units(isc_stdtime_t offset, char *suffix, const char *str) {
 		break;
 	case 'W':
 	case 'w':
-		return (offset * (7 * 24 * 3600));
+		return offset * (7 * 24 * 3600);
 	case 'D':
 	case 'd':
-		return (offset * (24 * 3600));
+		return offset * (24 * 3600);
 	case 'H':
 	case 'h':
-		return (offset * 3600);
+		return offset * 3600;
 	case 'S':
 	case 's':
 	case '\0':
-		return (offset);
+		return offset;
 	default:
 		fatal("time value %s is invalid", str);
 	}
 	UNREACHABLE();
-	return (0); /* silence compiler warning */
+	return 0; /* silence compiler warning */
 }
 
 static bool
 isnone(const char *str) {
-	return ((strcasecmp(str, "none") == 0) ||
-		(strcasecmp(str, "never") == 0) ||
-		(strcasecmp(str, "unset") == 0));
+	return (strcasecmp(str, "none") == 0) ||
+	       (strcasecmp(str, "never") == 0) ||
+	       (strcasecmp(str, "unset") == 0);
 }
 
 dns_ttl_t
@@ -255,7 +227,7 @@ strtottl(const char *str) {
 	char *endp;
 
 	if (isnone(str)) {
-		return ((dns_ttl_t)0);
+		return (dns_ttl_t)0;
 	}
 
 	ttl = strtol(str, &endp, 0);
@@ -263,19 +235,19 @@ strtottl(const char *str) {
 		fatal("TTL must be numeric");
 	}
 	ttl = time_units(ttl, endp, orig);
-	return (ttl);
+	return ttl;
 }
 
 dst_key_state_t
 strtokeystate(const char *str) {
 	if (isnone(str)) {
-		return (DST_KEY_STATE_NA);
+		return DST_KEY_STATE_NA;
 	}
 
 	for (int i = 0; i < KEYSTATES_NVALUES; i++) {
 		if (keystates[i] != NULL && strcasecmp(str, keystates[i]) == 0)
 		{
-			return ((dst_key_state_t)i);
+			return (dst_key_state_t)i;
 		}
 	}
 	fatal("unknown key state %s", str);
@@ -291,18 +263,14 @@ strtotime(const char *str, int64_t now, int64_t base, bool *setp) {
 	struct tm tm;
 
 	if (isnone(str)) {
-		if (setp != NULL) {
-			*setp = false;
-		}
-		return ((isc_stdtime_t)0);
+		SET_IF_NOT_NULL(setp, false);
+		return (isc_stdtime_t)0;
 	}
 
-	if (setp != NULL) {
-		*setp = true;
-	}
+	SET_IF_NOT_NULL(setp, true);
 
 	if ((str[0] == '0' || str[0] == '-') && str[1] == '\0') {
-		return ((isc_stdtime_t)0);
+		return (isc_stdtime_t)0;
 	}
 
 	/*
@@ -351,7 +319,7 @@ strtotime(const char *str, int64_t now, int64_t base, bool *setp) {
 	}
 
 	if (str[0] == '\0') {
-		return ((isc_stdtime_t)base);
+		return (isc_stdtime_t)base;
 	} else if (str[0] == '+') {
 		offset = strtol(str + 1, &endp, 0);
 		offset = time_units((isc_stdtime_t)offset, endp, orig);
@@ -364,7 +332,7 @@ strtotime(const char *str, int64_t now, int64_t base, bool *setp) {
 		fatal("time value %s is invalid", orig);
 	}
 
-	return ((isc_stdtime_t)val);
+	return (isc_stdtime_t)val;
 }
 
 dns_rdataclass_t
@@ -374,7 +342,7 @@ strtoclass(const char *str) {
 	isc_result_t result;
 
 	if (str == NULL) {
-		return (dns_rdataclass_in);
+		return dns_rdataclass_in;
 	}
 	r.base = UNCONST(str);
 	r.length = strlen(str);
@@ -382,7 +350,7 @@ strtoclass(const char *str) {
 	if (result != ISC_R_SUCCESS) {
 		fatal("unknown class %s", str);
 	}
-	return (rdclass);
+	return rdclass;
 }
 
 unsigned int
@@ -395,16 +363,19 @@ strtodsdigest(const char *str) {
 	r.length = strlen(str);
 	result = dns_dsdigest_fromtext(&alg, &r);
 	if (result != ISC_R_SUCCESS) {
-		fatal("unknown DS algorithm %s", str);
+		fatal("unknown DS digest %s", str);
 	}
-	return (alg);
+	if (!dst_ds_digest_supported(alg)) {
+		fatal("unsupported DS digest %s", str);
+	}
+	return alg;
 }
 
 static int
 cmp_dtype(const void *ap, const void *bp) {
 	int a = *(const uint8_t *)ap;
 	int b = *(const uint8_t *)bp;
-	return (a - b);
+	return a - b;
 }
 
 void
@@ -436,7 +407,7 @@ try_dir(const char *dirname) {
 	if (result == ISC_R_SUCCESS) {
 		isc_dir_close(&d);
 	}
-	return (result);
+	return result;
 }
 
 /*
@@ -483,7 +454,7 @@ set_keyversion(dst_key_t *key) {
 
 bool
 key_collision(dst_key_t *dstkey, dns_name_t *name, const char *dir,
-	      isc_mem_t *mctx, bool *exact) {
+	      isc_mem_t *mctx, uint16_t min, uint16_t max, bool *exact) {
 	isc_result_t result;
 	bool conflict = false;
 	dns_dnsseckeylist_t matchkeys;
@@ -493,18 +464,32 @@ key_collision(dst_key_t *dstkey, dns_name_t *name, const char *dir,
 	dns_secalg_t alg;
 	isc_stdtime_t now = isc_stdtime_now();
 
-	if (exact != NULL) {
-		*exact = false;
-	}
+	SET_IF_NOT_NULL(exact, false);
 
 	id = dst_key_id(dstkey);
 	rid = dst_key_rid(dstkey);
 	alg = dst_key_alg(dstkey);
 
+	if (min != max) {
+		if (id < min || id > max) {
+			fprintf(stderr, "Key ID %d outside of [%u..%u]\n", id,
+				min, max);
+			return true;
+		}
+		if (rid < min || rid > max) {
+			fprintf(stderr,
+				"Revoked Key ID %d (for tag %d) outside of "
+				"[%u..%u]\n",
+				rid, id, min, max);
+			return true;
+		}
+	}
+
 	ISC_LIST_INIT(matchkeys);
-	result = dns_dnssec_findmatchingkeys(name, dir, now, mctx, &matchkeys);
+	result = dns_dnssec_findmatchingkeys(name, NULL, dir, NULL, now, mctx,
+					     &matchkeys);
 	if (result == ISC_R_NOTFOUND) {
-		return (false);
+		return false;
 	}
 
 	while (!ISC_LIST_EMPTY(matchkeys) && !conflict) {
@@ -548,7 +533,7 @@ key_collision(dst_key_t *dstkey, dns_name_t *name, const char *dir,
 		dns_dnsseckey_destroy(mctx, &key);
 	}
 
-	return (conflict);
+	return conflict;
 }
 
 bool
@@ -556,16 +541,17 @@ isoptarg(const char *arg, char **argv, void (*usage)(void)) {
 	if (!strcasecmp(isc_commandline_argument, arg)) {
 		if (argv[isc_commandline_index] == NULL) {
 			fprintf(stderr, "%s: missing argument -%c %s\n",
-				program, isc_commandline_option,
+				isc_commandline_progname,
+				isc_commandline_option,
 				isc_commandline_argument);
 			usage();
 		}
 		isc_commandline_argument = argv[isc_commandline_index];
 		/* skip to next argument */
 		isc_commandline_index++;
-		return (true);
+		return true;
 	}
-	return (false);
+	return false;
 }
 
 void
@@ -575,8 +561,8 @@ loadjournal(isc_mem_t *mctx, dns_db_t *db, const char *file) {
 
 	result = dns_journal_open(mctx, file, DNS_JOURNAL_READ, &jnl);
 	if (result == ISC_R_NOTFOUND) {
-		fprintf(stderr, "%s: journal file %s not found\n", program,
-			file);
+		fprintf(stderr, "%s: journal file %s not found\n",
+			isc_commandline_progname, file);
 		goto cleanup;
 	} else if (result != ISC_R_SUCCESS) {
 		fatal("unable to open journal %s: %s\n", file,
@@ -604,4 +590,78 @@ loadjournal(isc_mem_t *mctx, dns_db_t *db, const char *file) {
 
 cleanup:
 	dns_journal_destroy(&jnl);
+}
+
+void
+kasp_from_conf(cfg_obj_t *config, isc_mem_t *mctx, const char *name,
+	       const char *keydir, dns_kasp_t **kaspp) {
+	isc_result_t result = ISC_R_NOTFOUND;
+	const cfg_obj_t *kasps = NULL;
+	dns_kasplist_t kasplist;
+	const cfg_obj_t *keystores = NULL;
+	dns_keystore_t *keystore = NULL;
+	dns_keystorelist_t kslist;
+
+	ISC_LIST_INIT(kasplist);
+	ISC_LIST_INIT(kslist);
+
+	(void)cfg_map_get(config, "key-store", &keystores);
+	CFG_LIST_FOREACH (keystores, element) {
+		cfg_obj_t *kconfig = cfg_listelt_value(element);
+		result = cfg_keystore_fromconfig(kconfig, mctx, &kslist, NULL);
+		if (result != ISC_R_SUCCESS) {
+			fatal("failed to configure key-store '%s': %s",
+			      cfg_obj_asstring(cfg_tuple_get(kconfig, "name")),
+			      isc_result_totext(result));
+		}
+	}
+	/* Default key-directory key store. */
+	(void)cfg_keystore_fromconfig(NULL, mctx, &kslist, &keystore);
+	INSIST(keystore != NULL);
+	if (keydir != NULL) {
+		/* '-K keydir' takes priority */
+		dns_keystore_setdirectory(keystore, keydir);
+	}
+	dns_keystore_detach(&keystore);
+
+	(void)cfg_map_get(config, "dnssec-policy", &kasps);
+	CFG_LIST_FOREACH (kasps, element) {
+		dns_kasp_t *kasp = NULL;
+
+		cfg_obj_t *kconfig = cfg_listelt_value(element);
+		if (strcmp(cfg_obj_asstring(cfg_tuple_get(kconfig, "name")),
+			   name) != 0)
+		{
+			continue;
+		}
+
+		result = cfg_kasp_fromconfig(kconfig, NULL, true, mctx, &kslist,
+					     &kasplist, &kasp);
+		if (result != ISC_R_SUCCESS) {
+			fatal("failed to configure dnssec-policy '%s': %s",
+			      cfg_obj_asstring(cfg_tuple_get(kconfig, "name")),
+			      isc_result_totext(result));
+		}
+		INSIST(kasp != NULL);
+		dns_kasp_freeze(kasp);
+
+		*kaspp = kasp;
+		break;
+	}
+
+	/*
+	 * Cleanup kasp list.
+	 */
+	ISC_LIST_FOREACH (kasplist, kasp, link) {
+		ISC_LIST_UNLINK(kasplist, kasp, link);
+		dns_kasp_detach(&kasp);
+	}
+
+	/*
+	 * Cleanup keystore list.
+	 */
+	ISC_LIST_FOREACH (kslist, ks, link) {
+		ISC_LIST_UNLINK(kslist, ks, link);
+		dns_keystore_detach(&ks);
+	}
 }
